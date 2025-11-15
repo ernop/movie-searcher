@@ -1528,6 +1528,9 @@
         // Explore page state - only for tracking current page, not for building requests
         let currentExplorePage = 1;
         const EXPLORE_PER_PAGE = 24;
+        // Request sequencing to handle out-of-order AJAX responses
+        let searchRequestCounter = 0;
+        let lastDisplayedRequestId = -1;
         
         const searchInput = document.getElementById('searchInput');
         const autocomplete = document.getElementById('autocomplete');
@@ -1750,12 +1753,22 @@
                 return;
             }
             
+            // Increment request counter for this search
+            searchRequestCounter++;
+            const requestId = searchRequestCounter;
+            
             try {
                 const filterType = getWatchFilter();
                 const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&filter_type=${filterType}`);
                 const data = await response.json();
-                currentResults = data.results || [];
-                displayAutocomplete(currentResults);
+                
+                // Only display results if this response is from the latest request or newer than what's displayed
+                if (requestId > lastDisplayedRequestId) {
+                    lastDisplayedRequestId = requestId;
+                    currentResults = data.results || [];
+                    displayAutocomplete(currentResults);
+                }
+                // Otherwise, silently discard this stale response
             } catch (error) {
                 console.error('Search error:', error);
             }
@@ -1772,6 +1785,8 @@
             autocomplete.style.display = 'none';
             results.innerHTML = '';
             currentResults = [];
+            searchRequestCounter = 0;
+            lastDisplayedRequestId = -1;
             updateClearButtonVisibility();
             searchInput.focus();
         }

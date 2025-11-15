@@ -13,6 +13,8 @@ import logging
 import threading
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
+import signal
+import atexit
 
 # Setup logging
 logging.basicConfig(
@@ -125,6 +127,54 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     logger.info("Database initialized")
 
+def remove_sample_files():
+    """Remove all movies with 'sample' in their name from the database"""
+    db = SessionLocal()
+    try:
+        # Find all movies with 'sample' in name (case-insensitive)
+        # SQLite LIKE is case-insensitive for ASCII, but we'll use func.lower for compatibility
+        sample_movies = db.query(Movie).filter(
+            func.lower(Movie.name).like('%sample%')
+        ).all()
+        
+        if not sample_movies:
+            logger.info("No sample files found in database")
+            return 0
+        
+        count = len(sample_movies)
+        logger.info(f"Found {count} sample file(s) to remove")
+        
+        # Remove related records for each sample movie
+        for movie in sample_movies:
+            movie_path = movie.path
+            
+            # Delete MovieFrame records
+            db.query(MovieFrame).filter(MovieFrame.movie_id == movie_path).delete()
+            
+            # Delete Rating records
+            db.query(Rating).filter(Rating.movie_id == movie_path).delete()
+            
+            # Delete WatchHistory records
+            db.query(WatchHistory).filter(WatchHistory.movie_id == movie_path).delete()
+            
+            # Delete LaunchHistory records
+            db.query(LaunchHistory).filter(LaunchHistory.path == movie_path).delete()
+            
+            # Delete the movie itself
+            db.delete(movie)
+            
+            logger.info(f"Removed sample file: {movie.name}")
+        
+        db.commit()
+        logger.info(f"Successfully removed {count} sample file(s) from database")
+        return count
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error removing sample files: {e}")
+        return 0
+    finally:
+        db.close()
+
 def get_db():
     """Get database session"""
     db = SessionLocal()
@@ -136,6 +186,14 @@ def get_db():
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
 SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.vtt', '.ass', '.ssa'}
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+
+def is_sample_file(file_path):
+    """Check if a file should be excluded (contains 'sample' in name, case-insensitive)"""
+    if isinstance(file_path, Path):
+        name = file_path.stem.lower()
+    else:
+        name = Path(file_path).stem.lower()
+    return 'sample' in name
 SCREENSHOT_DIR = SCRIPT_DIR / "screenshots"
 FRAMES_DIR = SCRIPT_DIR / "frames"
 
@@ -156,6 +214,8 @@ def migrate_json_to_db():
                 data = json.load(f)
                 movies = data.get("movies", {})
                 for path, info in movies.items():
+                    # Filter out YTS images before storing
+                    images = filter_yts_images(info.get("images", []))
                     movie = Movie(
                         path=path,
                         name=info.get("name", ""),
@@ -163,7 +223,7 @@ def migrate_json_to_db():
                         created=info.get("created"),
                         size=info.get("size"),
                         hash=info.get("hash"),
-                        images=json.dumps(info.get("images", [])),
+                        images=json.dumps(images),
                         screenshots=json.dumps(info.get("screenshots", []))
                     )
                     db.merge(movie)
@@ -360,6 +420,89 @@ frame_extraction_queue = Queue()
 frame_executor = None
 frame_processing_active = False
 
+# Shutdown and process tracking
+shutdown_flag = threading.Event()
+active_subprocesses = []  # List of active subprocess.Popen objects
+active_subprocesses_lock = threading.Lock()
+
+def register_subprocess(proc: subprocess.Popen):
+    """Register a subprocess so it can be killed on shutdown"""
+    with active_subprocesses_lock:
+        active_subprocesses.append(proc)
+
+def unregister_subprocess(proc: subprocess.Popen):
+    """Unregister a subprocess when it completes"""
+    with active_subprocesses_lock:
+        if proc in active_subprocesses:
+            active_subprocesses.remove(proc)
+
+def kill_all_ffmpeg_processes():
+    """Kill all ffmpeg processes on the system"""
+    try:
+        import platform
+        if platform.system() == "Windows":
+            # Windows: use taskkill
+            subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"], 
+                         capture_output=True, timeout=5)
+        else:
+            # Unix: use pkill
+            subprocess.run(["pkill", "-9", "ffmpeg"], 
+                         capture_output=True, timeout=5)
+        logger.info("Killed all ffmpeg processes")
+    except Exception as e:
+        logger.warning(f"Error killing ffmpeg processes: {e}")
+
+def kill_all_active_subprocesses():
+    """Kill all registered subprocesses"""
+    with active_subprocesses_lock:
+        for proc in active_subprocesses[:]:  # Copy list to avoid modification during iteration
+            try:
+                if proc.poll() is None:  # Process still running
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                unregister_subprocess(proc)
+            except Exception as e:
+                logger.warning(f"Error killing subprocess: {e}")
+        active_subprocesses.clear()
+    kill_all_ffmpeg_processes()
+
+def run_interruptible_subprocess(cmd, timeout=30, capture_output=True):
+    """Run a subprocess that can be interrupted by shutdown flag"""
+    if shutdown_flag.is_set():
+        return None
+    
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE if capture_output else None,
+            stderr=subprocess.PIPE if capture_output else None,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+        register_subprocess(proc)
+        
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(
+                cmd, proc.returncode, stdout, stderr
+            )
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+    except KeyboardInterrupt:
+        if proc:
+            proc.kill()
+            proc.wait()
+        raise
+    finally:
+        if proc:
+            unregister_subprocess(proc)
+
 def add_scan_log(level: str, message: str):
     """Add a log entry to scan progress"""
     global scan_progress
@@ -437,6 +580,8 @@ def save_state(state):
     try:
         # Update movies
         for path, info in state.get("movies", {}).items():
+            # Filter out YTS images before storing
+            images = filter_yts_images(info.get("images", []))
             movie = Movie(
                 path=path,
                 name=info.get("name", ""),
@@ -444,7 +589,7 @@ def save_state(state):
                 created=info.get("created"),
                 size=info.get("size"),
                 hash=info.get("hash"),
-                images=json.dumps(info.get("images", [])),
+                images=json.dumps(images),
                 screenshots=json.dumps(info.get("screenshots", []))
             )
             db.merge(movie)
@@ -637,19 +782,19 @@ def find_images_in_folder(video_path):
     for ext in IMAGE_EXTENSIONS:
         # Check for exact match
         img_path = video_dir / f"{base_name}{ext}"
-        if img_path.exists():
+        if img_path.exists() and "www.YTS.AM" not in img_path.name:
             images.append(str(img_path))
         
         # Check for common patterns (poster, cover, etc.)
         for pattern in [f"{base_name}_poster{ext}", f"{base_name}_cover{ext}", f"{base_name}_thumb{ext}",
                         f"poster{ext}", f"cover{ext}", f"folder{ext}", f"thumb{ext}"]:
             img_path = video_dir / pattern
-            if img_path.exists() and str(img_path) not in images:
+            if img_path.exists() and str(img_path) not in images and "www.YTS.AM" not in img_path.name:
                 images.append(str(img_path))
     
     # Also check for any images in the folder (limit to first 10)
     for img_file in video_dir.iterdir():
-        if img_file.suffix.lower() in IMAGE_EXTENSIONS and str(img_file) not in images:
+        if img_file.suffix.lower() in IMAGE_EXTENSIONS and str(img_file) not in images and "www.YTS.AM" not in img_file.name:
             images.append(str(img_file))
             if len(images) >= 10:
                 break
@@ -736,13 +881,15 @@ def extract_movie_frame_sync(video_path, timestamp_seconds=150):
             str(frame_path)
         ]
         
-        result = subprocess.run(cmd, capture_output=True, timeout=30)
-        if result.returncode == 0 and frame_path.exists():
+        result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
+        if result and result.returncode == 0 and frame_path.exists():
             logger.info(f"Extracted frame from {video_path} at {timestamp_seconds}s")
             return str(frame_path)
-        else:
+        elif result:
             error_msg = result.stderr.decode() if result.stderr else 'Unknown error'
             logger.warning(f"Failed to extract frame from {video_path}: {error_msg}")
+            return None
+        else:
             return None
     except subprocess.TimeoutExpired:
         logger.warning(f"Frame extraction timed out for {video_path}")
@@ -816,8 +963,11 @@ def process_frame_extraction_worker(frame_info):
             str(frame_path)
         ]
         
-        result = subprocess.run(cmd, capture_output=True, timeout=30)
-        if result.returncode == 0 and Path(frame_path).exists():
+        if shutdown_flag.is_set():
+            return False
+        
+        result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
+        if result and result.returncode == 0 and Path(frame_path).exists():
             # Save to database
             db = SessionLocal()
             try:
@@ -869,13 +1019,15 @@ def process_frame_queue(max_workers=3):
         
         # Continue processing while queue has items or scan is still running
         processed_count = 0
-        while True:
+        while not shutdown_flag.is_set():
             try:
                 # Get frame info from queue (with timeout to periodically check scan status)
                 try:
                     frame_info = frame_extraction_queue.get(timeout=2)
                 except:
                     # Queue empty, check if scan is done and queue is truly empty
+                    if shutdown_flag.is_set():
+                        break
                     if not scan_progress.get("is_scanning", False) and frame_extraction_queue.empty():
                         break
                     continue
@@ -891,13 +1043,13 @@ def process_frame_queue(max_workers=3):
             except Exception as e:
                 logger.error(f"Error in frame extraction worker: {e}")
         
-        # Give some time for all tasks to complete
-        import time
-        time.sleep(1)
-        
-        # Shutdown executor (will wait for all tasks)
+        # Shutdown executor with timeout (interruptible)
         if frame_executor:
-            frame_executor.shutdown(wait=True)
+            frame_executor.shutdown(wait=False)  # Don't wait, allow interruption
+            # Give a short time for tasks to finish, then kill subprocesses
+            import time
+            time.sleep(0.5)
+            kill_all_active_subprocesses()
         
         global frame_processing_active
         frame_processing_active = False
@@ -967,10 +1119,13 @@ def extract_screenshots(video_path, num_screenshots=5):
                 str(screenshot_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, timeout=30)
-            if result.returncode == 0 and screenshot_path.exists():
+            if shutdown_flag.is_set():
+                break
+            
+            result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
+            if result and result.returncode == 0 and screenshot_path.exists():
                 screenshots.append(str(screenshot_path))
-            else:
+            elif result:
                 logger.warning(f"Failed to extract screenshot {i+1} from {video_path}")
     except subprocess.TimeoutExpired:
         logger.warning(f"Screenshot extraction timed out for {video_path}")
@@ -1063,6 +1218,9 @@ def index_movie(file_path, db: Session = None):
             add_scan_log("info", f"  No frame found, queuing extraction...")
             extract_movie_frame(normalized_path, timestamp_seconds=150, async_mode=True)
         
+        # Filter out YTS images before storing in database (defense in depth)
+        images = filter_yts_images(images)
+        
         # Create or update movie record
         movie = Movie(
             path=normalized_path,
@@ -1099,7 +1257,8 @@ def scan_directory(root_path, state=None, progress_callback=None):
         
         total_files = 0
         for ext in VIDEO_EXTENSIONS:
-            count = len(list(root.rglob(f"*{ext}")))
+            files = [f for f in root.rglob(f"*{ext}") if not is_sample_file(f)]
+            count = len(files)
             total_files += count
             if count > 0:
                 add_scan_log("info", f"Found {count} {ext} files")
@@ -1116,7 +1275,19 @@ def scan_directory(root_path, state=None, progress_callback=None):
         # Second pass: actually scan
         add_scan_log("info", "Starting file processing...")
         for ext in VIDEO_EXTENSIONS:
+            if shutdown_flag.is_set():
+                add_scan_log("warning", "Scan interrupted by shutdown")
+                break
             for file_path in root.rglob(f"*{ext}"):
+                if shutdown_flag.is_set():
+                    add_scan_log("warning", "Scan interrupted by shutdown")
+                    break
+                
+                # Skip sample files
+                if is_sample_file(file_path):
+                    add_scan_log("info", f"Skipping sample file: {file_path.name}")
+                    continue
+                
                 try:
                     scan_progress["current"] = indexed + 1
                     scan_progress["current_file"] = file_path.name
@@ -1168,6 +1339,8 @@ def run_scan_async(root_path: str):
     """Run scan in background thread"""
     global scan_progress, frame_extraction_queue
     try:
+        if shutdown_flag.is_set():
+            return
         scan_progress["is_scanning"] = True
         scan_progress["current"] = 0
         scan_progress["total"] = 0
@@ -1360,6 +1533,9 @@ async def search_movies(q: str, filter_type: str = Query("all", regex="^(all|wat
             images = json.loads(movie.images) if movie.images else []
             screenshots = json.loads(movie.screenshots) if movie.screenshots else []
             
+            # Filter out YTS images
+            images = filter_yts_images(images)
+            
             # Get frame path
             frame_path = get_movie_frame_path(db, movie.path)
             
@@ -1442,6 +1618,9 @@ async def get_movie_details(path: str = Query(...)):
         
         images = json.loads(movie.images) if movie.images else []
         screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+        
+        # Filter out YTS images
+        images = filter_yts_images(images)
         
         # Get frame path
         frame_path = get_movie_frame_path(db, path)
@@ -1843,6 +2022,9 @@ async def get_launch_history():
                 
                 images = json.loads(movie.images) if movie.images else []
                 screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+                
+                # Filter out YTS images
+                images = filter_yts_images(images)
                 
                 # Get frame path
                 frame_path = get_movie_frame_path(db, launch.path)
@@ -2428,13 +2610,26 @@ def get_movie_frame_path(db: Session, movie_path: str):
         return frame.path
     return None
 
+def filter_yts_images(image_paths):
+    """Filter out images with 'www.YTS.AM' in filename"""
+    if not image_paths:
+        return []
+    filtered = []
+    for img_path in image_paths:
+        # Check if filename contains www.YTS.AM
+        img_name = Path(img_path).name
+        if "www.YTS.AM" not in img_name:
+            filtered.append(img_path)
+    return filtered
+
 def get_largest_image(movie_info):
     """Get the largest image file from movie's images or screenshots"""
     all_images = []
     
-    # Add folder images
+    # Add folder images (filter out YTS images)
     if movie_info.get("images"):
-        for img_path in movie_info["images"]:
+        filtered_images = filter_yts_images(movie_info["images"])
+        for img_path in filtered_images:
             try:
                 if os.path.exists(img_path):
                     size = os.path.getsize(img_path)
@@ -2665,6 +2860,11 @@ async def startup_event():
     # Initialize database
     init_db()
     
+    # Remove existing sample files from database
+    removed_count = remove_sample_files()
+    if removed_count > 0:
+        print(f"Removed {removed_count} sample file(s) from database")
+    
     # Migrate from JSON if needed
     migrate_json_to_db()
     
@@ -2674,7 +2874,37 @@ async def startup_event():
         result = scan_directory(movies_folder)
         print(f"Startup indexing: {result['indexed']} files found, {result['updated']} updated")
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up on shutdown"""
+    logger.info("Shutdown event triggered, cleaning up...")
+    shutdown_flag.set()
+    kill_all_active_subprocesses()
+
+def setup_signal_handlers():
+    """Setup signal handlers for graceful shutdown"""
+    def signal_handler(signum, frame):
+        logger.info(f"Received signal {signum}, initiating shutdown...")
+        shutdown_flag.set()
+        kill_all_active_subprocesses()
+        # Exit after a short delay
+        import time
+        import sys
+        time.sleep(0.5)
+        sys.exit(0)
+    
+    # Register signal handlers
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, signal_handler)
+    if hasattr(signal, 'SIGINT'):
+        signal.signal(signal.SIGINT, signal_handler)
+    
+    # Register atexit handler
+    atexit.register(lambda: (shutdown_flag.set(), kill_all_active_subprocesses()))
+
 if __name__ == "__main__":
+    # Setup signal handlers for graceful shutdown
+    setup_signal_handlers()
     import uvicorn
     # Auto-reload enabled by default - server restarts when Python files change
     # Disable colored output for Windows PowerShell compatibility
