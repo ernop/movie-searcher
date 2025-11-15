@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"**/venv": true,
+			"**/venv/**": true
+		},
+		"search.exclude": {
+			"**/venv": true,
+			"**/venv/**": true
+		},
+		"files.watcherExclude": {
+			"**/venv/**": true
+		}
+	}
+}

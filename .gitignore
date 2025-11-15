@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+movie_index.json
+search_history.json
+watched_movies.json
+config.json
+movie_searcher.log
+.env
+screenshots/
+frames/
+
