@@ -5,6 +5,24 @@
 - Verify claims before agreeing; no reflexive agreement.
 - Never include real credentials (API keys, tokens, passwords); use placeholders instead.
 
+# PRIME DIRECTIVE - NO FALLBACKS
+
+If we need something:
+1. Set up a system to get it
+2. If that fails, we fail and fix step 2
+3. NEVER add a fallback/hacky patch (step 4) to try to work around the failure
+
+Fail fast, fail clearly. Fix the root cause, don't paper over it.
+
+# DATABASE SCHEMA RULES
+
+- Every table MUST have an autoincrement integer ID as primary key (NOT NULL)
+- Every table MUST have `created` and `updated` DateTime fields that auto-update
+
+# GENERAL DEVELOPMENT RULES
+
+- Don't make up random extensions to what the user has asked; it's good to suggest options but you need to confirm and not just add things which might not be good without asking.
+
 
 
 

@@ -6,6 +6,8 @@ from typing import List, Optional
 import os
 import json
 import subprocess
+import re
+import shutil
 from pathlib import Path
 from datetime import datetime
 import hashlib
@@ -13,15 +15,18 @@ import logging
 import threading
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
-import signal
+from collections import Counter
 import atexit
 
 # Setup logging
+# Move log file outside project directory to avoid triggering reloads
+import sys
+LOG_FILE = Path(__file__).parent.parent / "movie_searcher.log" if Path(__file__).parent.parent.exists() else Path(__file__).parent / "movie_searcher.log"
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('movie_searcher.log'),
+        logging.FileHandler(LOG_FILE),
         logging.StreamHandler()
     ]
 )
@@ -34,8 +39,8 @@ except ImportError:
     HAS_MUTAGEN = False
 
 # Database setup
-from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, Boolean, Text, Index
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, Boolean, Text, Index, ForeignKey
+from sqlalchemy.orm import declarative_base, sessionmaker, Session, aliased
 from sqlalchemy.sql import func
 
 Base = declarative_base()
@@ -43,89 +48,614 @@ Base = declarative_base()
 class Movie(Base):
     __tablename__ = "movies"
     
-    path = Column(String, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    path = Column(String, nullable=False, unique=True, index=True)
     name = Column(String, nullable=False, index=True)
+    year = Column(Integer, nullable=True)
     length = Column(Float, nullable=True)
-    created = Column(String, nullable=True)
     size = Column(Integer, nullable=True)
     hash = Column(String, nullable=True, index=True)
     images = Column(Text, nullable=True)  # JSON array as string
     screenshots = Column(Text, nullable=True)  # JSON array as string
-    indexed_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 class Rating(Base):
     __tablename__ = "ratings"
     
-    movie_id = Column(String, primary_key=True)  # Foreign key to Movie.path
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
     rating = Column(Float, nullable=False)
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 class WatchHistory(Base):
     __tablename__ = "watch_history"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    movie_id = Column(String, nullable=False, index=True)  # Foreign key to Movie.path
-    watch_status = Column(String, nullable=False)  # e.g., "watched", "watching", "completed", "abandoned"
-    timestamp = Column(DateTime, default=func.now(), index=True)
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
+    watch_status = Column(Boolean, nullable=True)  # NULL = unknown, True = watched, False = not watched
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 class SearchHistory(Base):
     __tablename__ = "search_history"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     query = Column(String, nullable=False, index=True)
-    timestamp = Column(DateTime, default=func.now(), index=True)
     results_count = Column(Integer, nullable=True)
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 class LaunchHistory(Base):
     __tablename__ = "launch_history"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    path = Column(String, nullable=False, index=True)
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
     subtitle = Column(String, nullable=True)
-    timestamp = Column(DateTime, default=func.now(), index=True)
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 class IndexedPath(Base):
     __tablename__ = "indexed_paths"
     
-    path = Column(String, primary_key=True)
-    indexed_at = Column(DateTime, default=func.now())
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    path = Column(String, nullable=False, unique=True, index=True)
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 class Config(Base):
     __tablename__ = "config"
     
-    key = Column(String, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    key = Column(String, nullable=False, unique=True, index=True)
     value = Column(Text, nullable=True)
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 class MovieFrame(Base):
     __tablename__ = "movie_frames"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    movie_id = Column(String, nullable=False, index=True)  # Foreign key to Movie.path
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
     path = Column(String, nullable=False)  # Path to the extracted frame image
-    created_at = Column(DateTime, default=func.now())
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+class SchemaVersion(Base):
+    """Tracks database schema version to avoid unnecessary migration checks"""
+    __tablename__ = "schema_version"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    version = Column(Integer, nullable=False, unique=True)
+    description = Column(String, nullable=True)
+    applied_at = Column(DateTime, default=func.now(), nullable=False)
+
+# Current schema version - increment when schema changes
+CURRENT_SCHEMA_VERSION = 2
 
 # Indexes are defined on columns directly (name and path already have indexes)
 # Additional indexes can be added via migration if needed
 
-app = FastAPI(title="Movie Searcher")
+# FastAPI app will be created after lifespan function is defined
+# (temporary placeholder - will be replaced)
+app = None
 
 # Configuration
 SCRIPT_DIR = Path(__file__).parent.absolute()
 DB_FILE = SCRIPT_DIR / "movie_searcher.db"
-# Keep JSON files for migration/backup
-STATE_FILE = SCRIPT_DIR / "movie_index.json"
-HISTORY_FILE = SCRIPT_DIR / "search_history.json"
-WATCHED_FILE = SCRIPT_DIR / "watched_movies.json"
-CONFIG_FILE = SCRIPT_DIR / "config.json"
 
 # Database engine and session
-engine = create_engine(f"sqlite:///{DB_FILE}", echo=False)
+# Enable foreign key support for SQLite
+engine = create_engine(
+    f"sqlite:///{DB_FILE}", 
+    echo=False,
+    connect_args={"check_same_thread": False}  # Required for SQLite with FastAPI
+)
+# Enable foreign keys for SQLite
+from sqlalchemy import event
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_conn, connection_record):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def get_schema_version():
+    """Get current database schema version"""
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
+    
+    if "schema_version" not in existing_tables:
+        return None
+    
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT MAX(version) FROM schema_version"))
+        row = result.fetchone()
+        return row[0] if row and row[0] is not None else None
+
+def set_schema_version(version, description=None):
+    """Record that a schema version has been applied"""
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        db.execute(text("""
+            INSERT INTO schema_version (version, description, applied_at)
+            VALUES (:version, :description, CURRENT_TIMESTAMP)
+        """), {"version": version, "description": description})
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error setting schema version: {e}")
+    finally:
+        db.close()
 
 def init_db():
     """Initialize database tables"""
     Base.metadata.create_all(bind=engine)
-    logger.info("Database initialized")
+    
+    # Set initial schema version if database is new
+    version = get_schema_version()
+    if version is None:
+        set_schema_version(CURRENT_SCHEMA_VERSION, "Initial schema version")
+        logger.info(f"Database initialized with schema version {CURRENT_SCHEMA_VERSION}")
+    else:
+        logger.info(f"Database initialized (current schema version: {version})")
+
+def migrate_db_schema():
+    """
+    Migrate database schema to match current models.
+    
+    Uses schema version tracking to avoid unnecessary checks on every startup.
+    """
+    from sqlalchemy import inspect, text
+    
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
+    
+    if "movies" not in existing_tables:
+        # No existing database, schema will be created by init_db
+        return
+    
+    current_version = get_schema_version()
+    
+    # If schema_version table doesn't exist or version is None, we need to check for old schema
+    if current_version is None:
+        # Check if this is old schema (path as PK) or new schema missing version tracking
+        existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
+        
+        if 'id' in existing_columns:
+            # New schema but missing version tracking - just add year if needed and set version
+            if "year" not in existing_columns:
+                logger.info("Adding missing 'year' column to movies table...")
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE movies ADD COLUMN year INTEGER"))
+                logger.info("Migration complete: added 'year' column")
+            set_schema_version(CURRENT_SCHEMA_VERSION, "Added version tracking to existing database")
+            return
+        else:
+            # Old schema - needs full migration (will set version after migration)
+            pass  # Continue to full migration below
+    
+    # Ensure all tables have required created/updated columns (regardless of version)
+    # This fixes cases where tables were created without these columns
+    tables_requiring_timestamps = ["config", "indexed_paths", "search_history"]
+    for table_name in tables_requiring_timestamps:
+        if table_name in existing_tables:
+            table_columns = {col['name']: col for col in inspector.get_columns(table_name)}
+            needs_fix = False
+            with engine.begin() as conn:
+                if "created" not in table_columns:
+                    logger.info(f"Adding missing 'created' column to {table_name} table...")
+                    # SQLite limitation: cannot add column with CURRENT_TIMESTAMP default to existing table
+                    # Add as nullable without default, update existing rows, SQLAlchemy model default handles new rows
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN created DATETIME"))
+                    # Set current timestamp for all existing rows
+                    conn.execute(text(f"UPDATE {table_name} SET created = CURRENT_TIMESTAMP"))
+                    needs_fix = True
+                if "updated" not in table_columns:
+                    logger.info(f"Adding missing 'updated' column to {table_name} table...")
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN updated DATETIME"))
+                    # Set current timestamp for all existing rows
+                    conn.execute(text(f"UPDATE {table_name} SET updated = CURRENT_TIMESTAMP"))
+                    needs_fix = True
+                if needs_fix:
+                    logger.info(f"Fixed {table_name} table: added missing timestamp columns")
+    
+    # If already at current version, no migration needed
+    if current_version == CURRENT_SCHEMA_VERSION:
+        return
+    
+    # Check if this is the old schema (no id column in movies)
+    existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
+    
+    if 'id' not in existing_columns:
+        # Old schema - needs full migration (will set version after migration completes)
+        logger.info("Migrating from old schema (path PK) to new schema (id PK)...")
+        # Continue to full migration below
+    else:
+        # New schema but version is outdated - handle incremental upgrades
+        logger.info(f"Upgrading schema from version {current_version} to {CURRENT_SCHEMA_VERSION}...")
+        
+        if current_version < 2:
+            logger.info("Migrating to schema version 2: ensure config table has surrogate key and timestamps.")
+            config_columns = {}
+            if "config" in existing_tables:
+                config_columns = {col['name']: col for col in inspector.get_columns("config")}
+            needs_config_migration = "config" in existing_tables and "id" not in config_columns
+            
+            if needs_config_migration:
+                with engine.begin() as conn:
+                    conn.execute(text("DROP TABLE IF EXISTS config_new"))
+                    conn.execute(text("""
+                        CREATE TABLE config_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            "key" VARCHAR NOT NULL UNIQUE,
+                            value TEXT,
+                            created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                            updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                        )
+                    """))
+                    logger.info("Rebuilding config table to include autoincrement id column...")
+                    conn.execute(text("""
+                        INSERT INTO config_new ("key", value, created, updated)
+                        SELECT 
+                            "key",
+                            value,
+                            CASE 
+                                WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
+                                ELSE datetime(created)
+                            END,
+                            CASE 
+                                WHEN updated IS NULL OR updated = '' THEN CURRENT_TIMESTAMP
+                                ELSE datetime(updated)
+                            END
+                        FROM config
+                    """))
+                    conn.execute(text("DROP TABLE config"))
+                    conn.execute(text("ALTER TABLE config_new RENAME TO config"))
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_config_key ON config (key)"))
+            else:
+                # Table either already conforms or was never created; ensure it exists and has an index.
+                Base.metadata.tables["config"].create(bind=engine, checkfirst=True)
+                with engine.begin() as conn:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_config_key ON config (key)"))
+            
+            set_schema_version(2, "Added autoincrement id column to config table")
+            current_version = 2
+        
+        # If we get here without incrementing current_version, the migration wasn't implemented
+        if current_version < CURRENT_SCHEMA_VERSION:
+            logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "
+                        f"Database is at version {current_version} but code expects {CURRENT_SCHEMA_VERSION}.")
+            raise RuntimeError(f"Migration from version {current_version} to {CURRENT_SCHEMA_VERSION} not implemented")
+        return
+    
+    # Need full migration from old schema to new schema
+    logger.info("Starting database schema migration...")
+
+    config_columns = {}
+    if "config" in existing_tables:
+        config_columns = {col['name']: col for col in inspector.get_columns("config")}
+    
+    frames_columns = {}
+    needs_movie_frames_migration = False
+    if "movie_frames" in existing_tables:
+        frames_columns = {col['name']: col for col in inspector.get_columns("movie_frames")}
+        if 'movie_id' in frames_columns:
+            movie_id_col = frames_columns.get('movie_id', {})
+            col_type = str(movie_id_col.get('type', '')).upper()
+            if 'VARCHAR' in col_type or 'TEXT' in col_type:
+                needs_movie_frames_migration = True
+        else:
+            # Old schema might have had different column name
+            needs_movie_frames_migration = True
+    
+    with engine.begin() as conn:
+        # Step 0: Clean up any partial migration tables from previous failed attempts
+        logger.info("Cleaning up any partial migration tables...")
+        # Drop tables first (this automatically drops their indexes in SQLite)
+        # But we also try to drop indexes explicitly in case they exist independently
+        tables_to_drop = [
+            "movies_new", "ratings_new", "watch_history_new", 
+            "search_history_new", "launch_history_new", 
+            "indexed_paths_new", "config_new", "movie_frames_new"
+        ]
+        indexes_to_drop = [
+            "ix_movies_path", "ix_movies_name", "ix_movies_hash",
+            "ix_ratings_movie_id", "ix_watch_history_movie_id",
+            "ix_search_history_query", "ix_launch_history_movie_id",
+            "ix_indexed_paths_path", "ix_config_key", "ix_movie_frames_movie_id"
+        ]
+        
+        # Drop tables first (this automatically drops their indexes in SQLite)
+        for table_name in tables_to_drop:
+            try:
+                conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+            except Exception as e:
+                logger.debug(f"Error dropping table {table_name}: {e}")
+        
+        # Try to drop any orphaned indexes (in case they exist independently)
+        # Note: In SQLite, indexes are usually auto-dropped with tables, but we check anyway
+        for index_name in indexes_to_drop:
+            try:
+                # Try dropping with table qualification
+                conn.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
+            except Exception:
+                pass  # Index may not exist
+        
+        # Step 1: Add year column if it doesn't exist
+        if "year" not in existing_columns:
+            logger.info("Adding 'year' column to movies table...")
+            conn.execute(text("ALTER TABLE movies ADD COLUMN year INTEGER"))
+        
+        # Step 2: Create new tables with correct schema
+        logger.info("Creating new tables with updated schema...")
+        
+        # Create new movies table
+        conn.execute(text("""
+            CREATE TABLE movies_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                path VARCHAR NOT NULL UNIQUE,
+                name VARCHAR NOT NULL,
+                year INTEGER,
+                length FLOAT,
+                size INTEGER,
+                hash VARCHAR,
+                images TEXT,
+                screenshots TEXT,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+        conn.execute(text("CREATE INDEX ix_movies_path ON movies_new (path)"))
+        conn.execute(text("CREATE INDEX ix_movies_name ON movies_new (name)"))
+        conn.execute(text("CREATE INDEX ix_movies_hash ON movies_new (hash)"))
+        
+        # Migrate movies data
+        logger.info("Migrating movies data...")
+        # Handle created field - convert from string ISO format to datetime
+        conn.execute(text("""
+            INSERT INTO movies_new (path, name, year, length, size, hash, images, screenshots, created, updated)
+            SELECT 
+                path,
+                name,
+                year,
+                length,
+                size,
+                hash,
+                images,
+                screenshots,
+                CASE 
+                    WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
+                    ELSE datetime(created)
+                END,
+                CURRENT_TIMESTAMP
+            FROM movies
+        """))
+        
+        # Create new ratings table
+        conn.execute(text("""
+            CREATE TABLE ratings_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                movie_id INTEGER NOT NULL UNIQUE,
+                rating FLOAT NOT NULL,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX ix_ratings_movie_id ON ratings_new (movie_id)"))
+        
+        # Migrate ratings data (need to map path to id)
+        logger.info("Migrating ratings data...")
+        conn.execute(text("""
+            INSERT INTO ratings_new (movie_id, rating, created, updated)
+            SELECT 
+                m.id,
+                r.rating,
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            FROM ratings r
+            JOIN movies_new m ON m.path = r.movie_id
+        """))
+        
+        # Create new watch_history table
+        conn.execute(text("""
+            CREATE TABLE watch_history_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                movie_id INTEGER NOT NULL,
+                watch_status BOOLEAN,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX ix_watch_history_movie_id ON watch_history_new (movie_id)"))
+        
+        # Migrate watch_history data
+        logger.info("Migrating watch_history data...")
+        # Convert old string status to boolean
+        conn.execute(text("""
+            INSERT INTO watch_history_new (movie_id, watch_status, created, updated)
+            SELECT 
+                m.id,
+                CASE 
+                    WHEN wh.watch_status = 'watched' THEN 1
+                    WHEN wh.watch_status = 'not watched' OR wh.watch_status = 'unwatched' THEN 0
+                    ELSE NULL
+                END,
+                COALESCE(wh.timestamp, CURRENT_TIMESTAMP),
+                COALESCE(wh.timestamp, CURRENT_TIMESTAMP)
+            FROM watch_history wh
+            JOIN movies_new m ON m.path = wh.movie_id
+        """))
+        
+        # Create new search_history table
+        conn.execute(text("""
+            CREATE TABLE search_history_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                query VARCHAR NOT NULL,
+                results_count INTEGER,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+        conn.execute(text("CREATE INDEX ix_search_history_query ON search_history_new (query)"))
+        
+        # Migrate search_history data
+        logger.info("Migrating search_history data...")
+        conn.execute(text("""
+            INSERT INTO search_history_new (query, results_count, created, updated)
+            SELECT 
+                query,
+                results_count,
+                COALESCE(timestamp, CURRENT_TIMESTAMP),
+                COALESCE(timestamp, CURRENT_TIMESTAMP)
+            FROM search_history
+        """))
+        
+        # Create new launch_history table
+        conn.execute(text("""
+            CREATE TABLE launch_history_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                movie_id INTEGER NOT NULL,
+                subtitle VARCHAR,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX ix_launch_history_movie_id ON launch_history_new (movie_id)"))
+        
+        # Migrate launch_history data
+        logger.info("Migrating launch_history data...")
+        conn.execute(text("""
+            INSERT INTO launch_history_new (movie_id, subtitle, created, updated)
+            SELECT 
+                m.id,
+                lh.subtitle,
+                COALESCE(lh.timestamp, CURRENT_TIMESTAMP),
+                COALESCE(lh.timestamp, CURRENT_TIMESTAMP)
+            FROM launch_history lh
+            JOIN movies_new m ON m.path = lh.path
+        """))
+        
+        # Create new indexed_paths table
+        conn.execute(text("""
+            CREATE TABLE indexed_paths_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                path VARCHAR NOT NULL UNIQUE,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+        conn.execute(text("CREATE INDEX ix_indexed_paths_path ON indexed_paths_new (path)"))
+        
+        # Migrate indexed_paths data
+        logger.info("Migrating indexed_paths data...")
+        conn.execute(text("""
+            INSERT INTO indexed_paths_new (path, created, updated)
+            SELECT 
+                path,
+                COALESCE(indexed_at, CURRENT_TIMESTAMP),
+                COALESCE(indexed_at, CURRENT_TIMESTAMP)
+            FROM indexed_paths
+        """))
+        
+        # Create new config table
+        if "config" in existing_tables and 'id' not in config_columns:
+            conn.execute(text("""
+                CREATE TABLE config_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    key VARCHAR NOT NULL UNIQUE,
+                    value TEXT,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+            """))
+            conn.execute(text("CREATE INDEX ix_config_key ON config_new (key)"))
+            
+            logger.info("Migrating config data...")
+            conn.execute(text("""
+                INSERT INTO config_new (key, value, created, updated)
+                SELECT 
+                    key,
+                    value,
+                    CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP
+                FROM config
+            """))
+        
+        # Create new movie_frames table
+        migrated_movie_frames = False
+        if needs_movie_frames_migration:
+            migrated_movie_frames = True
+            conn.execute(text("""
+                CREATE TABLE movie_frames_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    movie_id INTEGER NOT NULL,
+                    path VARCHAR NOT NULL,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
+                )
+            """))
+            conn.execute(text("CREATE INDEX ix_movie_frames_movie_id ON movie_frames_new (movie_id)"))
+            
+            logger.info("Migrating movie_frames data...")
+            conn.execute(text("""
+                INSERT INTO movie_frames_new (movie_id, path, created, updated)
+                SELECT 
+                    m.id,
+                    mf.path,
+                    COALESCE(mf.created_at, CURRENT_TIMESTAMP),
+                    COALESCE(mf.created_at, CURRENT_TIMESTAMP)
+                FROM movie_frames mf
+                JOIN movies_new m ON m.path = mf.movie_id
+            """))
+        
+        # Step 3: Drop old tables
+        logger.info("Dropping old tables...")
+        conn.execute(text("DROP TABLE IF EXISTS ratings"))
+        conn.execute(text("DROP TABLE IF EXISTS watch_history"))
+        conn.execute(text("DROP TABLE IF EXISTS search_history"))
+        conn.execute(text("DROP TABLE IF EXISTS launch_history"))
+        conn.execute(text("DROP TABLE IF EXISTS indexed_paths"))
+        if "config" in existing_tables and 'id' not in config_columns:
+            conn.execute(text("DROP TABLE IF EXISTS config"))
+        if migrated_movie_frames:
+            conn.execute(text("DROP TABLE IF EXISTS movie_frames"))
+        conn.execute(text("DROP TABLE IF EXISTS movies"))
+        
+        # Step 4: Rename new tables
+        logger.info("Renaming new tables...")
+        conn.execute(text("ALTER TABLE movies_new RENAME TO movies"))
+        conn.execute(text("ALTER TABLE ratings_new RENAME TO ratings"))
+        conn.execute(text("ALTER TABLE watch_history_new RENAME TO watch_history"))
+        conn.execute(text("ALTER TABLE search_history_new RENAME TO search_history"))
+        conn.execute(text("ALTER TABLE launch_history_new RENAME TO launch_history"))
+        conn.execute(text("ALTER TABLE indexed_paths_new RENAME TO indexed_paths"))
+        if "config" in existing_tables and 'id' not in config_columns:
+            conn.execute(text("ALTER TABLE config_new RENAME TO config"))
+        if migrated_movie_frames:
+            conn.execute(text("ALTER TABLE movie_frames_new RENAME TO movie_frames"))
+    
+    # Record migration completion
+    set_schema_version(CURRENT_SCHEMA_VERSION, "Migrated from old schema (path PK) to new schema (id PK)")
+    logger.info("Database schema migration completed successfully!")
+    
+    # Handle version upgrades (future schema changes)
+    # Add version-specific migrations here when CURRENT_SCHEMA_VERSION increases
+    # Example:
+    # if current_version < 2:
+    #     # Migration code for version 2
+    #     pass
+    # if current_version < 3:
+    #     # Migration code for version 3
+    #     pass
 
 def remove_sample_files():
     """Remove all movies with 'sample' in their name from the database"""
@@ -146,19 +676,17 @@ def remove_sample_files():
         
         # Remove related records for each sample movie
         for movie in sample_movies:
-            movie_path = movie.path
-            
             # Delete MovieFrame records
-            db.query(MovieFrame).filter(MovieFrame.movie_id == movie_path).delete()
+            db.query(MovieFrame).filter(MovieFrame.movie_id == movie.id).delete()
             
             # Delete Rating records
-            db.query(Rating).filter(Rating.movie_id == movie_path).delete()
+            db.query(Rating).filter(Rating.movie_id == movie.id).delete()
             
             # Delete WatchHistory records
-            db.query(WatchHistory).filter(WatchHistory.movie_id == movie_path).delete()
+            db.query(WatchHistory).filter(WatchHistory.movie_id == movie.id).delete()
             
             # Delete LaunchHistory records
-            db.query(LaunchHistory).filter(LaunchHistory.path == movie_path).delete()
+            db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).delete()
             
             # Delete the movie itself
             db.delete(movie)
@@ -197,121 +725,8 @@ def is_sample_file(file_path):
 SCREENSHOT_DIR = SCRIPT_DIR / "screenshots"
 FRAMES_DIR = SCRIPT_DIR / "frames"
 
-def migrate_json_to_db():
-    """Migrate data from JSON files to database if JSON exists and DB is empty"""
-    db = SessionLocal()
-    try:
-        # Check if database has any movies
-        movie_count = db.query(Movie).count()
-        if movie_count > 0:
-            logger.info("Database already has data, skipping migration")
-            return False
-        
-        # Migrate movies
-        if STATE_FILE.exists():
-            logger.info("Migrating movies from JSON to database...")
-            with open(STATE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                movies = data.get("movies", {})
-                for path, info in movies.items():
-                    # Filter out YTS images before storing
-                    images = filter_yts_images(info.get("images", []))
-                    movie = Movie(
-                        path=path,
-                        name=info.get("name", ""),
-                        length=info.get("length"),
-                        created=info.get("created"),
-                        size=info.get("size"),
-                        hash=info.get("hash"),
-                        images=json.dumps(images),
-                        screenshots=json.dumps(info.get("screenshots", []))
-                    )
-                    db.merge(movie)
-                
-                # Migrate indexed paths
-                indexed_paths = data.get("indexed_paths", [])
-                for path in indexed_paths:
-                    indexed_path = IndexedPath(path=path)
-                    db.merge(indexed_path)
-            
-            logger.info(f"Migrated {len(movies)} movies to database")
-        
-        # Migrate watched movies
-        if WATCHED_FILE.exists():
-            logger.info("Migrating watched movies from JSON to database...")
-            with open(WATCHED_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                watched_paths = data.get("watched", [])
-                watched_dates = data.get("watched_dates", {})
-                ratings = data.get("ratings", {})
-                
-                for path in watched_paths:
-                    watched_date_str = watched_dates.get(path)
-                    watched_date = None
-                    if watched_date_str:
-                        try:
-                            watched_date = datetime.fromisoformat(watched_date_str)
-                        except:
-                            watched_date = datetime.now()
-                    
-                    # Create watch history entry
-                    watch_entry = WatchHistory(
-                        movie_id=path,
-                        watch_status="watched",
-                        timestamp=watched_date or datetime.now()
-                    )
-                    db.add(watch_entry)
-                    
-                    # Create rating entry if rating exists
-                    if path in ratings and ratings[path] is not None:
-                        rating_entry = Rating(
-                            movie_id=path,
-                            rating=ratings[path]
-                        )
-                        db.merge(rating_entry)
-            
-            logger.info(f"Migrated {len(watched_paths)} watched movies to database")
-        
-        # Migrate history
-        if HISTORY_FILE.exists():
-            logger.info("Migrating history from JSON to database...")
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-                # Migrate searches
-                searches = data.get("searches", [])
-                for search in searches[-100:]:  # Keep last 100
-                    search_entry = SearchHistory(
-                        query=search.get("query", ""),
-                        timestamp=datetime.fromisoformat(search.get("timestamp", datetime.now().isoformat())),
-                        results_count=search.get("results_count")
-                    )
-                    db.add(search_entry)
-                
-                # Migrate launches
-                launches = data.get("launches", [])
-                for launch in launches:
-                    launch_entry = LaunchHistory(
-                        path=launch.get("path", ""),
-                        subtitle=launch.get("subtitle"),
-                        timestamp=datetime.fromisoformat(launch.get("timestamp", datetime.now().isoformat()))
-                    )
-                    db.add(launch_entry)
-            
-            logger.info("Migrated history to database")
-        
-        db.commit()
-        logger.info("Migration completed successfully")
-        return True
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Migration error: {e}")
-        return False
-    finally:
-        db.close()
-
 def load_config():
-    """Load configuration from database, fallback to JSON"""
+    """Load configuration from database"""
     db = SessionLocal()
     try:
         config = {}
@@ -324,26 +739,9 @@ def load_config():
                 except:
                     config[row.key] = row.value
         except Exception as e:
-            # Database tables not initialized yet, fall back to JSON file
-            logger.debug(f"Database not initialized yet, using JSON fallback: {e}")
+            # Database tables not initialized yet
+            logger.debug(f"Database not initialized yet: {e}")
             pass
-        
-        # If no config in DB, try JSON file
-        if not config and CONFIG_FILE.exists():
-            try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    # Try to migrate to DB (only if tables exist)
-                    try:
-                        for key, value in config.items():
-                            value_str = json.dumps(value) if not isinstance(value, str) else value
-                            db.merge(Config(key=key, value=value_str))
-                        db.commit()
-                    except Exception:
-                        # Tables don't exist yet, will migrate later in startup_event
-                        pass
-            except:
-                pass
         
         return config
     finally:
@@ -399,8 +797,24 @@ def get_movies_folder():
     logger.info("No movies folder found")
     return None
 
+# Initialize database and run migrations before any database operations
+# This must happen at module level before Config model is used
+init_db()
+migrate_db_schema()
+
 # Get initial movies folder path
 ROOT_MOVIE_PATH = get_movies_folder()
+
+# If no movies folder found in config, set default to D:\movies
+if not ROOT_MOVIE_PATH:
+    default_path = Path("D:/movies")
+    if default_path.exists() and default_path.is_dir():
+        logger.info(f"Using default movies folder: {default_path}")
+        # Save to config
+        config = load_config()
+        config["movies_folder"] = str(default_path)
+        save_config(config)
+        ROOT_MOVIE_PATH = str(default_path)
 
 # Scan progress tracking (in-memory)
 scan_progress = {
@@ -470,6 +884,32 @@ def kill_all_active_subprocesses():
         active_subprocesses.clear()
     kill_all_ffmpeg_processes()
 
+# Define lifespan function after all dependencies are available
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    """Lifespan context manager for startup and shutdown"""
+    # Startup
+    # Note: init_db creates missing tables but doesn't modify existing ones.
+    # migrate_db_schema handles one-time migration from old schema.
+    # For production, consider making migrations manual (like Django).
+    init_db()
+    migrate_db_schema()
+    removed_count = remove_sample_files()
+    if removed_count > 0:
+        print(f"Removed {removed_count} sample file(s) from database")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutdown event triggered, cleaning up...")
+    shutdown_flag.set()
+    kill_all_active_subprocesses()
+
+# Create FastAPI app with lifespan
+app = FastAPI(title="Movie Searcher", lifespan=lifespan)
+
 def run_interruptible_subprocess(cmd, timeout=30, capture_output=True):
     """Run a subprocess that can be interrupted by shutdown flag"""
     if shutdown_flag.is_set():
@@ -538,9 +978,15 @@ class WatchedRequest(BaseModel):
     rating: Optional[float] = None
 
 class ConfigRequest(BaseModel):
-    movies_folder: str
+    movies_folder: Optional[str] = None
+    settings: Optional[dict] = None
 
 # Database state functions
+def get_movie_id_by_path(db: Session, path: str) -> Optional[int]:
+    """Get movie ID from path. Returns None if movie doesn't exist."""
+    movie = db.query(Movie).filter(Movie.path == path).first()
+    return movie.id if movie else None
+
 def get_movies_dict(db: Session):
     """Get all movies as a dictionary (for backward compatibility)"""
     movies = {}
@@ -611,22 +1057,25 @@ def load_watched():
         watched_dates = {}
         ratings = {}
         
-        # Get all movies with "watched" status in watch_history
+        # Get all movies with watched status in watch_history
         watch_entries = db.query(WatchHistory).filter(
-            WatchHistory.watch_status == "watched"
-        ).all()
+            WatchHistory.watch_status == True
+        ).order_by(WatchHistory.updated.desc()).all()
         
         # Get most recent watch entry per movie
         watched_paths_set = set()
         for entry in watch_entries:
-            if entry.movie_id not in watched_paths_set:
-                watched.append(entry.movie_id)
-                watched_dates[entry.movie_id] = entry.timestamp.isoformat()
-                watched_paths_set.add(entry.movie_id)
+            movie = db.query(Movie).filter(Movie.id == entry.movie_id).first()
+            if movie and movie.path not in watched_paths_set:
+                watched.append(movie.path)
+                watched_dates[movie.path] = entry.updated.isoformat()
+                watched_paths_set.add(movie.path)
         
         # Get ratings
         for rating in db.query(Rating).all():
-            ratings[rating.movie_id] = rating.rating
+            movie = db.query(Movie).filter(Movie.id == rating.movie_id).first()
+            if movie:
+                ratings[movie.path] = rating.rating
         
         return {
             "watched": watched,
@@ -646,41 +1095,40 @@ def save_watched(watched_data):
         watched_dates = watched_data.get("watched_dates", {})
         ratings = watched_data.get("ratings", {})
         
-        # Get current watched movies (movies with "watched" status)
-        current_watched = set()
-        for entry in db.query(WatchHistory).filter(WatchHistory.watch_status == "watched").all():
-            current_watched.add(entry.movie_id)
+        # Convert paths to movie IDs
+        path_to_id = {}
+        for path in watched_paths:
+            movie_id = get_movie_id_by_path(db, path)
+            if movie_id:
+                path_to_id[path] = movie_id
+        
+        # Get current watched movies (movies with watched status)
+        current_watched_ids = set()
+        for entry in db.query(WatchHistory).filter(WatchHistory.watch_status == True).all():
+            current_watched_ids.add(entry.movie_id)
         
         # Remove unwatched movies (delete watch history entries)
-        for path in current_watched - watched_paths:
+        watched_ids = set(path_to_id.values())
+        for movie_id in current_watched_ids - watched_ids:
             db.query(WatchHistory).filter(
-                WatchHistory.movie_id == path,
-                WatchHistory.watch_status == "watched"
+                WatchHistory.movie_id == movie_id,
+                WatchHistory.watch_status == True
             ).delete()
-            db.query(Rating).filter(Rating.movie_id == path).delete()
+            db.query(Rating).filter(Rating.movie_id == movie_id).delete()
         
         # Add/update watched movies
-        for path in watched_paths:
-            watched_date_str = watched_dates.get(path)
-            watched_date = None
-            if watched_date_str:
-                try:
-                    watched_date = datetime.fromisoformat(watched_date_str)
-                except:
-                    watched_date = datetime.now()
-            
+        for path, movie_id in path_to_id.items():
             # Create watch history entry
             watch_entry = WatchHistory(
-                movie_id=path,
-                watch_status="watched",
-                timestamp=watched_date or datetime.now()
+                movie_id=movie_id,
+                watch_status=True
             )
             db.add(watch_entry)
             
             # Update rating if provided
             if path in ratings and ratings[path] is not None:
                 rating_entry = Rating(
-                    movie_id=path,
+                    movie_id=movie_id,
                     rating=ratings[path]
                 )
                 db.merge(rating_entry)
@@ -694,20 +1142,22 @@ def load_history():
     db = SessionLocal()
     try:
         searches = []
-        for search in db.query(SearchHistory).order_by(SearchHistory.timestamp.desc()).limit(100).all():
+        for search in db.query(SearchHistory).order_by(SearchHistory.created.desc()).limit(100).all():
             searches.append({
                 "query": search.query,
-                "timestamp": search.timestamp.isoformat(),
+                "timestamp": search.created.isoformat(),
                 "results_count": search.results_count
             })
         
         launches = []
-        for launch in db.query(LaunchHistory).order_by(LaunchHistory.timestamp.desc()).all():
-            launches.append({
-                "path": launch.path,
-                "subtitle": launch.subtitle,
-                "timestamp": launch.timestamp.isoformat()
-            })
+        for launch in db.query(LaunchHistory).order_by(LaunchHistory.created.desc()).all():
+            movie = db.query(Movie).filter(Movie.id == launch.movie_id).first()
+            if movie:
+                launches.append({
+                    "path": movie.path,
+                    "subtitle": launch.subtitle,
+                    "timestamp": launch.created.isoformat()
+                })
         
         return {
             "searches": searches,
@@ -733,12 +1183,16 @@ def save_history(history):
         # Save launches
         launches = history.get("launches", [])
         for launch in launches:
-            launch_entry = LaunchHistory(
-                path=launch.get("path", ""),
-                subtitle=launch.get("subtitle"),
-                timestamp=datetime.fromisoformat(launch.get("timestamp", datetime.now().isoformat()))
-            )
-            db.add(launch_entry)
+            launch_path = launch.get("path", "")
+            # Get movie ID from path
+            movie = db.query(Movie).filter(Movie.path == launch_path).first()
+            if movie:
+                launch_entry = LaunchHistory(
+                    movie_id=movie.id,
+                    subtitle=launch.get("subtitle"),
+                    timestamp=datetime.fromisoformat(launch.get("timestamp", datetime.now().isoformat()))
+                )
+                db.add(launch_entry)
         
         db.commit()
     finally:
@@ -748,7 +1202,10 @@ def has_been_launched(movie_path):
     """Check if a movie has ever been launched"""
     db = SessionLocal()
     try:
-        count = db.query(LaunchHistory).filter(LaunchHistory.path == movie_path).count()
+        movie = db.query(Movie).filter(Movie.path == movie_path).first()
+        if not movie:
+            return False
+        count = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count()
         return count > 0
     finally:
         db.close()
@@ -801,27 +1258,51 @@ def find_images_in_folder(video_path):
     
     return images[:10]  # Limit to 10 images
 
+def validate_ffmpeg_path(ffmpeg_path):
+    """Validate that an ffmpeg path exists and is executable"""
+    if not ffmpeg_path:
+        return False, "Path is empty"
+    
+    path_obj = Path(ffmpeg_path)
+    
+    # Check if file exists
+    if not path_obj.exists():
+        return False, f"Path does not exist: {ffmpeg_path}"
+    
+    # Check if it's a file (not a directory)
+    if not path_obj.is_file():
+        return False, f"Path is not a file: {ffmpeg_path}"
+    
+    # Try to execute ffmpeg -version to verify it's actually ffmpeg
+    try:
+        result = subprocess.run([str(path_obj), "-version"], capture_output=True, timeout=5)
+        if result.returncode == 0:
+            return True, "Valid"
+        else:
+            return False, f"ffmpeg -version returned non-zero exit code: {result.returncode}"
+    except subprocess.TimeoutExpired:
+        return False, "ffmpeg -version timed out"
+    except Exception as e:
+        return False, f"Error executing ffmpeg: {str(e)}"
+
 def find_ffmpeg():
-    """Find ffmpeg executable"""
-    ffmpeg_paths = [
-        "ffmpeg",  # In PATH
-        r"C:\ffmpeg\bin\ffmpeg.exe",
-        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-    ]
+    """Find ffmpeg executable - requires configured path, no fallbacks"""
+    config = load_config()
+    configured_path = config.get("ffmpeg_path")
     
-    for path in ffmpeg_paths:
-        if path == "ffmpeg":
-            # Check if ffmpeg is in PATH
-            try:
-                result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=2)
-                if result.returncode == 0:
-                    return "ffmpeg"
-            except:
-                pass
-        elif os.path.exists(path):
-            return path
+    if not configured_path:
+        logger.error("ffmpeg_path not configured. Set ffmpeg_path in configuration to use frame extraction.")
+        return None
     
-    return None
+    # Validate the configured path
+    is_valid, error_msg = validate_ffmpeg_path(configured_path)
+    if is_valid:
+        logger.info(f"Using configured ffmpeg path: {configured_path}")
+        return configured_path
+    else:
+        logger.error(f"Configured ffmpeg path is invalid: {configured_path} - {error_msg}")
+        logger.error("Please fix the ffmpeg_path configuration. Frame extraction will not work until this is corrected.")
+        return None
 
 def generate_frame_filename(video_path, timestamp_seconds):
     """Generate a sensible frame filename based on movie name and timestamp"""
@@ -971,11 +1452,17 @@ def process_frame_extraction_worker(frame_info):
             # Save to database
             db = SessionLocal()
             try:
+                # Get movie ID from path
+                movie = db.query(Movie).filter(Movie.path == video_path).first()
+                if not movie:
+                    logger.warning(f"Movie not found for frame extraction: {video_path}")
+                    return
+                
                 # Check if entry already exists
-                existing = db.query(MovieFrame).filter(MovieFrame.movie_id == video_path).first()
+                existing = db.query(MovieFrame).filter(MovieFrame.movie_id == movie.id).first()
                 if not existing:
                     movie_frame = MovieFrame(
-                        movie_id=video_path,
+                        movie_id=movie.id,
                         path=frame_path
                     )
                     db.add(movie_frame)
@@ -1134,6 +1621,178 @@ def extract_screenshots(video_path, num_screenshots=5):
     
     return screenshots
 
+def load_cleaning_patterns():
+    """Load approved cleaning patterns from database"""
+    db = SessionLocal()
+    try:
+        config_row = db.query(Config).filter(Config.key == 'cleaning_patterns').first()
+        if config_row:
+            try:
+                data = json.loads(config_row.value)
+                return {
+                    'exact_strings': set(data.get('exact_strings', [])),
+                    'bracket_patterns': data.get('bracket_patterns', []),
+                    'parentheses_patterns': data.get('parentheses_patterns', []),
+                    'year_patterns': data.get('year_patterns', True),  # Default to True
+                }
+            except Exception as e:
+                logger.error(f"Error parsing cleaning patterns from database: {e}")
+    except Exception as e:
+        logger.error(f"Error loading cleaning patterns: {e}")
+    finally:
+        db.close()
+    
+    # Return defaults if not found
+    return {
+        'exact_strings': set(),
+        'bracket_patterns': [],
+        'parentheses_patterns': [],
+        'year_patterns': True,
+    }
+
+def save_cleaning_patterns(patterns):
+    """Save approved cleaning patterns to database"""
+    db = SessionLocal()
+    try:
+        data = {
+            'exact_strings': list(patterns['exact_strings']),
+            'bracket_patterns': patterns['bracket_patterns'],
+            'parentheses_patterns': patterns['parentheses_patterns'],
+            'year_patterns': patterns['year_patterns'],
+        }
+        value_str = json.dumps(data)
+        config_entry = Config(key='cleaning_patterns', value=value_str)
+        db.merge(config_entry)
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error saving cleaning patterns: {e}")
+        return False
+    finally:
+        db.close()
+
+def extract_year_from_name(name):
+    """Extract year from movie name (1900-2035)"""
+    # Look for 4-digit years in the range 1900-2035
+    year_pattern = r'\b(19\d{2}|20[0-2]\d|203[0-5])\b'
+    matches = re.findall(year_pattern, name)
+    if matches:
+        # Return the first valid year found
+        year = int(matches[0])
+        if 1900 <= year <= 2035:
+            return year
+    return None
+
+def clean_movie_name(name, patterns=None):
+    """Clean movie name using approved patterns and extract year"""
+    if patterns is None:
+        patterns = load_cleaning_patterns()
+    
+    original_name = name
+    year = None
+    
+    # Extract year first if enabled
+    if patterns.get('year_patterns', True):
+        year = extract_year_from_name(name)
+        # Remove year from name
+        if year:
+            name = re.sub(rf'\b{year}\b', '', name)
+    
+    # Remove exact strings
+    for exact_str in patterns.get('exact_strings', set()):
+        name = name.replace(exact_str, ' ')
+    
+    # Remove bracket patterns [anything]
+    for pattern in patterns.get('bracket_patterns', []):
+        if pattern == '[anything]':
+            name = re.sub(r'\[.*?\]', '', name)
+        else:
+            name = name.replace(pattern, ' ')
+    
+    # Remove parentheses patterns (anything)
+    for pattern in patterns.get('parentheses_patterns', []):
+        if pattern == '(anything)':
+            # Remove parentheses content, but be smart about it
+            # Don't remove if it's just a year or looks like part of title
+            name = re.sub(r'\([^)]*\)', '', name)
+        else:
+            name = name.replace(pattern, ' ')
+    
+    # Clean up multiple spaces and trim
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    # If name becomes empty, use original
+    if not name:
+        name = original_name
+    
+    return name, year
+
+def analyze_movie_names():
+    """Analyze all movie names to find suspicious patterns"""
+    db = SessionLocal()
+    try:
+        movies = db.query(Movie).all()
+        
+        # Collect patterns
+        bracket_contents = Counter()  # [RarBG], [AnimeXP], etc.
+        parentheses_contents = Counter()  # (1956 - Stanley Kubrick), etc.
+        exact_strings = Counter()
+        years_found = Counter()
+        
+        for movie in movies:
+            name = movie.name
+            
+            # Extract bracket contents [anything]
+            bracket_matches = re.findall(r'\[([^\]]+)\]', name)
+            for match in bracket_matches:
+                bracket_contents[f'[{match}]'] += 1
+            
+            # Extract parentheses contents
+            paren_matches = re.findall(r'\(([^)]+)\)', name)
+            for match in paren_matches:
+                # Check if it looks like a year or year-director pattern
+                if re.match(r'^\d{4}', match) or re.match(r'^\d{4}\s*[-–]\s*', match):
+                    parentheses_contents[f'({match})'] += 1
+                elif len(match) > 3:  # Only count substantial parentheses content
+                    parentheses_contents[f'({match})'] += 1
+            
+            # Extract years
+            year = extract_year_from_name(name)
+            if year:
+                years_found[str(year)] += 1
+            
+            # Look for common clutter strings (resolution, codec, etc.)
+            clutter_patterns = [
+                r'\b\d{3,4}p\b',  # 1080p, 720p, etc.
+                r'\b\d{3,4}x\d{3,4}\b',  # 1920x1080, etc.
+                r'\b(BluRay|BRRip|DVDRip|WEBRip|HDTV|HDRip|BDRip)\b',
+                r'\b(x264|x265|HEVC|AVC|H\.264|H\.265)\b',
+                r'\b(AC3|DTS|AAC|MP3)\b',
+                r'\b(REPACK|PROPER|RERIP)\b',
+            ]
+            
+            for pattern in clutter_patterns:
+                matches = re.findall(pattern, name, re.IGNORECASE)
+                for match in matches:
+                    exact_strings[match] += 1
+        
+        # Convert to lists with counts
+        bracket_list = [{'pattern': p, 'count': c} for p, c in bracket_contents.most_common()]
+        paren_list = [{'pattern': p, 'count': c} for p, c in parentheses_contents.most_common()]
+        exact_list = [{'pattern': p, 'count': c} for p, c in exact_strings.most_common()]
+        years_list = [{'pattern': p, 'count': c} for p, c in years_found.most_common()]
+        
+        return {
+            'bracket_patterns': bracket_list,
+            'parentheses_patterns': paren_list,
+            'exact_strings': exact_list,
+            'years': years_list,
+            'total_movies': len(movies)
+        }
+    finally:
+        db.close()
+
 def index_movie(file_path, db: Session = None):
     """Index a single movie file"""
     # Normalize the path to ensure consistent storage
@@ -1167,7 +1826,9 @@ def index_movie(file_path, db: Session = None):
         file_unchanged = existing and existing.hash == file_hash
         
         # Check if frame exists for this movie
-        existing_frame = db.query(MovieFrame).filter(MovieFrame.movie_id == normalized_path).first()
+        existing_frame = None
+        if existing:
+            existing_frame = db.query(MovieFrame).filter(MovieFrame.movie_id == existing.id).first()
         has_frame = existing_frame and os.path.exists(existing_frame.path) if existing_frame else False
         
         # If file unchanged and frame exists, no update needed
@@ -1221,10 +1882,15 @@ def index_movie(file_path, db: Session = None):
         # Filter out YTS images before storing in database (defense in depth)
         images = filter_yts_images(images)
         
+        # Clean movie name and extract year
+        raw_name = normalized_path_obj.stem
+        cleaned_name, year = clean_movie_name(raw_name)
+        
         # Create or update movie record
         movie = Movie(
             path=normalized_path,
-            name=normalized_path_obj.stem,
+            name=cleaned_name,
+            year=year,
             length=length,
             created=created,
             size=size,
@@ -1479,7 +2145,7 @@ async def admin_reindex(root_path: str = Query(None)):
     return {"status": "started", "message": "Reindex started in background"}
 
 @app.get("/api/search")
-async def search_movies(q: str, filter_type: str = Query("all", regex="^(all|watched|unwatched)$")):
+async def search_movies(q: str, filter_type: str = Query("all", pattern="^(all|watched|unwatched)$")):
     """Search movies with autocomplete"""
     if not q or len(q) < 1:
         return {"results": []}
@@ -1499,14 +2165,14 @@ async def search_movies(q: str, filter_type: str = Query("all", regex="^(all|wat
         watched_dict = {}
         # Get most recent "watched" entry per movie
         watch_entries = db.query(WatchHistory).filter(
-            WatchHistory.watch_status == "watched"
-        ).order_by(WatchHistory.timestamp.desc()).all()
+            WatchHistory.watch_status == True
+        ).order_by(WatchHistory.updated.desc()).all()
         
         for entry in watch_entries:
             if entry.movie_id not in watched_paths:
                 watched_paths.add(entry.movie_id)
                 watched_dict[entry.movie_id] = {
-                    "watched_date": entry.timestamp.isoformat() if entry.timestamp else None,
+                    "watched_date": entry.updated.isoformat() if entry.updated else None,
                     "rating": None
                 }
         
@@ -1537,7 +2203,7 @@ async def search_movies(q: str, filter_type: str = Query("all", regex="^(all|wat
             images = filter_yts_images(images)
             
             # Get frame path
-            frame_path = get_movie_frame_path(db, movie.path)
+            frame_path = get_movie_frame_path(db, movie.id)
             
             # Build info dict for get_largest_image (include frame)
             info = {
@@ -1553,7 +2219,7 @@ async def search_movies(q: str, filter_type: str = Query("all", regex="^(all|wat
             year = extract_year_from_name(movie.name)
             
             # Check if launched
-            has_launched = db.query(LaunchHistory).filter(LaunchHistory.path == movie.path).count() > 0
+            has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
             
             results.append({
                 "path": movie.path,
@@ -1587,7 +2253,7 @@ async def search_movies(q: str, filter_type: str = Query("all", regex="^(all|wat
         # Keep last 100 searches
         search_count = db.query(SearchHistory).count()
         if search_count > 100:
-            oldest = db.query(SearchHistory).order_by(SearchHistory.timestamp.asc()).limit(search_count - 100).all()
+            oldest = db.query(SearchHistory).order_by(SearchHistory.created.asc()).limit(search_count - 100).all()
             for old_search in oldest:
                 db.delete(old_search)
         
@@ -1608,13 +2274,13 @@ async def get_movie_details(path: str = Query(...)):
         
         # Check if watched (has "watched" status in watch_history)
         watch_entry = db.query(WatchHistory).filter(
-            WatchHistory.movie_id == path,
-            WatchHistory.watch_status == "watched"
-        ).order_by(WatchHistory.timestamp.desc()).first()
+            WatchHistory.movie_id == movie.id,
+            WatchHistory.watch_status == True
+        ).order_by(WatchHistory.updated.desc()).first()
         is_watched = watch_entry is not None
         
         # Get rating
-        rating_entry = db.query(Rating).filter(Rating.movie_id == path).first()
+        rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
         
         images = json.loads(movie.images) if movie.images else []
         screenshots = json.loads(movie.screenshots) if movie.screenshots else []
@@ -1623,7 +2289,7 @@ async def get_movie_details(path: str = Query(...)):
         images = filter_yts_images(images)
         
         # Get frame path
-        frame_path = get_movie_frame_path(db, path)
+        frame_path = get_movie_frame_path(db, movie.id)
         
         info = {
             "images": images,
@@ -1637,7 +2303,7 @@ async def get_movie_details(path: str = Query(...)):
         # Extract year from name
         year = extract_year_from_name(movie.name)
         
-        has_launched = db.query(LaunchHistory).filter(LaunchHistory.path == path).count() > 0
+        has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
         
         return {
             "path": movie.path,
@@ -1646,7 +2312,7 @@ async def get_movie_details(path: str = Query(...)):
             "created": movie.created,
             "size": movie.size,
             "watched": is_watched,
-            "watched_date": watch_entry.timestamp.isoformat() if watch_entry and watch_entry.timestamp else None,
+            "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
             "rating": rating_entry.rating if rating_entry else None,
             "images": images,
             "screenshots": screenshots,
@@ -1920,8 +2586,13 @@ async def launch_movie(request: LaunchRequest):
         steps.append("Step 6: Saving to history")
         db = SessionLocal()
         try:
+            # Get movie ID from path
+            movie = db.query(Movie).filter(Movie.path == movie_path).first()
+            if not movie:
+                raise HTTPException(status_code=404, detail=f"Movie not found in database: {movie_path}")
+            
             launch_entry = LaunchHistory(
-                path=movie_path,
+                movie_id=movie.id,
                 subtitle=subtitle_path,
                 timestamp=datetime.now()
             )
@@ -1929,9 +2600,8 @@ async def launch_movie(request: LaunchRequest):
             
             # Create watch history entry for launch (watch session started)
             watch_entry = WatchHistory(
-                movie_id=movie_path,
-                watch_status="watching",
-                timestamp=datetime.now()
+                movie_id=movie.id,
+                watch_status=None  # NULL = unknown (started watching but not finished)
             )
             db.add(watch_entry)
             
@@ -2005,57 +2675,82 @@ async def get_launch_history():
     """Get launch history with movie information"""
     db = SessionLocal()
     try:
-        launches = db.query(LaunchHistory).order_by(LaunchHistory.timestamp.desc()).all()
+        # Single query with JOINs to get all data at once
+        # Subquery to get most recent watch entry per movie
+        watch_subq = db.query(
+            WatchHistory.movie_id,
+            func.max(WatchHistory.updated).label('max_updated')
+        ).filter(
+            WatchHistory.watch_status == True
+        ).group_by(WatchHistory.movie_id).subquery()
+        
+        watch_alias = aliased(WatchHistory)
+        
+        results = db.query(
+            LaunchHistory,
+            Movie,
+            watch_alias,
+            Rating,
+            MovieFrame
+        ).join(
+            Movie, LaunchHistory.movie_id == Movie.id
+        ).outerjoin(
+            watch_subq, Movie.id == watch_subq.c.movie_id
+        ).outerjoin(
+            watch_alias, 
+            (watch_alias.movie_id == watch_subq.c.movie_id) & 
+            (watch_alias.updated == watch_subq.c.max_updated)
+        ).outerjoin(
+            Rating, Movie.id == Rating.movie_id
+        ).outerjoin(
+            MovieFrame, Movie.id == MovieFrame.movie_id
+        ).order_by(
+            LaunchHistory.created.desc()
+        ).limit(100).all()
         
         launches_with_info = []
-        for launch in launches:
-            movie = db.query(Movie).filter(Movie.path == launch.path).first()
-            if movie:
-                # Check if watched
-                watch_entry = db.query(WatchHistory).filter(
-                    WatchHistory.movie_id == launch.path,
-                    WatchHistory.watch_status == "watched"
-                ).order_by(WatchHistory.timestamp.desc()).first()
-                
-                # Get rating
-                rating_entry = db.query(Rating).filter(Rating.movie_id == launch.path).first()
-                
-                images = json.loads(movie.images) if movie.images else []
-                screenshots = json.loads(movie.screenshots) if movie.screenshots else []
-                
-                # Filter out YTS images
-                images = filter_yts_images(images)
-                
-                # Get frame path
-                frame_path = get_movie_frame_path(db, launch.path)
-                
-                info = {
-                    "images": images,
-                    "screenshots": screenshots,
-                    "frame": frame_path
-                }
-                
-                movie_info = {
-                    "path": movie.path,
-                    "name": movie.name,
-                    "length": movie.length,
-                    "created": movie.created,
-                    "size": movie.size,
-                    "watched": watch_entry is not None,
-                    "watched_date": watch_entry.timestamp.isoformat() if watch_entry and watch_entry.timestamp else None,
-                    "rating": rating_entry.rating if rating_entry else None,
-                    "images": images,
-                    "screenshots": screenshots,
-                    "frame": frame_path,
-                    "image": get_largest_image(info),
-                    "year": extract_year_from_name(movie.name)
-                }
-                
-                launches_with_info.append({
-                    "movie": movie_info,
-                    "timestamp": launch.timestamp.isoformat(),
-                    "subtitle": launch.subtitle
-                })
+        for launch, movie, watch_entry, rating_entry, frame in results:
+            if not movie:
+                continue
+            
+            images = json.loads(movie.images) if movie.images else []
+            screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+            
+            # Filter out YTS images
+            images = filter_yts_images(images)
+            
+            # Get frame path
+            frame_path = None
+            if frame and os.path.exists(frame.path):
+                frame_path = frame.path
+            
+            info = {
+                "images": images,
+                "screenshots": screenshots,
+                "frame": frame_path
+            }
+            
+            movie_info = {
+                "path": movie.path,
+                "name": movie.name,
+                "length": movie.length,
+                "created": movie.created,
+                "size": movie.size,
+                "watched": watch_entry is not None,
+                "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
+                "rating": rating_entry.rating if rating_entry else None,
+                "images": images,
+                "screenshots": screenshots,
+                "frame": frame_path,
+                "image": get_largest_image(info),
+                "year": extract_year_from_name(movie.name)
+            }
+            
+            launches_with_info.append({
+                "movie": movie_info,
+                "timestamp": launch.created.isoformat(),
+                "subtitle": launch.subtitle
+            })
         
         return {"launches": launches_with_info}
     finally:
@@ -2066,30 +2761,34 @@ async def mark_watched(request: WatchedRequest):
     """Mark movie as watched or unwatched, optionally with rating"""
     db = SessionLocal()
     try:
+        # Get movie ID from path
+        movie = db.query(Movie).filter(Movie.path == request.path).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail=f"Movie not found: {request.path}")
+        
         if request.watched:
             # Create watch history entry
             watch_entry = WatchHistory(
-                movie_id=request.path,
-                watch_status="watched",
-                timestamp=datetime.now()
+                movie_id=movie.id,
+                watch_status=True
             )
             db.add(watch_entry)
             
             # Update rating if provided
             if request.rating is not None:
                 rating_entry = Rating(
-                    movie_id=request.path,
+                    movie_id=movie.id,
                     rating=request.rating
                 )
                 db.merge(rating_entry)
         else:
             # Remove watch status (delete "watched" entries)
             db.query(WatchHistory).filter(
-                WatchHistory.movie_id == request.path,
-                WatchHistory.watch_status == "watched"
+                WatchHistory.movie_id == movie.id,
+                WatchHistory.watch_status == True
             ).delete()
             # Note: We keep the rating even when unwatched, but you can delete it if desired
-            # db.query(Rating).filter(Rating.movie_id == request.path).delete()
+            # db.query(Rating).filter(Rating.movie_id == movie.id).delete()
         
         db.commit()
         return {"status": "updated"}
@@ -2105,24 +2804,24 @@ async def get_watched():
         
         # Get all movies with "watched" status, get most recent entry per movie
         watch_entries = db.query(WatchHistory).filter(
-            WatchHistory.watch_status == "watched"
-        ).order_by(WatchHistory.timestamp.desc()).all()
+            WatchHistory.watch_status == True
+        ).order_by(WatchHistory.updated.desc()).all()
         
         watched_movie_ids = set()
         for watch_entry in watch_entries:
             if watch_entry.movie_id not in watched_movie_ids:
                 watched_movie_ids.add(watch_entry.movie_id)
                 
-                movie = db.query(Movie).filter(Movie.path == watch_entry.movie_id).first()
+                movie = db.query(Movie).filter(Movie.id == watch_entry.movie_id).first()
                 if movie:
                     # Get rating
-                    rating_entry = db.query(Rating).filter(Rating.movie_id == watch_entry.movie_id).first()
+                    rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
                     
                     images = json.loads(movie.images) if movie.images else []
                     screenshots = json.loads(movie.screenshots) if movie.screenshots else []
                     
                     # Get frame path
-                    frame_path = get_movie_frame_path(db, watch_entry.movie_id)
+                    frame_path = get_movie_frame_path(db, movie.id)
                     
                     info = {
                         "images": images,
@@ -2136,14 +2835,14 @@ async def get_watched():
                         "length": movie.length,
                         "created": movie.created,
                         "size": movie.size,
-                        "watched_date": watch_entry.timestamp.isoformat() if watch_entry.timestamp else None,
+                        "watched_date": watch_entry.updated.isoformat() if watch_entry.updated else None,
                         "rating": rating_entry.rating if rating_entry else None,
                         "images": images,
                         "screenshots": screenshots,
                         "frame": frame_path,
                         "image": get_largest_image(info),
                         "year": extract_year_from_name(movie.name),
-                        "has_launched": db.query(LaunchHistory).filter(LaunchHistory.path == movie.path).count() > 0
+                        "has_launched": db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
                     }
                     watched_movies_list.append(movie_info)
         
@@ -2186,27 +2885,41 @@ async def get_subtitles(video_path: str):
 
 @app.get("/api/watch-history")
 async def get_watch_history(movie_id: Optional[str] = Query(None), limit: int = Query(100, ge=1, le=1000)):
-    """Get watch history for a specific movie or all movies"""
+    """Get watch history for a specific movie or all movies. movie_id can be a path or integer ID."""
     db = SessionLocal()
     try:
+        actual_movie_id = None
         if movie_id:
+            # Try to parse as integer first
+            try:
+                actual_movie_id = int(movie_id)
+            except ValueError:
+                # If not an integer, treat as path and get movie ID
+                movie = db.query(Movie).filter(Movie.path == movie_id).first()
+                if movie:
+                    actual_movie_id = movie.id
+                else:
+                    raise HTTPException(status_code=404, detail=f"Movie not found: {movie_id}")
+        
+        if actual_movie_id:
             watch_history = db.query(WatchHistory).filter(
-                WatchHistory.movie_id == movie_id
-            ).order_by(WatchHistory.timestamp.desc()).limit(limit).all()
+                WatchHistory.movie_id == actual_movie_id
+            ).order_by(WatchHistory.updated.desc()).limit(limit).all()
         else:
             watch_history = db.query(WatchHistory).order_by(
-                WatchHistory.timestamp.desc()
+                WatchHistory.updated.desc()
             ).limit(limit).all()
         
         history_list = []
         for entry in watch_history:
-            movie = db.query(Movie).filter(Movie.path == entry.movie_id).first()
+            movie = db.query(Movie).filter(Movie.id == entry.movie_id).first()
             history_list.append({
                 "id": entry.id,
                 "movie_id": entry.movie_id,
-                "name": movie.name if movie else entry.movie_id,
+                "movie_path": movie.path if movie else None,
+                "name": movie.name if movie else f"Movie ID {entry.movie_id}",
                 "watch_status": entry.watch_status,
-                "timestamp": entry.timestamp.isoformat() if entry.timestamp else None
+                "timestamp": entry.updated.isoformat() if entry.updated else None
             })
         
         return {"history": history_list}
@@ -2222,10 +2935,19 @@ async def get_config():
         movies_folder = get_movies_folder()
         logger.info(f"get_config returning movies_folder: {movies_folder}")
         
+        # Check ffmpeg status
+        ffmpeg_path = find_ffmpeg()
+        ffmpeg_status = {
+            "found": ffmpeg_path is not None,
+            "path": ffmpeg_path or "",
+            "configured": config.get("ffmpeg_path") or None
+        }
+        
         # Return all config settings
         return {
             "movies_folder": movies_folder or "",
             "default_folder": str(SCRIPT_DIR / "movies"),
+            "ffmpeg": ffmpeg_status,
             "settings": config  # Return all settings
         }
     finally:
@@ -2320,6 +3042,22 @@ async def set_config(request: ConfigRequest):
     # Update user settings if provided
     if request.settings:
         for key, value in request.settings.items():
+            # Special validation for ffmpeg_path
+            if key == "ffmpeg_path":
+                if value:  # If setting a path, validate it
+                    is_valid, error_msg = validate_ffmpeg_path(value)
+                    if not is_valid:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid ffmpeg path: {error_msg}. Path: {value}"
+                        )
+                    logger.info(f"Validated ffmpeg path: {value}")
+                else:
+                    # Empty string means remove the setting (use auto-detection)
+                    config.pop("ffmpeg_path", None)
+                    logger.info("Removed ffmpeg_path setting, will use auto-detection")
+                    continue
+            
             config[key] = value
         save_config(config)
         logger.info(f"Updated user settings: {list(request.settings.keys())}")
@@ -2369,7 +3107,7 @@ async def get_stats():
         total_movies = db.query(Movie).count()
         # Count distinct movies with "watched" status
         watched_movie_ids = {entry.movie_id for entry in db.query(WatchHistory).filter(
-            WatchHistory.watch_status == "watched"
+            WatchHistory.watch_status == True
         ).all()}
         watched_count = len(watched_movie_ids)
         indexed_paths = [ip.path for ip in db.query(IndexedPath).all()]
@@ -2382,6 +3120,43 @@ async def get_stats():
         }
     finally:
         db.close()
+
+@app.get("/api/cleaning-patterns")
+async def get_cleaning_patterns():
+    """Get all suspicious patterns found in movie names"""
+    try:
+        analysis = analyze_movie_names()
+        current_patterns = load_cleaning_patterns()
+        return {
+            "analysis": analysis,
+            "current_patterns": {
+                "exact_strings": list(current_patterns['exact_strings']),
+                "bracket_patterns": current_patterns['bracket_patterns'],
+                "parentheses_patterns": current_patterns['parentheses_patterns'],
+                "year_patterns": current_patterns['year_patterns'],
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting cleaning patterns: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/cleaning-patterns")
+async def save_cleaning_patterns_endpoint(data: dict):
+    """Save approved cleaning patterns"""
+    try:
+        patterns = {
+            'exact_strings': set(data.get('exact_strings', [])),
+            'bracket_patterns': data.get('bracket_patterns', []),
+            'parentheses_patterns': data.get('parentheses_patterns', []),
+            'year_patterns': data.get('year_patterns', True),
+        }
+        if save_cleaning_patterns(patterns):
+            return {"success": True}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save patterns")
+    except Exception as e:
+        logger.error(f"Error saving cleaning patterns: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 def get_vlc_window_titles():
     """Get window titles from running VLC instances on Windows"""
@@ -2603,9 +3378,9 @@ def extract_year_from_name(name):
                 return year
     return None
 
-def get_movie_frame_path(db: Session, movie_path: str):
+def get_movie_frame_path(db: Session, movie_id: int):
     """Get the frame path for a movie from the database"""
-    frame = db.query(MovieFrame).filter(MovieFrame.movie_id == movie_path).first()
+    frame = db.query(MovieFrame).filter(MovieFrame.movie_id == movie_id).first()
     if frame and os.path.exists(frame.path):
         return frame.path
     return None
@@ -2678,8 +3453,8 @@ async def explore_movies(
     request: Request,
     page: int = Query(1, ge=1),
     per_page: int = Query(24, ge=1, le=100),
-    filter_type: str = Query("all", regex="^(all|watched|unwatched)$"),
-    letter: Optional[str] = Query(None, regex="^[A-Z#]$")
+    filter_type: str = Query("all", pattern="^(all|watched|unwatched)$"),
+    letter: Optional[str] = Query(None, pattern="^[A-Z#]$")
 ):
     """Get all movies for exploration view with pagination and filters"""
     # Normalize letter to uppercase if provided
@@ -2698,14 +3473,14 @@ async def explore_movies(
         watched_paths = set()
         watched_dict = {}
         watch_entries = db.query(WatchHistory).filter(
-            WatchHistory.watch_status == "watched"
-        ).order_by(WatchHistory.timestamp.desc()).all()
+            WatchHistory.watch_status == True
+        ).order_by(WatchHistory.updated.desc()).all()
         
         for entry in watch_entries:
             if entry.movie_id not in watched_paths:
                 watched_paths.add(entry.movie_id)
                 watched_dict[entry.movie_id] = {
-                    "watched_date": entry.timestamp.isoformat() if entry.timestamp else None,
+                    "watched_date": entry.updated.isoformat() if entry.updated else None,
                     "rating": None
                 }
         
@@ -2773,7 +3548,7 @@ async def explore_movies(
             screenshots = json.loads(movie.screenshots) if movie.screenshots else []
             
             # Get frame path
-            frame_path = get_movie_frame_path(db, movie.path)
+            frame_path = get_movie_frame_path(db, movie.id)
             
             info = {
                 "images": images,
@@ -2787,7 +3562,7 @@ async def explore_movies(
             # Extract year from name
             year = extract_year_from_name(movie.name)
             
-            has_launched = db.query(LaunchHistory).filter(LaunchHistory.path == movie.path).count() > 0
+            has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
             
             movies.append({
                 "path": movie.path,
@@ -2854,67 +3629,106 @@ async def explore_movies(
     finally:
         db.close()
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database and auto-index on startup if root path configured"""
-    # Initialize database
-    init_db()
-    
-    # Remove existing sample files from database
-    removed_count = remove_sample_files()
-    if removed_count > 0:
-        print(f"Removed {removed_count} sample file(s) from database")
-    
-    # Migrate from JSON if needed
-    migrate_json_to_db()
-    
-    # Auto-index on startup if root path configured
-    movies_folder = get_movies_folder()
-    if movies_folder and os.path.exists(movies_folder):
-        result = scan_directory(movies_folder)
-        print(f"Startup indexing: {result['indexed']} files found, {result['updated']} updated")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up on shutdown"""
-    logger.info("Shutdown event triggered, cleaning up...")
-    shutdown_flag.set()
-    kill_all_active_subprocesses()
-
-def setup_signal_handlers():
-    """Setup signal handlers for graceful shutdown"""
-    def signal_handler(signum, frame):
-        logger.info(f"Received signal {signum}, initiating shutdown...")
-        shutdown_flag.set()
-        kill_all_active_subprocesses()
-        # Exit after a short delay
-        import time
-        import sys
-        time.sleep(0.5)
-        sys.exit(0)
-    
-    # Register signal handlers
-    if hasattr(signal, 'SIGTERM'):
-        signal.signal(signal.SIGTERM, signal_handler)
-    if hasattr(signal, 'SIGINT'):
-        signal.signal(signal.SIGINT, signal_handler)
-    
-    # Register atexit handler
-    atexit.register(lambda: (shutdown_flag.set(), kill_all_active_subprocesses()))
 
 if __name__ == "__main__":
-    # Setup signal handlers for graceful shutdown
-    setup_signal_handlers()
+    # Register atexit handler for cleanup on exit
+    atexit.register(lambda: (shutdown_flag.set(), kill_all_active_subprocesses()))
+    
     import uvicorn
-    # Auto-reload enabled by default - server restarts when Python files change
-    # Disable colored output for Windows PowerShell compatibility
-    config = uvicorn.Config(
-        app, 
-        host="127.0.0.1", 
-        port=8002, 
-        reload=True,
-        use_colors=False
-    )
-    server = uvicorn.Server(config)
-    server.run()
+    import signal
+    import sys
+    
+    def signal_handler(sig, frame):
+        """Handle Ctrl+C gracefully"""
+        logger.info("Received interrupt signal, shutting down...")
+        shutdown_flag.set()
+        kill_all_active_subprocesses()
+        sys.exit(0)
+    
+    # Register signal handlers for clean shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Auto-reload enabled - server restarts when Python files change
+    # Using uvicorn.run() for more reliable reload behavior
+    # uvicorn handles signals, but we also register our own for extra safety
+    
+    # Configure uvicorn logging
+    # According to uvicorn docs: use reload_includes=['*.py'] and reload_excludes=['*']
+    # to only watch Python files and exclude everything else
+    import logging.config
+    uvicorn_log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": "%(asctime)s - %(levelname)s - %(message)s",
+            },
+            "access": {
+                "format": "%(asctime)s - %(levelname)s - %(message)s",
+            },
+        },
+        "handlers": {
+            "default": {
+                "formatter": "default",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+            "access": {
+                "formatter": "access",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+        },
+        "loggers": {
+            "uvicorn.error": {
+                "handlers": ["default"],
+                "level": "INFO",
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["access"],
+                "level": "INFO",
+                "propagate": False,
+            },
+        },
+    }
+    
+    try:
+        logger.info("=" * 60)
+        logger.info("Starting Movie Searcher server")
+        logger.info("Server URL: http://127.0.0.1:8002")
+        logger.info("Auto-reload: ENABLED (server restarts on Python file changes)")
+        logger.info("Note: 'X change detected' messages indicate file changes triggering reload")
+        logger.info("=" * 60)
+        uvicorn.run(
+            "main:app",
+            host="127.0.0.1",
+            port=8002,
+            reload=True,
+            # Only watch Python files - exclude problematic files/dirs
+            # Use reload_dirs to only watch the project directory (not parent dirs)
+            reload_dirs=[str(Path(__file__).parent)],
+            reload_includes=["*.py"],
+            # Exclude files that change frequently but shouldn't trigger reloads
+            reload_excludes=[
+                "*.log",           # Log files
+                "*.db", "*.db-*",  # Database files (including .db-wal, .db-shm)
+                "*.json",          # JSON files
+                "*.tmp",           # Temporary files
+                "__pycache__/**",  # Python cache
+                "venv/**",         # Virtual environment
+                "frames/**",       # Extracted frames
+                "screenshots/**",  # Screenshots
+                "images/**",       # Images
+            ],
+            use_colors=False,
+            log_config=uvicorn_log_config
+        )
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, shutting down...")
+        shutdown_flag.set()
+        kill_all_active_subprocesses()
+        sys.exit(0)
 
