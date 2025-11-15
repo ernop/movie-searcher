@@ -37,104 +37,27 @@ try:
 except ImportError:
     HAS_MUTAGEN = False
 
-# Database setup
-from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, Boolean, Text, Index, ForeignKey
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, aliased
+# Database setup - import from database module
+from database import (
+    Base, SessionLocal, get_db,
+    Movie, Rating, WatchHistory, SearchHistory, LaunchHistory, IndexedPath, Config, MovieFrame, SchemaVersion,
+    init_db, migrate_db_schema, remove_sample_files,
+    get_movie_id_by_path, get_indexed_paths_set, get_movie_frame_path
+)
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import func
 
-Base = declarative_base()
-
-class Movie(Base):
-    __tablename__ = "movies"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    path = Column(String, nullable=False, unique=True, index=True)
-    name = Column(String, nullable=False, index=True)
-    year = Column(Integer, nullable=True)
-    length = Column(Float, nullable=True)
-    size = Column(Integer, nullable=True)
-    hash = Column(String, nullable=True, index=True)
-    images = Column(Text, nullable=True)  # JSON array as string
-    screenshots = Column(Text, nullable=True)  # JSON array as string
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
-class Rating(Base):
-    __tablename__ = "ratings"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
-    rating = Column(Float, nullable=False)
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
-class WatchHistory(Base):
-    __tablename__ = "watch_history"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
-    watch_status = Column(Boolean, nullable=True)  # NULL = unknown, True = watched, False = not watched
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
-class SearchHistory(Base):
-    __tablename__ = "search_history"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    query = Column(String, nullable=False, index=True)
-    results_count = Column(Integer, nullable=True)
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
-class LaunchHistory(Base):
-    __tablename__ = "launch_history"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
-    subtitle = Column(String, nullable=True)
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
-class IndexedPath(Base):
-    __tablename__ = "indexed_paths"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    path = Column(String, nullable=False, unique=True, index=True)
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
-class Config(Base):
-    __tablename__ = "config"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    key = Column(String, nullable=False, unique=True, index=True)
-    value = Column(Text, nullable=True)
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
-class MovieFrame(Base):
-    __tablename__ = "movie_frames"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
-    path = Column(String, nullable=False)  # Path to the extracted frame image
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
-class SchemaVersion(Base):
-    """Tracks database schema version to avoid unnecessary migration checks"""
-    __tablename__ = "schema_version"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    version = Column(Integer, nullable=False, unique=True)
-    description = Column(String, nullable=True)
-    applied_at = Column(DateTime, default=func.now(), nullable=False)
-
-# Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 2
-
-# Indexes are defined on columns directly (name and path already have indexes)
-# Additional indexes can be added via migration if needed
+# Import video processing and subprocess management
+from video_processing import (
+    initialize_video_processing,
+    shutdown_flag, kill_all_active_subprocesses,
+    run_interruptible_subprocess,
+    get_video_length as get_video_length_vp, validate_ffmpeg_path, find_ffmpeg as find_ffmpeg_core,
+    extract_movie_frame_sync, generate_frame_filename,
+    extract_screenshots as extract_screenshots_core,
+    frame_extraction_queue, process_frame_queue as process_frame_queue_core,
+    FRAMES_DIR, SCREENSHOT_DIR
+)
 
 # FastAPI app will be created after lifespan function is defined
 # (temporary placeholder - will be replaced)
@@ -142,573 +65,9 @@ app = None
 
 # Configuration
 SCRIPT_DIR = Path(__file__).parent.absolute()
-DB_FILE = SCRIPT_DIR / "movie_searcher.db"
 
-# Database engine and session
-# Enable foreign key support for SQLite
-engine = create_engine(
-    f"sqlite:///{DB_FILE}", 
-    echo=False,
-    connect_args={"check_same_thread": False}  # Required for SQLite with FastAPI
-)
-# Enable foreign keys for SQLite
-from sqlalchemy import event
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_conn, connection_record):
-    cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-def get_schema_version():
-    """Get current database schema version"""
-    from sqlalchemy import inspect, text
-    inspector = inspect(engine)
-    existing_tables = inspector.get_table_names()
-    
-    if "schema_version" not in existing_tables:
-        return None
-    
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT MAX(version) FROM schema_version"))
-        row = result.fetchone()
-        return row[0] if row and row[0] is not None else None
-
-def set_schema_version(version, description=None):
-    """Record that a schema version has been applied"""
-    from sqlalchemy import text
-    db = SessionLocal()
-    try:
-        db.execute(text("""
-            INSERT INTO schema_version (version, description, applied_at)
-            VALUES (:version, :description, CURRENT_TIMESTAMP)
-        """), {"version": version, "description": description})
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error setting schema version: {e}")
-    finally:
-        db.close()
-
-def init_db():
-    """Initialize database tables"""
-    Base.metadata.create_all(bind=engine)
-    
-    # Set initial schema version if database is new
-    version = get_schema_version()
-    if version is None:
-        set_schema_version(CURRENT_SCHEMA_VERSION, "Initial schema version")
-        logger.info(f"Database initialized with schema version {CURRENT_SCHEMA_VERSION}")
-    else:
-        logger.info(f"Database initialized (current schema version: {version})")
-
-def migrate_db_schema():
-    """
-    Migrate database schema to match current models.
-    
-    Uses schema version tracking to avoid unnecessary checks on every startup.
-    """
-    from sqlalchemy import inspect, text
-    
-    inspector = inspect(engine)
-    existing_tables = inspector.get_table_names()
-    
-    if "movies" not in existing_tables:
-        # No existing database, schema will be created by init_db
-        return
-    
-    current_version = get_schema_version()
-    
-    # If schema_version table doesn't exist or version is None, we need to check for old schema
-    if current_version is None:
-        # Check if this is old schema (path as PK) or new schema missing version tracking
-        existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
-        
-        if 'id' in existing_columns:
-            # New schema but missing version tracking - just add year if needed and set version
-            if "year" not in existing_columns:
-                logger.info("Adding missing 'year' column to movies table...")
-                with engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE movies ADD COLUMN year INTEGER"))
-                logger.info("Migration complete: added 'year' column")
-            set_schema_version(CURRENT_SCHEMA_VERSION, "Added version tracking to existing database")
-            return
-        else:
-            # Old schema - needs full migration (will set version after migration)
-            pass  # Continue to full migration below
-    
-    # Ensure all tables have required created/updated columns (regardless of version)
-    # This fixes cases where tables were created without these columns
-    tables_requiring_timestamps = ["config", "indexed_paths", "search_history"]
-    for table_name in tables_requiring_timestamps:
-        if table_name in existing_tables:
-            table_columns = {col['name']: col for col in inspector.get_columns(table_name)}
-            needs_fix = False
-            with engine.begin() as conn:
-                if "created" not in table_columns:
-                    logger.info(f"Adding missing 'created' column to {table_name} table...")
-                    # SQLite limitation: cannot add column with CURRENT_TIMESTAMP default to existing table
-                    # Add as nullable without default, update existing rows, SQLAlchemy model default handles new rows
-                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN created DATETIME"))
-                    # Set current timestamp for all existing rows
-                    conn.execute(text(f"UPDATE {table_name} SET created = CURRENT_TIMESTAMP"))
-                    needs_fix = True
-                if "updated" not in table_columns:
-                    logger.info(f"Adding missing 'updated' column to {table_name} table...")
-                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN updated DATETIME"))
-                    # Set current timestamp for all existing rows
-                    conn.execute(text(f"UPDATE {table_name} SET updated = CURRENT_TIMESTAMP"))
-                    needs_fix = True
-                if needs_fix:
-                    logger.info(f"Fixed {table_name} table: added missing timestamp columns")
-    
-    # If already at current version, no migration needed
-    if current_version == CURRENT_SCHEMA_VERSION:
-        return
-    
-    # Check if this is the old schema (no id column in movies)
-    existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
-    
-    if 'id' not in existing_columns:
-        # Old schema - needs full migration (will set version after migration completes)
-        logger.info("Migrating from old schema (path PK) to new schema (id PK)...")
-        # Continue to full migration below
-    else:
-        # New schema but version is outdated - handle incremental upgrades
-        logger.info(f"Upgrading schema from version {current_version} to {CURRENT_SCHEMA_VERSION}...")
-        
-        if current_version < 2:
-            logger.info("Migrating to schema version 2: ensure config table has surrogate key and timestamps.")
-            config_columns = {}
-            if "config" in existing_tables:
-                config_columns = {col['name']: col for col in inspector.get_columns("config")}
-            needs_config_migration = "config" in existing_tables and "id" not in config_columns
-            
-            if needs_config_migration:
-                with engine.begin() as conn:
-                    conn.execute(text("DROP TABLE IF EXISTS config_new"))
-                    conn.execute(text("""
-                        CREATE TABLE config_new (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                            "key" VARCHAR NOT NULL UNIQUE,
-                            value TEXT,
-                            created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                            updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-                        )
-                    """))
-                    logger.info("Rebuilding config table to include autoincrement id column...")
-                    conn.execute(text("""
-                        INSERT INTO config_new ("key", value, created, updated)
-                        SELECT 
-                            "key",
-                            value,
-                            CASE 
-                                WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
-                                ELSE datetime(created)
-                            END,
-                            CASE 
-                                WHEN updated IS NULL OR updated = '' THEN CURRENT_TIMESTAMP
-                                ELSE datetime(updated)
-                            END
-                        FROM config
-                    """))
-                    conn.execute(text("DROP TABLE config"))
-                    conn.execute(text("ALTER TABLE config_new RENAME TO config"))
-                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_config_key ON config (key)"))
-            else:
-                # Table either already conforms or was never created; ensure it exists and has an index.
-                Base.metadata.tables["config"].create(bind=engine, checkfirst=True)
-                with engine.begin() as conn:
-                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_config_key ON config (key)"))
-            
-            set_schema_version(2, "Added autoincrement id column to config table")
-            current_version = 2
-        
-        # If we get here without incrementing current_version, the migration wasn't implemented
-        if current_version < CURRENT_SCHEMA_VERSION:
-            logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "
-                        f"Database is at version {current_version} but code expects {CURRENT_SCHEMA_VERSION}.")
-            raise RuntimeError(f"Migration from version {current_version} to {CURRENT_SCHEMA_VERSION} not implemented")
-        return
-    
-    # Need full migration from old schema to new schema
-    logger.info("Starting database schema migration...")
-
-    config_columns = {}
-    if "config" in existing_tables:
-        config_columns = {col['name']: col for col in inspector.get_columns("config")}
-    
-    frames_columns = {}
-    needs_movie_frames_migration = False
-    if "movie_frames" in existing_tables:
-        frames_columns = {col['name']: col for col in inspector.get_columns("movie_frames")}
-        if 'movie_id' in frames_columns:
-            movie_id_col = frames_columns.get('movie_id', {})
-            col_type = str(movie_id_col.get('type', '')).upper()
-            if 'VARCHAR' in col_type or 'TEXT' in col_type:
-                needs_movie_frames_migration = True
-        else:
-            # Old schema might have had different column name
-            needs_movie_frames_migration = True
-    
-    with engine.begin() as conn:
-        # Step 0: Clean up any partial migration tables from previous failed attempts
-        logger.info("Cleaning up any partial migration tables...")
-        # Drop tables first (this automatically drops their indexes in SQLite)
-        # But we also try to drop indexes explicitly in case they exist independently
-        tables_to_drop = [
-            "movies_new", "ratings_new", "watch_history_new", 
-            "search_history_new", "launch_history_new", 
-            "indexed_paths_new", "config_new", "movie_frames_new"
-        ]
-        indexes_to_drop = [
-            "ix_movies_path", "ix_movies_name", "ix_movies_hash",
-            "ix_ratings_movie_id", "ix_watch_history_movie_id",
-            "ix_search_history_query", "ix_launch_history_movie_id",
-            "ix_indexed_paths_path", "ix_config_key", "ix_movie_frames_movie_id"
-        ]
-        
-        # Drop tables first (this automatically drops their indexes in SQLite)
-        for table_name in tables_to_drop:
-            try:
-                conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
-            except Exception as e:
-                logger.debug(f"Error dropping table {table_name}: {e}")
-        
-        # Try to drop any orphaned indexes (in case they exist independently)
-        # Note: In SQLite, indexes are usually auto-dropped with tables, but we check anyway
-        for index_name in indexes_to_drop:
-            try:
-                # Try dropping with table qualification
-                conn.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
-            except Exception:
-                pass  # Index may not exist
-        
-        # Step 1: Add year column if it doesn't exist
-        if "year" not in existing_columns:
-            logger.info("Adding 'year' column to movies table...")
-            conn.execute(text("ALTER TABLE movies ADD COLUMN year INTEGER"))
-        
-        # Step 2: Create new tables with correct schema
-        logger.info("Creating new tables with updated schema...")
-        
-        # Create new movies table
-        conn.execute(text("""
-            CREATE TABLE movies_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                path VARCHAR NOT NULL UNIQUE,
-                name VARCHAR NOT NULL,
-                year INTEGER,
-                length FLOAT,
-                size INTEGER,
-                hash VARCHAR,
-                images TEXT,
-                screenshots TEXT,
-                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-            )
-        """))
-        conn.execute(text("CREATE INDEX ix_movies_path ON movies_new (path)"))
-        conn.execute(text("CREATE INDEX ix_movies_name ON movies_new (name)"))
-        conn.execute(text("CREATE INDEX ix_movies_hash ON movies_new (hash)"))
-        
-        # Migrate movies data
-        logger.info("Migrating movies data...")
-        # Handle created field - convert from string ISO format to datetime
-        conn.execute(text("""
-            INSERT INTO movies_new (path, name, year, length, size, hash, images, screenshots, created, updated)
-            SELECT 
-                path,
-                name,
-                year,
-                length,
-                size,
-                hash,
-                images,
-                screenshots,
-                CASE 
-                    WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
-                    ELSE datetime(created)
-                END,
-                CURRENT_TIMESTAMP
-            FROM movies
-        """))
-        
-        # Create new ratings table
-        conn.execute(text("""
-            CREATE TABLE ratings_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                movie_id INTEGER NOT NULL UNIQUE,
-                rating FLOAT NOT NULL,
-                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
-            )
-        """))
-        conn.execute(text("CREATE INDEX ix_ratings_movie_id ON ratings_new (movie_id)"))
-        
-        # Migrate ratings data (need to map path to id)
-        logger.info("Migrating ratings data...")
-        conn.execute(text("""
-            INSERT INTO ratings_new (movie_id, rating, created, updated)
-            SELECT 
-                m.id,
-                r.rating,
-                CURRENT_TIMESTAMP,
-                CURRENT_TIMESTAMP
-            FROM ratings r
-            JOIN movies_new m ON m.path = r.movie_id
-        """))
-        
-        # Create new watch_history table
-        conn.execute(text("""
-            CREATE TABLE watch_history_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                movie_id INTEGER NOT NULL,
-                watch_status BOOLEAN,
-                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
-            )
-        """))
-        conn.execute(text("CREATE INDEX ix_watch_history_movie_id ON watch_history_new (movie_id)"))
-        
-        # Migrate watch_history data
-        logger.info("Migrating watch_history data...")
-        # Convert old string status to boolean
-        conn.execute(text("""
-            INSERT INTO watch_history_new (movie_id, watch_status, created, updated)
-            SELECT 
-                m.id,
-                CASE 
-                    WHEN wh.watch_status = 'watched' THEN 1
-                    WHEN wh.watch_status = 'not watched' OR wh.watch_status = 'unwatched' THEN 0
-                    ELSE NULL
-                END,
-                COALESCE(wh.timestamp, CURRENT_TIMESTAMP),
-                COALESCE(wh.timestamp, CURRENT_TIMESTAMP)
-            FROM watch_history wh
-            JOIN movies_new m ON m.path = wh.movie_id
-        """))
-        
-        # Create new search_history table
-        conn.execute(text("""
-            CREATE TABLE search_history_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                query VARCHAR NOT NULL,
-                results_count INTEGER,
-                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-            )
-        """))
-        conn.execute(text("CREATE INDEX ix_search_history_query ON search_history_new (query)"))
-        
-        # Migrate search_history data
-        logger.info("Migrating search_history data...")
-        conn.execute(text("""
-            INSERT INTO search_history_new (query, results_count, created, updated)
-            SELECT 
-                query,
-                results_count,
-                COALESCE(timestamp, CURRENT_TIMESTAMP),
-                COALESCE(timestamp, CURRENT_TIMESTAMP)
-            FROM search_history
-        """))
-        
-        # Create new launch_history table
-        conn.execute(text("""
-            CREATE TABLE launch_history_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                movie_id INTEGER NOT NULL,
-                subtitle VARCHAR,
-                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
-            )
-        """))
-        conn.execute(text("CREATE INDEX ix_launch_history_movie_id ON launch_history_new (movie_id)"))
-        
-        # Migrate launch_history data
-        logger.info("Migrating launch_history data...")
-        conn.execute(text("""
-            INSERT INTO launch_history_new (movie_id, subtitle, created, updated)
-            SELECT 
-                m.id,
-                lh.subtitle,
-                COALESCE(lh.timestamp, CURRENT_TIMESTAMP),
-                COALESCE(lh.timestamp, CURRENT_TIMESTAMP)
-            FROM launch_history lh
-            JOIN movies_new m ON m.path = lh.path
-        """))
-        
-        # Create new indexed_paths table
-        conn.execute(text("""
-            CREATE TABLE indexed_paths_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                path VARCHAR NOT NULL UNIQUE,
-                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-            )
-        """))
-        conn.execute(text("CREATE INDEX ix_indexed_paths_path ON indexed_paths_new (path)"))
-        
-        # Migrate indexed_paths data
-        logger.info("Migrating indexed_paths data...")
-        conn.execute(text("""
-            INSERT INTO indexed_paths_new (path, created, updated)
-            SELECT 
-                path,
-                COALESCE(indexed_at, CURRENT_TIMESTAMP),
-                COALESCE(indexed_at, CURRENT_TIMESTAMP)
-            FROM indexed_paths
-        """))
-        
-        # Create new config table
-        if "config" in existing_tables and 'id' not in config_columns:
-            conn.execute(text("""
-                CREATE TABLE config_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                    key VARCHAR NOT NULL UNIQUE,
-                    value TEXT,
-                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-                )
-            """))
-            conn.execute(text("CREATE INDEX ix_config_key ON config_new (key)"))
-            
-            logger.info("Migrating config data...")
-            conn.execute(text("""
-                INSERT INTO config_new (key, value, created, updated)
-                SELECT 
-                    key,
-                    value,
-                    CURRENT_TIMESTAMP,
-                    CURRENT_TIMESTAMP
-                FROM config
-            """))
-        
-        # Create new movie_frames table
-        migrated_movie_frames = False
-        if needs_movie_frames_migration:
-            migrated_movie_frames = True
-            conn.execute(text("""
-                CREATE TABLE movie_frames_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                    movie_id INTEGER NOT NULL,
-                    path VARCHAR NOT NULL,
-                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                    FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
-                )
-            """))
-            conn.execute(text("CREATE INDEX ix_movie_frames_movie_id ON movie_frames_new (movie_id)"))
-            
-            logger.info("Migrating movie_frames data...")
-            conn.execute(text("""
-                INSERT INTO movie_frames_new (movie_id, path, created, updated)
-                SELECT 
-                    m.id,
-                    mf.path,
-                    COALESCE(mf.created_at, CURRENT_TIMESTAMP),
-                    COALESCE(mf.created_at, CURRENT_TIMESTAMP)
-                FROM movie_frames mf
-                JOIN movies_new m ON m.path = mf.movie_id
-            """))
-        
-        # Step 3: Drop old tables
-        logger.info("Dropping old tables...")
-        conn.execute(text("DROP TABLE IF EXISTS ratings"))
-        conn.execute(text("DROP TABLE IF EXISTS watch_history"))
-        conn.execute(text("DROP TABLE IF EXISTS search_history"))
-        conn.execute(text("DROP TABLE IF EXISTS launch_history"))
-        conn.execute(text("DROP TABLE IF EXISTS indexed_paths"))
-        if "config" in existing_tables and 'id' not in config_columns:
-            conn.execute(text("DROP TABLE IF EXISTS config"))
-        if migrated_movie_frames:
-            conn.execute(text("DROP TABLE IF EXISTS movie_frames"))
-        conn.execute(text("DROP TABLE IF EXISTS movies"))
-        
-        # Step 4: Rename new tables
-        logger.info("Renaming new tables...")
-        conn.execute(text("ALTER TABLE movies_new RENAME TO movies"))
-        conn.execute(text("ALTER TABLE ratings_new RENAME TO ratings"))
-        conn.execute(text("ALTER TABLE watch_history_new RENAME TO watch_history"))
-        conn.execute(text("ALTER TABLE search_history_new RENAME TO search_history"))
-        conn.execute(text("ALTER TABLE launch_history_new RENAME TO launch_history"))
-        conn.execute(text("ALTER TABLE indexed_paths_new RENAME TO indexed_paths"))
-        if "config" in existing_tables and 'id' not in config_columns:
-            conn.execute(text("ALTER TABLE config_new RENAME TO config"))
-        if migrated_movie_frames:
-            conn.execute(text("ALTER TABLE movie_frames_new RENAME TO movie_frames"))
-    
-    # Record migration completion
-    set_schema_version(CURRENT_SCHEMA_VERSION, "Migrated from old schema (path PK) to new schema (id PK)")
-    logger.info("Database schema migration completed successfully!")
-    
-    # Handle version upgrades (future schema changes)
-    # Add version-specific migrations here when CURRENT_SCHEMA_VERSION increases
-    # Example:
-    # if current_version < 2:
-    #     # Migration code for version 2
-    #     pass
-    # if current_version < 3:
-    #     # Migration code for version 3
-    #     pass
-
-def remove_sample_files():
-    """Remove all movies with 'sample' in their name from the database"""
-    db = SessionLocal()
-    try:
-        # Find all movies with 'sample' in name (case-insensitive)
-        # SQLite LIKE is case-insensitive for ASCII, but we'll use func.lower for compatibility
-        sample_movies = db.query(Movie).filter(
-            func.lower(Movie.name).like('%sample%')
-        ).all()
-        
-        if not sample_movies:
-            logger.info("No sample files found in database")
-            return 0
-        
-        count = len(sample_movies)
-        logger.info(f"Found {count} sample file(s) to remove")
-        
-        # Remove related records for each sample movie
-        for movie in sample_movies:
-            # Delete MovieFrame records
-            db.query(MovieFrame).filter(MovieFrame.movie_id == movie.id).delete()
-            
-            # Delete Rating records
-            db.query(Rating).filter(Rating.movie_id == movie.id).delete()
-            
-            # Delete WatchHistory records
-            db.query(WatchHistory).filter(WatchHistory.movie_id == movie.id).delete()
-            
-            # Delete LaunchHistory records
-            db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).delete()
-            
-            # Delete the movie itself
-            db.delete(movie)
-            
-            logger.info(f"Removed sample file: {movie.name}")
-        
-        db.commit()
-        logger.info(f"Successfully removed {count} sample file(s) from database")
-        return count
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error removing sample files: {e}")
-        return 0
-    finally:
-        db.close()
-
-def get_db():
-    """Get database session"""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# Initialize video processing
+initialize_video_processing(SCRIPT_DIR)
 
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
 SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.vtt', '.ass', '.ssa'}
@@ -721,8 +80,6 @@ def is_sample_file(file_path):
     else:
         name = Path(file_path).stem.lower()
     return 'sample' in name
-SCREENSHOT_DIR = SCRIPT_DIR / "screenshots"
-FRAMES_DIR = SCRIPT_DIR / "frames"
 
 def load_config():
     """Load configuration from database"""
@@ -752,49 +109,24 @@ def save_config(config):
     db = SessionLocal()
     try:
         for key, value in config.items():
-            value_str = json.dumps(value) if not isinstance(value, str) else value
-            db.merge(Config(key=key, value=value_str))
+            # Always JSON-encode the value, even if it's a string
+            # This ensures consistent storage format and proper parsing on load
+            value_str = json.dumps(value)
+            existing = db.query(Config).filter(Config.key == key).first()
+            if existing:
+                existing.value = value_str
+            else:
+                db.add(Config(key=key, value=value_str))
         db.commit()
     finally:
         db.close()
 
 def get_movies_folder():
-    """Get the movies folder path, checking config, env, then default"""
+    """Get the movies folder path from config only - no defaults, no guessing"""
     config = load_config()
-    logger.info(f"get_movies_folder called. Config: {config}")
-    
-    # Check config file first
-    if config.get("movies_folder"):
-        path = config["movies_folder"]
-        logger.info(f"Found config path: '{path}'")
-        path_obj = Path(path)
-        if path_obj.exists() and path_obj.is_dir():
-            logger.info(f"Config path exists and is directory: {path}")
-            return path
-        else:
-            logger.warning(f"Config path does not exist or is not a directory: {path}")
-    
-    # Check environment variable
-    env_path = os.environ.get("MOVIE_ROOT_PATH", "")
-    if env_path:
-        logger.info(f"Found env path: '{env_path}'")
-        path_obj = Path(env_path)
-        if path_obj.exists() and path_obj.is_dir():
-            logger.info(f"Env path exists and is directory: {env_path}")
-            return env_path
-        else:
-            logger.warning(f"Env path does not exist or is not a directory: {env_path}")
-    
-    # Default: look for "movies" folder in same directory as script
-    movies_folder = SCRIPT_DIR / "movies"
-    logger.info(f"Checking default folder: {movies_folder}")
-    if movies_folder.exists() and movies_folder.is_dir():
-        logger.info(f"Default folder exists: {movies_folder}")
-        return str(movies_folder)
-    else:
-        logger.info(f"Default folder does not exist: {movies_folder}")
-    
-    logger.info("No movies folder found")
+    path = config.get("movies_folder")
+    if path:
+        return path
     return None
 
 # Initialize database and run migrations before any database operations
@@ -802,19 +134,48 @@ def get_movies_folder():
 init_db()
 migrate_db_schema()
 
-# Get initial movies folder path
+# Get initial movies folder path from config (no defaults)
 ROOT_MOVIE_PATH = get_movies_folder()
 
-# If no movies folder found in config, set default to D:\movies
-if not ROOT_MOVIE_PATH:
-    default_path = Path("D:/movies")
-    if default_path.exists() and default_path.is_dir():
-        logger.info(f"Using default movies folder: {default_path}")
-        # Save to config
-        config = load_config()
-        config["movies_folder"] = str(default_path)
-        save_config(config)
-        ROOT_MOVIE_PATH = str(default_path)
+# Auto-detect and save ffmpeg if not configured
+def auto_detect_ffmpeg():
+    """Auto-detect ffmpeg and save to config if found"""
+    config = load_config()
+    
+    # If already configured and valid, skip
+    if config.get("ffmpeg_path"):
+        is_valid, _ = validate_ffmpeg_path(config["ffmpeg_path"])
+        if is_valid:
+            return
+    
+    # Try to find ffmpeg in PATH
+    import shutil
+    ffmpeg_exe = shutil.which("ffmpeg")
+    if ffmpeg_exe:
+        is_valid, _ = validate_ffmpeg_path(ffmpeg_exe)
+        if is_valid:
+            config["ffmpeg_path"] = ffmpeg_exe
+            save_config(config)
+            logger.info(f"Auto-detected and saved ffmpeg: {ffmpeg_exe}")
+            return
+    
+    # Try common Windows locations
+    if os.name == 'nt':
+        common_paths = [
+            Path("C:/ffmpeg/bin/ffmpeg.exe"),
+            Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
+            Path("C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe"),
+        ]
+        for ffmpeg_path in common_paths:
+            if ffmpeg_path.exists():
+                is_valid, _ = validate_ffmpeg_path(str(ffmpeg_path))
+                if is_valid:
+                    config["ffmpeg_path"] = str(ffmpeg_path)
+                    save_config(config)
+                    logger.info(f"Auto-detected and saved ffmpeg: {ffmpeg_path}")
+                    return
+
+auto_detect_ffmpeg()
 
 # Scan progress tracking (in-memory)
 scan_progress = {
@@ -829,60 +190,6 @@ scan_progress = {
     "frames_total": 0
 }
 
-# Frame extraction queue and executor
-frame_extraction_queue = Queue()
-frame_executor = None
-frame_processing_active = False
-
-# Shutdown and process tracking
-shutdown_flag = threading.Event()
-active_subprocesses = []  # List of active subprocess.Popen objects
-active_subprocesses_lock = threading.Lock()
-
-def register_subprocess(proc: subprocess.Popen):
-    """Register a subprocess so it can be killed on shutdown"""
-    with active_subprocesses_lock:
-        active_subprocesses.append(proc)
-
-def unregister_subprocess(proc: subprocess.Popen):
-    """Unregister a subprocess when it completes"""
-    with active_subprocesses_lock:
-        if proc in active_subprocesses:
-            active_subprocesses.remove(proc)
-
-def kill_all_ffmpeg_processes():
-    """Kill all ffmpeg processes on the system"""
-    try:
-        import platform
-        if platform.system() == "Windows":
-            # Windows: use taskkill
-            subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"], 
-                         capture_output=True, timeout=5)
-        else:
-            # Unix: use pkill
-            subprocess.run(["pkill", "-9", "ffmpeg"], 
-                         capture_output=True, timeout=5)
-        logger.info("Killed all ffmpeg processes")
-    except Exception as e:
-        logger.warning(f"Error killing ffmpeg processes: {e}")
-
-def kill_all_active_subprocesses():
-    """Kill all registered subprocesses"""
-    with active_subprocesses_lock:
-        for proc in active_subprocesses[:]:  # Copy list to avoid modification during iteration
-            try:
-                if proc.poll() is None:  # Process still running
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait()
-                unregister_subprocess(proc)
-            except Exception as e:
-                logger.warning(f"Error killing subprocess: {e}")
-        active_subprocesses.clear()
-    kill_all_ffmpeg_processes()
 
 # Define lifespan function after all dependencies are available
 from contextlib import asynccontextmanager
@@ -910,38 +217,6 @@ async def lifespan(app):
 # Create FastAPI app with lifespan
 app = FastAPI(title="Movie Searcher", lifespan=lifespan)
 
-def run_interruptible_subprocess(cmd, timeout=30, capture_output=True):
-    """Run a subprocess that can be interrupted by shutdown flag"""
-    if shutdown_flag.is_set():
-        return None
-    
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE if capture_output else None,
-            stderr=subprocess.PIPE if capture_output else None,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
-        register_subprocess(proc)
-        
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            return subprocess.CompletedProcess(
-                cmd, proc.returncode, stdout, stderr
-            )
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            raise
-    except KeyboardInterrupt:
-        if proc:
-            proc.kill()
-            proc.wait()
-        raise
-    finally:
-        if proc:
-            unregister_subprocess(proc)
 
 def add_scan_log(level: str, message: str):
     """Add a log entry to scan progress"""
@@ -981,19 +256,6 @@ class ConfigRequest(BaseModel):
     movies_folder: Optional[str] = None
     settings: Optional[dict] = None
 
-# Database state functions
-def get_movie_id_by_path(db: Session, path: str) -> Optional[int]:
-    """Get movie ID from path. Returns None if movie doesn't exist."""
-    movie = db.query(Movie).filter(Movie.path == path).first()
-    return movie.id if movie else None
-
-def get_indexed_paths_set(db: Session):
-    """Get all indexed paths as a set"""
-    paths = set()
-    for indexed_path in db.query(IndexedPath).all():
-        paths.add(indexed_path.path)
-    return paths
-
 def has_been_launched(movie_path):
     """Check if a movie has ever been launched"""
     db = SessionLocal()
@@ -1008,17 +270,7 @@ def has_been_launched(movie_path):
 
 def get_video_length(file_path):
     """Extract video length using mutagen if available, otherwise return None"""
-    if not HAS_MUTAGEN:
-        return None
-    
-    try:
-        audio = MutagenFile(file_path)
-        if audio is not None and hasattr(audio, 'info'):
-            length = getattr(audio.info, 'length', None)
-            return length
-    except:
-        pass
-    return None
+    return get_video_length_vp(file_path)
 
 def get_file_hash(file_path):
     """Generate hash for file to detect changes"""
@@ -1054,368 +306,30 @@ def find_images_in_folder(video_path):
     
     return images[:10]  # Limit to 10 images
 
-def validate_ffmpeg_path(ffmpeg_path):
-    """Validate that an ffmpeg path exists and is executable"""
-    if not ffmpeg_path:
-        return False, "Path is empty"
-    
-    path_obj = Path(ffmpeg_path)
-    
-    # Check if file exists
-    if not path_obj.exists():
-        return False, f"Path does not exist: {ffmpeg_path}"
-    
-    # Check if it's a file (not a directory)
-    if not path_obj.is_file():
-        return False, f"Path is not a file: {ffmpeg_path}"
-    
-    # Try to execute ffmpeg -version to verify it's actually ffmpeg
-    try:
-        result = subprocess.run([str(path_obj), "-version"], capture_output=True, timeout=5)
-        if result.returncode == 0:
-            return True, "Valid"
-        else:
-            return False, f"ffmpeg -version returned non-zero exit code: {result.returncode}"
-    except subprocess.TimeoutExpired:
-        return False, "ffmpeg -version timed out"
-    except Exception as e:
-        return False, f"Error executing ffmpeg: {str(e)}"
-
 def find_ffmpeg():
     """Find ffmpeg executable - requires configured path, no fallbacks"""
-    config = load_config()
-    configured_path = config.get("ffmpeg_path")
-    
-    if not configured_path:
-        logger.error("ffmpeg_path not configured. Set ffmpeg_path in configuration to use frame extraction.")
-        return None
-    
-    # Validate the configured path
-    is_valid, error_msg = validate_ffmpeg_path(configured_path)
-    if is_valid:
-        logger.info(f"Using configured ffmpeg path: {configured_path}")
-        return configured_path
-    else:
-        logger.error(f"Configured ffmpeg path is invalid: {configured_path} - {error_msg}")
-        logger.error("Please fix the ffmpeg_path configuration. Frame extraction will not work until this is corrected.")
-        return None
-
-def generate_frame_filename(video_path, timestamp_seconds):
-    """Generate a sensible frame filename based on movie name and timestamp"""
-    video_path_obj = Path(video_path)
-    movie_name = video_path_obj.stem  # Get filename without extension
-    
-    # Sanitize filename: remove invalid characters for Windows/Linux
-    import re
-    # Replace invalid filename characters with underscore
-    sanitized_name = re.sub(r'[<>:"/\\|?*]', '_', movie_name)
-    # Remove leading/trailing dots and spaces
-    sanitized_name = sanitized_name.strip('. ')
-    # Limit length to avoid filesystem issues
-    if len(sanitized_name) > 100:
-        sanitized_name = sanitized_name[:100]
-    
-    # Format: movie_name_frame150s.jpg
-    frame_filename = f"{sanitized_name}_frame{int(timestamp_seconds)}s.jpg"
-    return FRAMES_DIR / frame_filename
-
-def extract_movie_frame_sync(video_path, timestamp_seconds=150):
-    """Extract a single frame from video synchronously (blocking)"""
-    video_path_obj = Path(video_path)
-    
-    # Create frames directory if it doesn't exist
-    FRAMES_DIR.mkdir(exist_ok=True)
-    
-    # Generate frame filename based on movie name and timestamp
-    frame_path = generate_frame_filename(video_path, timestamp_seconds)
-    
-    # Check if frame already exists
-    if frame_path.exists():
-        return str(frame_path)
-    
-    # Find ffmpeg
-    ffmpeg_exe = find_ffmpeg()
-    if not ffmpeg_exe:
-        logger.warning(f"ffmpeg not found, skipping frame extraction for {video_path}")
-        return None
-    
-    # Try to get video length to validate timestamp
-    length = get_video_length(video_path)
-    if length and timestamp_seconds > length:
-        # If requested timestamp is beyond video length, use 30 seconds or 10% into the video, whichever is smaller
-        timestamp_seconds = min(30, max(10, length * 0.1))
-        logger.info(f"Timestamp exceeds video length {length}s, using {timestamp_seconds}s instead")
-    
-    # Extract frame
-    try:
-        cmd = [
-            ffmpeg_exe,
-            "-i", str(video_path),
-            "-ss", str(timestamp_seconds),
-            "-vframes", "1",
-            "-q:v", "2",  # High quality
-            "-y",  # Overwrite
-            str(frame_path)
-        ]
-        
-        result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
-        if result and result.returncode == 0 and frame_path.exists():
-            logger.info(f"Extracted frame from {video_path} at {timestamp_seconds}s")
-            return str(frame_path)
-        elif result:
-            error_msg = result.stderr.decode() if result.stderr else 'Unknown error'
-            logger.warning(f"Failed to extract frame from {video_path}: {error_msg}")
-            return None
-        else:
-            return None
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Frame extraction timed out for {video_path}")
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting frame from {video_path}: {e}")
-        return None
+    return find_ffmpeg_core(load_config)
 
 def extract_movie_frame(video_path, timestamp_seconds=150, async_mode=True):
     """Extract a single frame from video - can be synchronous or queued for async processing"""
-    video_path_obj = Path(video_path)
-    
-    # Create frames directory if it doesn't exist
-    FRAMES_DIR.mkdir(exist_ok=True)
-    
-    # Generate frame filename based on movie name and timestamp
-    frame_path = generate_frame_filename(video_path, timestamp_seconds)
-    
-    # Check if frame already exists
-    if frame_path.exists():
-        add_scan_log("info", f"Frame already exists: {frame_path.name}")
-        return str(frame_path)
-    
-    # Find ffmpeg
-    ffmpeg_exe = find_ffmpeg()
-    if not ffmpeg_exe:
-        add_scan_log("warning", f"ffmpeg not found, skipping frame extraction")
-        logger.warning(f"ffmpeg not found, skipping frame extraction for {video_path}")
-        return None
-    
-    # If async mode, queue it for background processing
     if async_mode:
-        global frame_extraction_queue, scan_progress
-        frame_extraction_queue.put({
-            "video_path": video_path,
-            "timestamp_seconds": timestamp_seconds,
-            "ffmpeg_exe": ffmpeg_exe
-        })
-        scan_progress["frame_queue_size"] = frame_extraction_queue.qsize()
-        scan_progress["frames_total"] = scan_progress.get("frames_total", 0) + 1
-        add_scan_log("info", f"Queued frame extraction (queue: {frame_extraction_queue.qsize()})")
-        return None  # Return None to indicate it's queued, will be processed later
+        # Use video_processing module's extract_movie_frame which handles async queuing
+        from video_processing import extract_movie_frame as vp_extract_movie_frame
+        return vp_extract_movie_frame(
+            video_path, timestamp_seconds, async_mode,
+            load_config, find_ffmpeg_core, scan_progress, add_scan_log
+        )
     else:
         # Synchronous mode
-        return extract_movie_frame_sync(video_path, timestamp_seconds)
-
-def process_frame_extraction_worker(frame_info):
-    """Worker function to extract a frame - runs in thread pool"""
-    try:
-        video_path = frame_info["video_path"]
-        timestamp_seconds = frame_info["timestamp_seconds"]
-        ffmpeg_exe = frame_info["ffmpeg_exe"]
-        
-        # Try to get video length to validate timestamp
-        length = get_video_length(video_path)
-        if length and timestamp_seconds > length:
-            timestamp_seconds = min(30, max(10, length * 0.1))
-        
-        # Regenerate frame path with potentially adjusted timestamp
-        frame_path = generate_frame_filename(video_path, timestamp_seconds)
-        
-        add_scan_log("info", f"Extracting frame: {Path(video_path).name} at {timestamp_seconds:.1f}s...")
-        
-        cmd = [
-            ffmpeg_exe,
-            "-i", str(video_path),
-            "-ss", str(timestamp_seconds),
-            "-vframes", "1",
-            "-q:v", "2",
-            "-y",
-            str(frame_path)
-        ]
-        
-        if shutdown_flag.is_set():
-            return False
-        
-        result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
-        if result and result.returncode == 0 and Path(frame_path).exists():
-            # Save to database
-            db = SessionLocal()
-            try:
-                # Get movie ID from path
-                movie = db.query(Movie).filter(Movie.path == video_path).first()
-                if not movie:
-                    logger.warning(f"Movie not found for frame extraction: {video_path}")
-                    return
-                
-                # Check if entry already exists
-                existing = db.query(MovieFrame).filter(MovieFrame.movie_id == movie.id).first()
-                if not existing:
-                    movie_frame = MovieFrame(
-                        movie_id=movie.id,
-                        path=frame_path
-                    )
-                    db.add(movie_frame)
-                    db.commit()
-                
-                global scan_progress
-                scan_progress["frames_processed"] = scan_progress.get("frames_processed", 0) + 1
-                scan_progress["frame_queue_size"] = frame_extraction_queue.qsize()
-                add_scan_log("success", f"Frame extracted: {Path(video_path).name}")
-                logger.info(f"Extracted frame from {video_path}")
-            finally:
-                db.close()
-            return True
-        else:
-            error_msg = result.stderr.decode() if result.stderr else 'Unknown error'
-            add_scan_log("error", f"Frame extraction failed: {Path(video_path).name} - {error_msg[:80]}")
-            logger.warning(f"Failed to extract frame from {video_path}: {error_msg}")
-            return False
-    except subprocess.TimeoutExpired:
-        add_scan_log("error", f"Frame extraction timed out: {Path(video_path).name}")
-        logger.warning(f"Frame extraction timed out for {video_path}")
-        return False
-    except Exception as e:
-        add_scan_log("error", f"Frame extraction error: {Path(video_path).name} - {str(e)[:80]}")
-        logger.error(f"Error extracting frame from {video_path}: {e}")
-        return False
+        return extract_movie_frame_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_core(load_config))
 
 def process_frame_queue(max_workers=3):
     """Process queued frame extractions in background thread pool"""
-    global frame_executor, frame_processing_active, frame_extraction_queue
-    
-    if frame_processing_active:
-        return
-    
-    frame_processing_active = True
-    add_scan_log("info", "Starting background frame extraction...")
-    
-    def worker():
-        global frame_executor
-        frame_executor = ThreadPoolExecutor(max_workers=max_workers)
-        
-        # Continue processing while queue has items or scan is still running
-        processed_count = 0
-        while not shutdown_flag.is_set():
-            try:
-                # Get frame info from queue (with timeout to periodically check scan status)
-                try:
-                    frame_info = frame_extraction_queue.get(timeout=2)
-                except:
-                    # Queue empty, check if scan is done and queue is truly empty
-                    if shutdown_flag.is_set():
-                        break
-                    if not scan_progress.get("is_scanning", False) and frame_extraction_queue.empty():
-                        break
-                    continue
-                
-                # Submit to thread pool (non-blocking)
-                future = frame_executor.submit(process_frame_extraction_worker, frame_info)
-                processed_count += 1
-                frame_extraction_queue.task_done()
-                
-                # Don't wait for result here - let it run in parallel
-                # Just track that we submitted it
-                
-            except Exception as e:
-                logger.error(f"Error in frame extraction worker: {e}")
-        
-        # Shutdown executor with timeout (interruptible)
-        if frame_executor:
-            frame_executor.shutdown(wait=False)  # Don't wait, allow interruption
-            # Give a short time for tasks to finish, then kill subprocesses
-            import time
-            time.sleep(0.5)
-            kill_all_active_subprocesses()
-        
-        global frame_processing_active
-        frame_processing_active = False
-        remaining = frame_extraction_queue.qsize()
-        if remaining == 0:
-            add_scan_log("success", f"All frame extractions completed ({processed_count} processed)")
-        else:
-            add_scan_log("warning", f"Frame extraction stopped with {remaining} items remaining")
-    
-    # Start worker thread
-    worker_thread = threading.Thread(target=worker, daemon=True)
-    worker_thread.start()
+    process_frame_queue_core(max_workers, scan_progress, add_scan_log)
 
 def extract_screenshots(video_path, num_screenshots=5):
     """Extract screenshots from video using ffmpeg"""
-    video_path_obj = Path(video_path)
-    
-    # Create screenshots directory if it doesn't exist
-    SCREENSHOT_DIR.mkdir(exist_ok=True)
-    
-    # Generate screenshot filename based on video hash
-    video_hash = hashlib.md5(str(video_path).encode()).hexdigest()[:8]
-    screenshot_base = SCREENSHOT_DIR / f"{video_hash}"
-    
-    screenshots = []
-    
-    # Check if screenshots already exist
-    existing_screenshots = []
-    for i in range(num_screenshots):
-        screenshot_path = screenshot_base.parent / f"{screenshot_base.name}_{i+1}.jpg"
-        if screenshot_path.exists():
-            existing_screenshots.append(str(screenshot_path))
-    
-    if len(existing_screenshots) == num_screenshots:
-        return existing_screenshots
-    
-    # Try to get video length
-    length = get_video_length(video_path)
-    if not length or length < 1:
-        return existing_screenshots if existing_screenshots else []
-    
-    # Find ffmpeg
-    ffmpeg_exe = find_ffmpeg()
-    if not ffmpeg_exe:
-        logger.warning(f"ffmpeg not found, skipping screenshot extraction for {video_path}")
-        return existing_screenshots if existing_screenshots else []
-    
-    # Extract screenshots at evenly spaced intervals
-    try:
-        for i in range(num_screenshots):
-            screenshot_path = screenshot_base.parent / f"{screenshot_base.name}_{i+1}.jpg"
-            if screenshot_path.exists():
-                screenshots.append(str(screenshot_path))
-                continue
-            
-            # Calculate timestamp (distribute evenly across video)
-            timestamp = (length / (num_screenshots + 1)) * (i + 1)
-            
-            # Extract frame
-            cmd = [
-                ffmpeg_exe,
-                "-i", str(video_path),
-                "-ss", str(timestamp),
-                "-vframes", "1",
-                "-q:v", "2",  # High quality
-                "-y",  # Overwrite
-                str(screenshot_path)
-            ]
-            
-            if shutdown_flag.is_set():
-                break
-            
-            result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
-            if result and result.returncode == 0 and screenshot_path.exists():
-                screenshots.append(str(screenshot_path))
-            elif result:
-                logger.warning(f"Failed to extract screenshot {i+1} from {video_path}")
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Screenshot extraction timed out for {video_path}")
-    except Exception as e:
-        logger.error(f"Error extracting screenshots from {video_path}: {e}")
-    
-    return screenshots
+    return extract_screenshots_core(video_path, num_screenshots, load_config, find_ffmpeg_core)
 
 def load_cleaning_patterns():
     """Load approved cleaning patterns from database"""
@@ -1732,9 +646,10 @@ def scan_directory(root_path, state=None, progress_callback=None):
         
         indexed = 0
         updated = 0
-        errors = []
         
         # Second pass: actually scan
+        # Each movie commits individually - no transaction wrapping the scan
+        # If any movie fails, the entire scan stops immediately
         add_scan_log("info", "Starting file processing...")
         for ext in VIDEO_EXTENSIONS:
             if shutdown_flag.is_set():
@@ -1750,34 +665,30 @@ def scan_directory(root_path, state=None, progress_callback=None):
                     add_scan_log("info", f"Skipping sample file: {file_path.name}")
                     continue
                 
-                try:
-                    scan_progress["current"] = indexed + 1
-                    scan_progress["current_file"] = file_path.name
-                    
-                    add_scan_log("info", f"[{indexed + 1}/{total_files}] Processing: {file_path.name}")
-                    
-                    if index_movie(file_path, db):
-                        updated += 1
-                        add_scan_log("success", f"Indexed: {file_path.name}")
-                    else:
-                        add_scan_log("info", f"Skipped (unchanged): {file_path.name}")
-                    indexed += 1
-                    
-                    if progress_callback:
-                        progress_callback(indexed, total_files, file_path.name)
-                except Exception as e:
-                    errors.append(str(file_path))
-                    error_msg = str(e)
-                    add_scan_log("error", f"Error indexing {file_path.name}: {error_msg[:150]}")
-                    logger.error(f"Error indexing {file_path}: {e}")
+                # Process each movie - if it fails, stop the entire scan immediately
+                # Each movie commits individually, no transaction wrapping the whole scan
+                scan_progress["current"] = indexed + 1
+                scan_progress["current_file"] = file_path.name
+                
+                add_scan_log("info", f"[{indexed + 1}/{total_files}] Processing: {file_path.name}")
+                
+                if index_movie(file_path, db):
+                    updated += 1
+                    add_scan_log("success", f"Indexed: {file_path.name}")
+                else:
+                    add_scan_log("info", f"Skipped (unchanged): {file_path.name}")
+                indexed += 1
+                
+                if progress_callback:
+                    progress_callback(indexed, total_files, file_path.name)
         
         # Mark path as indexed
         db.merge(IndexedPath(path=str(root_path)))
         db.commit()
         
-        add_scan_log("success", f"Scan complete: {indexed} files processed, {updated} updated, {len(errors)} errors")
+        add_scan_log("success", f"Scan complete: {indexed} files processed, {updated} updated")
         
-        return {"indexed": indexed, "updated": updated, "errors": errors}
+        return {"indexed": indexed, "updated": updated}
     finally:
         db.close()
 
@@ -1833,8 +744,6 @@ def run_scan_async(root_path: str):
         add_scan_log("success", f"Scan completed successfully!")
         add_scan_log("info", f"  Files processed: {result['indexed']}")
         add_scan_log("info", f"  Files updated: {result['updated']}")
-        if result['errors']:
-            add_scan_log("warning", f"  Errors: {len(result['errors'])}")
         queue_size = frame_extraction_queue.qsize()
         if queue_size > 0:
             add_scan_log("info", f"  Frames queued: {queue_size} (processing in background)")
@@ -1844,10 +753,14 @@ def run_scan_async(root_path: str):
         scan_progress["is_scanning"] = False
         logger.info(f"Scan complete: {result}")
     except Exception as e:
-        add_scan_log("error", f"Fatal scan error: {str(e)}")
-        scan_progress["status"] = f"error: {str(e)}"
+        # If any movie fails, stop the entire scan immediately
+        # Log the error and mark scan as failed - don't continue processing
+        error_msg = str(e)
+        add_scan_log("error", f"Scan failed: {error_msg}")
+        scan_progress["status"] = "error"
         scan_progress["is_scanning"] = False
-        logger.error(f"Scan error: {e}")
+        logger.error(f"Scan failed: {e}", exc_info=True)
+        # Don't re-raise in background thread - just stop and report error
 
 @app.post("/api/index")
 async def index_movies(root_path: str = Query(None)):
@@ -1864,7 +777,7 @@ async def index_movies(root_path: str = Query(None)):
         logger.info(f"Got root_path from get_movies_folder: {root_path}")
     
     if not root_path:
-        error_msg = "Movies folder not found. Please create a 'movies' folder in the same directory as this script, or use 'Change Movies Folder' to select one."
+        error_msg = "Movies folder not configured. Please use 'Change Movies Folder' in settings to select a folder."
         logger.error(error_msg)
         raise HTTPException(status_code=400, detail=error_msg)
     
@@ -1918,7 +831,7 @@ async def admin_reindex(root_path: str = Query(None)):
         logger.info(f"Got root_path from get_movies_folder: {root_path}")
     
     if not root_path:
-        error_msg = "Movies folder not found. Please create a 'movies' folder in the same directory as this script, or use 'Change Movies Folder' to select one."
+        error_msg = "Movies folder not configured. Please use 'Change Movies Folder' in settings to select a folder."
         logger.error(error_msg)
         raise HTTPException(status_code=400, detail=error_msg)
     
@@ -2773,7 +1686,6 @@ async def get_config():
         # Return all config settings
         return {
             "movies_folder": movies_folder or "",
-            "default_folder": str(SCRIPT_DIR / "movies"),
             "ffmpeg": ffmpeg_status,
             "settings": config  # Return all settings
         }
@@ -2791,12 +1703,12 @@ async def set_config(request: ConfigRequest):
     # Update movies folder if provided
     if request.movies_folder is not None:
         if not request.movies_folder:
-            # Reset to default
+            # Remove movies folder from config
             config.pop("movies_folder", None)
             save_config(config)
-            ROOT_MOVIE_PATH = get_movies_folder()
-            logger.info(f"Reset to default folder: {ROOT_MOVIE_PATH}")
-            return {"status": "reset", "movies_folder": ROOT_MOVIE_PATH or ""}
+            ROOT_MOVIE_PATH = None
+            logger.info("Removed movies folder from config")
+            return {"status": "removed", "movies_folder": ""}
         
         # Normalize path (handle both / and \)
         folder_path = request.movies_folder.strip()
@@ -3168,13 +2080,6 @@ def extract_year_from_name(name):
             # Reasonable year range
             if 1900 <= year <= 2100:
                 return year
-    return None
-
-def get_movie_frame_path(db: Session, movie_id: int):
-    """Get the frame path for a movie from the database"""
-    frame = db.query(MovieFrame).filter(MovieFrame.movie_id == movie_id).first()
-    if frame and os.path.exists(frame.path):
-        return frame.path
     return None
 
 def filter_yts_images(image_paths):
