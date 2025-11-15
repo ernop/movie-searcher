@@ -19,7 +19,6 @@ from collections import Counter
 import atexit
 
 # Setup logging
-# Move log file outside project directory to avoid triggering reloads
 import sys
 LOG_FILE = Path(__file__).parent.parent / "movie_searcher.log" if Path(__file__).parent.parent.exists() else Path(__file__).parent / "movie_searcher.log"
 logging.basicConfig(
@@ -733,11 +732,12 @@ def load_config():
         try:
             config_rows = db.query(Config).all()
             for row in config_rows:
-                # Try to parse as JSON, fallback to string
+                # Parse as JSON - if invalid, log error and skip
                 try:
                     config[row.key] = json.loads(row.value)
-                except:
-                    config[row.key] = row.value
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"Invalid JSON in config key '{row.key}': {e}. Skipping.")
+                    continue
         except Exception as e:
             # Database tables not initialized yet
             logger.debug(f"Database not initialized yet: {e}")
@@ -987,216 +987,12 @@ def get_movie_id_by_path(db: Session, path: str) -> Optional[int]:
     movie = db.query(Movie).filter(Movie.path == path).first()
     return movie.id if movie else None
 
-def get_movies_dict(db: Session):
-    """Get all movies as a dictionary (for backward compatibility)"""
-    movies = {}
-    for movie in db.query(Movie).all():
-        movies[movie.path] = {
-            "name": movie.name,
-            "length": movie.length,
-            "created": movie.created,
-            "size": movie.size,
-            "hash": movie.hash,
-            "images": json.loads(movie.images) if movie.images else [],
-            "screenshots": json.loads(movie.screenshots) if movie.screenshots else []
-        }
-    return movies
-
 def get_indexed_paths_set(db: Session):
     """Get all indexed paths as a set"""
     paths = set()
     for indexed_path in db.query(IndexedPath).all():
         paths.add(indexed_path.path)
     return paths
-
-def load_state():
-    """Load state from database (returns dict for backward compatibility)"""
-    db = SessionLocal()
-    try:
-        return {
-            "movies": get_movies_dict(db),
-            "indexed_paths": get_indexed_paths_set(db)
-        }
-    finally:
-        db.close()
-
-def save_state(state):
-    """Save state to database"""
-    db = SessionLocal()
-    try:
-        # Update movies
-        for path, info in state.get("movies", {}).items():
-            # Filter out YTS images before storing
-            images = filter_yts_images(info.get("images", []))
-            movie = Movie(
-                path=path,
-                name=info.get("name", ""),
-                length=info.get("length"),
-                created=info.get("created"),
-                size=info.get("size"),
-                hash=info.get("hash"),
-                images=json.dumps(images),
-                screenshots=json.dumps(info.get("screenshots", []))
-            )
-            db.merge(movie)
-        
-        # Update indexed paths
-        indexed_paths = state.get("indexed_paths", set())
-        for path in indexed_paths:
-            db.merge(IndexedPath(path=path))
-        
-        db.commit()
-    finally:
-        db.close()
-
-def load_watched():
-    """Load watched movies from database (returns dict for backward compatibility)"""
-    db = SessionLocal()
-    try:
-        watched = []
-        watched_dates = {}
-        ratings = {}
-        
-        # Get all movies with watched status in watch_history
-        watch_entries = db.query(WatchHistory).filter(
-            WatchHistory.watch_status == True
-        ).order_by(WatchHistory.updated.desc()).all()
-        
-        # Get most recent watch entry per movie
-        watched_paths_set = set()
-        for entry in watch_entries:
-            movie = db.query(Movie).filter(Movie.id == entry.movie_id).first()
-            if movie and movie.path not in watched_paths_set:
-                watched.append(movie.path)
-                watched_dates[movie.path] = entry.updated.isoformat()
-                watched_paths_set.add(movie.path)
-        
-        # Get ratings
-        for rating in db.query(Rating).all():
-            movie = db.query(Movie).filter(Movie.id == rating.movie_id).first()
-            if movie:
-                ratings[movie.path] = rating.rating
-        
-        return {
-            "watched": watched,
-            "watched_dates": watched_dates,
-            "ratings": ratings
-        }
-    finally:
-        db.close()
-
-def save_watched(watched_data):
-    """Save watched movies to database (for backward compatibility - not used in new structure)"""
-    # This function is kept for backward compatibility but new code should use
-    # the normalized Rating and WatchHistory tables directly
-    db = SessionLocal()
-    try:
-        watched_paths = set(watched_data.get("watched", []))
-        watched_dates = watched_data.get("watched_dates", {})
-        ratings = watched_data.get("ratings", {})
-        
-        # Convert paths to movie IDs
-        path_to_id = {}
-        for path in watched_paths:
-            movie_id = get_movie_id_by_path(db, path)
-            if movie_id:
-                path_to_id[path] = movie_id
-        
-        # Get current watched movies (movies with watched status)
-        current_watched_ids = set()
-        for entry in db.query(WatchHistory).filter(WatchHistory.watch_status == True).all():
-            current_watched_ids.add(entry.movie_id)
-        
-        # Remove unwatched movies (delete watch history entries)
-        watched_ids = set(path_to_id.values())
-        for movie_id in current_watched_ids - watched_ids:
-            db.query(WatchHistory).filter(
-                WatchHistory.movie_id == movie_id,
-                WatchHistory.watch_status == True
-            ).delete()
-            db.query(Rating).filter(Rating.movie_id == movie_id).delete()
-        
-        # Add/update watched movies
-        for path, movie_id in path_to_id.items():
-            # Create watch history entry
-            watch_entry = WatchHistory(
-                movie_id=movie_id,
-                watch_status=True
-            )
-            db.add(watch_entry)
-            
-            # Update rating if provided
-            if path in ratings and ratings[path] is not None:
-                rating_entry = Rating(
-                    movie_id=movie_id,
-                    rating=ratings[path]
-                )
-                db.merge(rating_entry)
-        
-        db.commit()
-    finally:
-        db.close()
-
-def load_history():
-    """Load history from database (returns dict for backward compatibility)"""
-    db = SessionLocal()
-    try:
-        searches = []
-        for search in db.query(SearchHistory).order_by(SearchHistory.created.desc()).limit(100).all():
-            searches.append({
-                "query": search.query,
-                "timestamp": search.created.isoformat(),
-                "results_count": search.results_count
-            })
-        
-        launches = []
-        for launch in db.query(LaunchHistory).order_by(LaunchHistory.created.desc()).all():
-            movie = db.query(Movie).filter(Movie.id == launch.movie_id).first()
-            if movie:
-                launches.append({
-                    "path": movie.path,
-                    "subtitle": launch.subtitle,
-                    "timestamp": launch.created.isoformat()
-                })
-        
-        return {
-            "searches": searches,
-            "launches": launches
-        }
-    finally:
-        db.close()
-
-def save_history(history):
-    """Save history to database"""
-    db = SessionLocal()
-    try:
-        # Save searches (keep last 100)
-        searches = history.get("searches", [])
-        for search in searches[-100:]:
-            search_entry = SearchHistory(
-                query=search.get("query", ""),
-                timestamp=datetime.fromisoformat(search.get("timestamp", datetime.now().isoformat())),
-                results_count=search.get("results_count")
-            )
-            db.add(search_entry)
-        
-        # Save launches
-        launches = history.get("launches", [])
-        for launch in launches:
-            launch_path = launch.get("path", "")
-            # Get movie ID from path
-            movie = db.query(Movie).filter(Movie.path == launch_path).first()
-            if movie:
-                launch_entry = LaunchHistory(
-                    movie_id=movie.id,
-                    subtitle=launch.get("subtitle"),
-                    timestamp=datetime.fromisoformat(launch.get("timestamp", datetime.now().isoformat()))
-                )
-                db.add(launch_entry)
-        
-        db.commit()
-    finally:
-        db.close()
 
 def has_been_launched(movie_path):
     """Check if a movie has ever been launched"""
@@ -1414,7 +1210,7 @@ def extract_movie_frame(video_path, timestamp_seconds=150, async_mode=True):
         add_scan_log("info", f"Queued frame extraction (queue: {frame_extraction_queue.qsize()})")
         return None  # Return None to indicate it's queued, will be processed later
     else:
-        # Synchronous mode (for backwards compatibility)
+        # Synchronous mode
         return extract_movie_frame_sync(video_path, timestamp_seconds)
 
 def process_frame_extraction_worker(frame_info):
@@ -2183,7 +1979,7 @@ async def search_movies(q: str, filter_type: str = Query("all", pattern="^(all|w
         
         results = []
         for movie in movie_query.all():
-            is_watched = movie.path in watched_paths
+            is_watched = movie.id in watched_paths
             
             # Apply watched/unwatched filter
             if filter_type == "watched" and not is_watched:
@@ -2195,9 +1991,15 @@ async def search_movies(q: str, filter_type: str = Query("all", pattern="^(all|w
             # Calculate match score (exact start = higher score)
             score = 100 if name_lower.startswith(query_lower) else 50
             
-            # Parse images and screenshots
-            images = json.loads(movie.images) if movie.images else []
-            screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+            # Parse images and screenshots with error handling
+            try:
+                images = json.loads(movie.images) if movie.images else []
+            except (json.JSONDecodeError, TypeError):
+                images = []
+            try:
+                screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+            except (json.JSONDecodeError, TypeError):
+                screenshots = []
             
             # Filter out YTS images
             images = filter_yts_images(images)
@@ -2228,8 +2030,8 @@ async def search_movies(q: str, filter_type: str = Query("all", pattern="^(all|w
                 "created": movie.created,
                 "size": movie.size,
                 "watched": is_watched,
-                "watched_date": watched_dict.get(movie.path, {}).get("watched_date") if is_watched else None,
-                "rating": watched_dict.get(movie.path, {}).get("rating") if is_watched else None,
+                "watched_date": watched_dict.get(movie.id, {}).get("watched_date") if is_watched else None,
+                "rating": watched_dict.get(movie.id, {}).get("rating") if is_watched else None,
                 "score": score,
                 "images": images,
                 "screenshots": screenshots,
@@ -2523,14 +2325,14 @@ async def launch_movie(request: LaunchRequest):
                             steps.append("  No existing VLC processes found")
                             results.append({"step": 2.5, "status": "info", "message": "No existing VLC processes to close"})
                     except FileNotFoundError:
-                        # Try killall as fallback
+                        # Multiple legal kill agents exist (pkill, killall) - try killall if pkill unavailable
                         try:
                             subprocess.run(["killall", "vlc"], capture_output=True, timeout=5)
                             steps.append("  Closed existing VLC processes (using killall)")
                             results.append({"step": 2.5, "status": "success", "message": "Closed existing VLC processes"})
-                        except:
-                            steps.append("  WARNING: Could not close existing VLC processes (pkill/killall not available)")
-                            results.append({"step": 2.5, "status": "warning", "message": "Could not close existing VLC processes"})
+                        except FileNotFoundError:
+                            steps.append("  ERROR: Neither pkill nor killall available - cannot close existing VLC processes")
+                            results.append({"step": 2.5, "status": "error", "message": "No kill agent available (pkill/killall)"})
             except Exception as e:
                 steps.append(f"  WARNING: Error closing existing VLC processes: {str(e)}")
                 results.append({"step": 2.5, "status": "warning", "message": f"Error closing existing VLC: {str(e)}"})
@@ -2668,7 +2470,32 @@ async def launch_movie(request: LaunchRequest):
 @app.get("/api/history")
 async def get_history():
     """Get search and launch history"""
-    return load_history()
+    db = SessionLocal()
+    try:
+        searches = []
+        for search in db.query(SearchHistory).order_by(SearchHistory.created.desc()).limit(100).all():
+            searches.append({
+                "query": search.query,
+                "timestamp": search.created.isoformat(),
+                "results_count": search.results_count
+            })
+        
+        launches = []
+        for launch in db.query(LaunchHistory).order_by(LaunchHistory.created.desc()).all():
+            movie = db.query(Movie).filter(Movie.id == launch.movie_id).first()
+            if movie:
+                launches.append({
+                    "path": movie.path,
+                    "subtitle": launch.subtitle,
+                    "timestamp": launch.created.isoformat()
+                })
+        
+        return {
+            "searches": searches,
+            "launches": launches
+        }
+    finally:
+        db.close()
 
 @app.get("/api/launch-history")
 async def get_launch_history():
@@ -3238,16 +3065,18 @@ def get_vlc_command_lines():
                     header_line = line
                     break
             
-            if header_line:
-                # Parse header to find column indices
-                header_parts = [p.strip() for p in header_line.split(',')]
-                try:
-                    cmd_idx = header_parts.index('CommandLine')
-                    pid_idx = header_parts.index('ProcessId')
-                except ValueError:
-                    # Fallback: assume standard order
-                    cmd_idx = -2
-                    pid_idx = -1
+            if not header_line:
+                logger.warning("No header line found in wmic output - cannot parse command lines")
+                return []
+            
+            # Parse header to find column indices
+            header_parts = [p.strip() for p in header_line.split(',')]
+            try:
+                cmd_idx = header_parts.index('CommandLine')
+                pid_idx = header_parts.index('ProcessId')
+            except ValueError as e:
+                logger.warning(f"Required columns not found in wmic output: {e}")
+                return []
             
             for line in lines:
                 if not line.strip() or 'CommandLine' in line or 'Node' in line:
@@ -3257,18 +3086,13 @@ def get_vlc_command_lines():
                 if len(parts) < 2:
                     continue
                 
-                if header_line:
-                    cmd_line = parts[cmd_idx] if cmd_idx < len(parts) else ''
-                    pid = parts[pid_idx] if pid_idx < len(parts) else ''
-                else:
-                    # Fallback parsing
-                    cmd_line = parts[-2] if len(parts) >= 2 else ''
-                    pid = parts[-1] if len(parts) >= 1 else ''
+                cmd_line = parts[cmd_idx] if cmd_idx < len(parts) else ''
+                pid = parts[pid_idx] if pid_idx < len(parts) else ''
                 
                 if not cmd_line or 'vlc.exe' not in cmd_line.lower():
                     continue
                 
-                # Extract file path from command line
+                # Extract file path from command line using shlex
                 # VLC command line format: "C:\path\to\vlc.exe" "C:\path\to\movie.mp4"
                 try:
                     args = shlex.split(cmd_line)
@@ -3277,22 +3101,9 @@ def get_vlc_command_lines():
                         if os.path.exists(arg) and Path(arg).suffix.lower() in VIDEO_EXTENSIONS:
                             command_lines.append({"path": arg, "pid": pid})
                             break
-                except:
-                    # Fallback: try to extract path manually using regex
-                    # Look for quoted paths or paths with video extensions
-                    matches = re.findall(r'["\']([^"\']+\.(?:mp4|avi|mkv|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp))["\']', cmd_line, re.IGNORECASE)
-                    if matches:
-                        for match in matches:
-                            if os.path.exists(match):
-                                command_lines.append({"path": match, "pid": pid})
-                                break
-                    else:
-                        # Try unquoted paths
-                        matches = re.findall(r'([A-Za-z]:[^"\']+\.(?:mp4|avi|mkv|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp))', cmd_line, re.IGNORECASE)
-                        for match in matches:
-                            if os.path.exists(match):
-                                command_lines.append({"path": match, "pid": pid})
-                                break
+                except Exception as e:
+                    logger.warning(f"Failed to parse VLC command line '{cmd_line}': {e}")
+                    continue
             return command_lines
     except Exception as e:
         logger.warning(f"Error getting VLC command lines: {e}")
@@ -3306,27 +3117,8 @@ async def get_currently_playing():
     try:
         playing = []
         
-        # Try to get command line arguments first (more reliable)
+        # Get command line arguments
         vlc_processes = get_vlc_command_lines()
-        
-        # If no command lines found, try window titles as fallback
-        if not vlc_processes:
-            titles = get_vlc_window_titles()
-            # Try to match window titles to movie names
-            for title_info in titles:
-                title = title_info["title"]
-                # VLC window title format is often: "movie_name - VLC media player"
-                # Extract movie name
-                if " - VLC" in title:
-                    movie_name = title.split(" - VLC")[0].strip()
-                    # Try to find matching movie in index
-                    movie = db.query(Movie).filter(func.lower(Movie.name) == movie_name.lower()).first()
-                    if movie:
-                        playing.append({
-                            "path": movie.path,
-                            "name": movie.name,
-                            "pid": title_info["pid"]
-                        })
         
         # Process command line results
         for proc_info in vlc_processes:
@@ -3492,7 +3284,7 @@ async def explore_movies(
         # First pass: build all movies matching the filter (for letter counts)
         all_filtered_movies = []
         for movie in db.query(Movie).all():
-            is_watched = movie.path in watched_paths
+            is_watched = movie.id in watched_paths
             
             # Apply watched/unwatched filter
             if filter_type == "watched" and not is_watched:
@@ -3519,7 +3311,7 @@ async def explore_movies(
         skipped_by_watched = 0
         skipped_by_letter = 0
         for movie in db.query(Movie).all():
-            is_watched = movie.path in watched_paths
+            is_watched = movie.id in watched_paths
             
             # Apply watched/unwatched filter
             if filter_type == "watched" and not is_watched:
@@ -3544,8 +3336,15 @@ async def explore_movies(
                 if len(movies) < 3:
                     logger.debug(f"No letter filter: '{movie.name}' -> first_letter='{first_letter}'")
             
-            images = json.loads(movie.images) if movie.images else []
-            screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+            # Parse images and screenshots with error handling
+            try:
+                images = json.loads(movie.images) if movie.images else []
+            except (json.JSONDecodeError, TypeError):
+                images = []
+            try:
+                screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+            except (json.JSONDecodeError, TypeError):
+                screenshots = []
             
             # Get frame path
             frame_path = get_movie_frame_path(db, movie.id)
@@ -3571,8 +3370,8 @@ async def explore_movies(
                 "created": movie.created,
                 "size": movie.size,
                 "watched": is_watched,
-                "watched_date": watched_dict.get(movie.path, {}).get("watched_date") if is_watched else None,
-                "rating": watched_dict.get(movie.path, {}).get("rating") if is_watched else None,
+                "watched_date": watched_dict.get(movie.id, {}).get("watched_date") if is_watched else None,
+                "rating": watched_dict.get(movie.id, {}).get("rating") if is_watched else None,
                 "frame": frame_path,
                 "image": largest_image,
                 "first_letter": first_letter,
@@ -3650,13 +3449,7 @@ if __name__ == "__main__":
     if hasattr(signal, 'SIGTERM'):
         signal.signal(signal.SIGTERM, signal_handler)
     
-    # Auto-reload enabled - server restarts when Python files change
-    # Using uvicorn.run() for more reliable reload behavior
-    # uvicorn handles signals, but we also register our own for extra safety
-    
     # Configure uvicorn logging
-    # According to uvicorn docs: use reload_includes=['*.py'] and reload_excludes=['*']
-    # to only watch Python files and exclude everything else
     import logging.config
     uvicorn_log_config = {
         "version": 1,
@@ -3699,30 +3492,12 @@ if __name__ == "__main__":
         logger.info("=" * 60)
         logger.info("Starting Movie Searcher server")
         logger.info("Server URL: http://127.0.0.1:8002")
-        logger.info("Auto-reload: ENABLED (server restarts on Python file changes)")
-        logger.info("Note: 'X change detected' messages indicate file changes triggering reload")
         logger.info("=" * 60)
         uvicorn.run(
             "main:app",
             host="127.0.0.1",
             port=8002,
-            reload=True,
-            # Only watch Python files - exclude problematic files/dirs
-            # Use reload_dirs to only watch the project directory (not parent dirs)
-            reload_dirs=[str(Path(__file__).parent)],
-            reload_includes=["*.py"],
-            # Exclude files that change frequently but shouldn't trigger reloads
-            reload_excludes=[
-                "*.log",           # Log files
-                "*.db", "*.db-*",  # Database files (including .db-wal, .db-shm)
-                "*.json",          # JSON files
-                "*.tmp",           # Temporary files
-                "__pycache__/**",  # Python cache
-                "venv/**",         # Virtual environment
-                "frames/**",       # Extracted frames
-                "screenshots/**",  # Screenshots
-                "images/**",       # Images
-            ],
+            reload=False,
             use_colors=False,
             log_config=uvicorn_log_config
         )

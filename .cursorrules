@@ -23,6 +23,12 @@ Fail fast, fail clearly. Fix the root cause, don't paper over it.
 
 - Don't make up random extensions to what the user has asked; it's good to suggest options but you need to confirm and not just add things which might not be good without asking.
 
+# NAME CLEANING RULES
+
+- Name cleaning must NEVER rename, move, modify, or delete files on disk
+- Only filter entries from the database and/or modify how they are displayed to users
+- Files on disk must remain untouched - all changes are database/display-only
+
 
 
 
