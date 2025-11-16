@@ -528,7 +528,7 @@ async def search_movies(q: str, filter_type: str = Query("all", pattern="^(all|w
                 "score": score,
                 "images": images,
                 "screenshots": screenshots,
-                "frame": frame_path,
+                "frame": screenshot_path,
                 "image": largest_image,
                 "year": year,
                 "has_launched": has_launched
@@ -611,7 +611,7 @@ async def get_movie_details(path: str = Query(...)):
             "rating": rating_entry.rating if rating_entry else None,
             "images": images,
             "screenshots": screenshots,
-            "frame": frame_path,
+            "frame": screenshot_path,
             "image": largest_image,
             "year": year,
             "has_launched": has_launched
@@ -806,7 +806,7 @@ async def get_launch_history():
                 "rating": rating_entry.rating if rating_entry else None,
                 "images": images,
                 "screenshots": screenshots,
-                "frame": frame_path,
+                "frame": screenshot_path,
                 "image": get_largest_image(info),
                 "year": extract_year_from_name(movie.name)
             }
@@ -905,7 +905,7 @@ async def get_watched():
                         "rating": rating_entry.rating if rating_entry else None,
                         "images": images,
                         "screenshots": screenshots,
-                        "frame": frame_path,
+                        "frame": screenshot_path,
                         "image": get_largest_image(info),
                         "year": extract_year_from_name(movie.name),
                         "has_launched": db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
@@ -1406,7 +1406,7 @@ async def explore_movies(
                 "watched": is_watched,
                 "watched_date": watched_dict.get(movie.id, {}).get("watched_date") if is_watched else None,
                 "rating": watched_dict.get(movie.id, {}).get("rating") if is_watched else None,
-                "frame": frame_path,
+                "frame": screenshot_path,
                 "image": largest_image,
                 "first_letter": first_letter,
                 "year": year,
@@ -1459,6 +1459,9 @@ async def explore_movies(
             },
             "letter_counts": letter_counts
         }
+    except Exception as e:
+        logger.error(f"Error in explore endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 

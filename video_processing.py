@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 # Configuration - will be set by main.py
 SCRIPT_DIR = None
 SCREENSHOT_DIR = None
+# Cache for resolved tool paths
+_CACHED_FFMPEG_PATH = None
 
 def initialize_video_processing(script_dir):
     """Initialize video processing with script directory"""
@@ -95,21 +97,46 @@ def run_interruptible_subprocess(cmd, timeout=30, capture_output=True):
         return None
     
     proc = None
+    start_time = time.time()
     try:
+        # Diagnostic: Time subprocess creation
+        create_start = time.time()
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE if capture_output else None,
             stderr=subprocess.PIPE if capture_output else None,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         )
+        create_time = time.time() - create_start
+        if create_time > 0.1:
+            cmd_name = Path(cmd[0]).name if cmd else "unknown"
+            logger.warning(f"Subprocess {cmd_name} creation took {create_time:.2f}s (slow)")
+        
         register_subprocess(proc)
         
         try:
+            # Diagnostic: Time the actual communication/wait
+            comm_start = time.time()
             stdout, stderr = proc.communicate(timeout=timeout)
+            comm_time = time.time() - comm_start
+            elapsed = time.time() - start_time
+            
+            cmd_name = Path(cmd[0]).name if cmd else "unknown"
+            if elapsed > 1:
+                logger.warning(f"Subprocess {cmd_name} took {elapsed:.2f}s total (create: {create_time:.3f}s, execute: {comm_time:.2f}s)")
+                if stderr:
+                    stderr_preview = stderr.decode('utf-8', errors='ignore')[:500]
+                    logger.debug(f"Stderr preview: {stderr_preview}")
+            
             return subprocess.CompletedProcess(
                 cmd, proc.returncode, stdout, stderr
             )
         except subprocess.TimeoutExpired:
+            elapsed = time.time() - start_time
+            cmd_name = Path(cmd[0]).name if cmd else "unknown"
+            logger.error(f"Subprocess {cmd_name} timed out after {elapsed:.1f}s (timeout={timeout}s)")
+            if proc.poll() is None:
+                logger.error(f"Process still running, killing...")
             proc.kill()
             proc.wait()
             raise
@@ -165,6 +192,10 @@ def validate_ffmpeg_path(ffmpeg_path):
 
 def find_ffmpeg(load_config_func):
     """Find ffmpeg executable - requires configured path, no fallbacks"""
+    global _CACHED_FFMPEG_PATH
+    if _CACHED_FFMPEG_PATH:
+        return _CACHED_FFMPEG_PATH
+    
     config = load_config_func()
     configured_path = config.get("ffmpeg_path")
     
@@ -176,7 +207,8 @@ def find_ffmpeg(load_config_func):
     is_valid, error_msg = validate_ffmpeg_path(configured_path)
     if is_valid:
         logger.info(f"Using configured ffmpeg path: {configured_path}")
-        return configured_path
+        _CACHED_FFMPEG_PATH = configured_path
+        return _CACHED_FFMPEG_PATH
     else:
         logger.error(f"Configured ffmpeg path is invalid: {configured_path} - {error_msg}")
         logger.error("Please fix the ffmpeg_path configuration. Frame extraction will not work until this is corrected.")
@@ -229,17 +261,23 @@ def extract_movie_screenshot_sync(video_path, timestamp_seconds, find_ffmpeg_fun
     
     # Extract screenshot
     try:
+        # Fast seek: place -ss before -i to avoid decoding from start
         cmd = [
             ffmpeg_exe,
-            "-i", str(video_path),
             "-ss", str(timestamp_seconds),
+            "-i", str(video_path),
             "-vframes", "1",
             "-q:v", "2",  # High quality
             "-y",  # Overwrite
             str(screenshot_path)
         ]
         
+        logger.debug(f"Running ffmpeg command: {' '.join(cmd)}")
+        start_time = time.time()
         result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
+        elapsed = time.time() - start_time
+        if elapsed > 1:
+            logger.warning(f"ffmpeg took {elapsed:.2f}s for screenshot extraction from {video_path}")
         if result and result.returncode == 0 and screenshot_path.exists():
             logger.info(f"Extracted screenshot from {video_path} at {timestamp_seconds}s")
             return str(screenshot_path)
@@ -307,20 +345,55 @@ def process_screenshot_extraction_worker(screenshot_info):
         scan_progress_dict = screenshot_info["scan_progress_dict"]
         add_scan_log_func = screenshot_info["add_scan_log_func"]
         
-        # Try to get video length to validate timestamp
-        length = get_video_length(video_path)
-        if length and timestamp_seconds > length:
-            timestamp_seconds = min(30, max(10, length * 0.1))
+        # Get screenshot path (either provided or generate from timestamp)
+        if "screenshot_path" in screenshot_info:
+            screenshot_path = Path(screenshot_info["screenshot_path"])
+        else:
+            # Try to get video length to validate timestamp
+            length = get_video_length(video_path)
+            if length and timestamp_seconds > length:
+                timestamp_seconds = min(30, max(10, length * 0.1))
+            screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds)
         
-        # Regenerate screenshot path with potentially adjusted timestamp
-        screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds)
+        # Check if screenshot already exists
+        if screenshot_path.exists():
+            add_scan_log_func("info", f"Screenshot already exists: {screenshot_path.name}")
+            # Still save to database if needed
+            db = SessionLocal()
+            try:
+                movie = db.query(Movie).filter(Movie.path == video_path).first()
+                if movie:
+                    existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
+                    if not existing:
+                        screenshot = Screenshot(movie_id=movie.id, shot_path=str(screenshot_path))
+                        db.add(screenshot)
+                        db.commit()
+            finally:
+                db.close()
+            return True
         
-        add_scan_log_func("info", f"Extracting screenshot: {Path(video_path).name} at {timestamp_seconds:.1f}s...")
+        # Get screenshot index info if available
+        screenshot_index = screenshot_info.get("screenshot_index", None)
+        total_screenshots = screenshot_info.get("total_screenshots", None)
+        if screenshot_index and total_screenshots:
+            add_scan_log_func("info", f"Extracting screenshot {screenshot_index}/{total_screenshots}: {Path(video_path).name} at {timestamp_seconds:.1f}s...")
+        else:
+            add_scan_log_func("info", f"Extracting screenshot: {Path(video_path).name} at {timestamp_seconds:.1f}s...")
         
+        # Diagnostic: Check file access
+        video_path_obj = Path(video_path)
+        try:
+            file_size = video_path_obj.stat().st_size
+            file_size_mb = file_size / (1024 * 1024)
+            add_scan_log_func("info", f"File size: {file_size_mb:.1f}MB")
+        except Exception as e:
+            add_scan_log_func("warning", f"Could not stat file: {e}")
+        
+        # Fast seek: place -ss before -i to avoid decoding from start
         cmd = [
             ffmpeg_exe,
-            "-i", str(video_path),
             "-ss", str(timestamp_seconds),
+            "-i", str(video_path),
             "-vframes", "1",
             "-q:v", "2",
             "-y",
@@ -330,7 +403,13 @@ def process_screenshot_extraction_worker(screenshot_info):
         if shutdown_flag.is_set():
             return False
         
+        add_scan_log_func("info", f"Running: {Path(ffmpeg_exe).name} -ss {timestamp_seconds:.1f}s -i [video] -vframes 1")
+        start_time = time.time()
         result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
+        elapsed = time.time() - start_time
+        
+        if elapsed > 1:
+            add_scan_log_func("warning", f"Screenshot extraction took {elapsed:.1f}s (expected <1s)")
         if result and result.returncode == 0 and Path(screenshot_path).exists():
             # Save to database
             db = SessionLocal()
@@ -339,7 +418,7 @@ def process_screenshot_extraction_worker(screenshot_info):
                 movie = db.query(Movie).filter(Movie.path == video_path).first()
                 if not movie:
                     logger.warning(f"Movie not found for screenshot extraction: {video_path}")
-                    return
+                    return False
                 
                 # Check if entry already exists
                 existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
@@ -353,13 +432,16 @@ def process_screenshot_extraction_worker(screenshot_info):
                 
                 scan_progress_dict["frames_processed"] = scan_progress_dict.get("frames_processed", 0) + 1
                 scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
-                add_scan_log_func("success", f"Screenshot extracted: {Path(video_path).name}")
+                if screenshot_index and total_screenshots:
+                    add_scan_log_func("success", f"Screenshot {screenshot_index}/{total_screenshots} extracted: {Path(video_path).name}")
+                else:
+                    add_scan_log_func("success", f"Screenshot extracted: {Path(video_path).name}")
                 logger.info(f"Extracted screenshot from {video_path}")
             finally:
                 db.close()
             return True
         else:
-            error_msg = result.stderr.decode() if result.stderr else 'Unknown error'
+            error_msg = result.stderr.decode('utf-8', errors='ignore') if result and result.stderr else 'Unknown error'
             add_scan_log_func("error", f"Screenshot extraction failed: {Path(video_path).name} - {error_msg[:80]}")
             logger.warning(f"Failed to extract screenshot from {video_path}: {error_msg}")
             return False
@@ -431,9 +513,10 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
     worker_thread = threading.Thread(target=worker, daemon=True)
     worker_thread.start()
 
-def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmpeg_func):
-    """Extract screenshots from video using ffmpeg"""
+def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmpeg_func, add_scan_log_func=None, async_mode=True, scan_progress_dict=None):
+    """Extract screenshots from video using ffmpeg - can be synchronous or queued for async processing"""
     video_path_obj = Path(video_path)
+    video_name = video_path_obj.name
     
     # Create screenshots directory if it doesn't exist
     SCREENSHOT_DIR.mkdir(exist_ok=True)
@@ -441,8 +524,6 @@ def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmp
     # Generate screenshot filename based on video hash
     video_hash = hashlib.md5(str(video_path).encode()).hexdigest()[:8]
     screenshot_base = SCREENSHOT_DIR / f"{video_hash}"
-    
-    screenshots = []
     
     # Check if screenshots already exist
     existing_screenshots = []
@@ -452,31 +533,87 @@ def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmp
             existing_screenshots.append(str(screenshot_path))
     
     if len(existing_screenshots) == num_screenshots:
+        if add_scan_log_func:
+            add_scan_log_func("info", f"  All {num_screenshots} screenshots already exist")
         return existing_screenshots
     
     # Try to get video length
+    if add_scan_log_func:
+        add_scan_log_func("info", f"  Getting video length...")
     length = get_video_length(video_path)
     if not length or length < 1:
+        if add_scan_log_func:
+            add_scan_log_func("warning", f"  Could not determine video length, skipping screenshots")
+        logger.warning(f"Could not determine video length for {video_path}, skipping screenshots")
         return existing_screenshots if existing_screenshots else []
+    
+    if add_scan_log_func:
+        add_scan_log_func("info", f"  Video length: {length:.1f}s")
     
     # Find ffmpeg
+    if add_scan_log_func:
+        add_scan_log_func("info", f"  Finding ffmpeg...")
     ffmpeg_exe = find_ffmpeg_func(load_config_func)
     if not ffmpeg_exe:
-        logger.warning(f"ffmpeg not found, skipping screenshot extraction for {video_path}")
+        error_msg = "ffmpeg not found, skipping screenshot extraction"
+        if add_scan_log_func:
+            add_scan_log_func("warning", f"  {error_msg}")
+        logger.warning(f"{error_msg} for {video_path}")
         return existing_screenshots if existing_screenshots else []
     
-    # Extract screenshots at evenly spaced intervals
+    if add_scan_log_func:
+        add_scan_log_func("info", f"  Using ffmpeg: {Path(ffmpeg_exe).name}")
+    
+    # If async mode, queue it for background processing
+    if async_mode and scan_progress_dict is not None and add_scan_log_func is not None:
+        global frame_extraction_queue
+        # Queue each screenshot extraction individually
+        for i in range(num_screenshots):
+            screenshot_path = screenshot_base.parent / f"{screenshot_base.name}_{i+1}.jpg"
+            if screenshot_path.exists():
+                continue  # Skip existing screenshots
+            
+            # Calculate timestamp (distribute evenly across video)
+            timestamp = (length / (num_screenshots + 1)) * (i + 1)
+            
+            frame_extraction_queue.put({
+                "video_path": video_path,
+                "timestamp_seconds": timestamp,
+                "ffmpeg_exe": ffmpeg_exe,
+                "load_config_func": load_config_func,
+                "find_ffmpeg_func": find_ffmpeg_func,
+                "scan_progress_dict": scan_progress_dict,
+                "add_scan_log_func": add_scan_log_func,
+                "screenshot_index": i + 1,
+                "total_screenshots": num_screenshots,
+                "screenshot_path": str(screenshot_path)
+            })
+        
+        queue_size = frame_extraction_queue.qsize()
+        scan_progress_dict["frame_queue_size"] = queue_size
+        scan_progress_dict["frames_total"] = scan_progress_dict.get("frames_total", 0) + num_screenshots
+        if add_scan_log_func:
+            add_scan_log_func("info", f"  Queued {num_screenshots} screenshot extractions (queue: {queue_size})")
+        return existing_screenshots  # Return existing screenshots immediately, rest will be processed in background
+    
+    # Synchronous mode (for backwards compatibility or when async_mode=False)
+    screenshots = existing_screenshots.copy()
     try:
         for i in range(num_screenshots):
             screenshot_path = screenshot_base.parent / f"{screenshot_base.name}_{i+1}.jpg"
             if screenshot_path.exists():
                 screenshots.append(str(screenshot_path))
+                if add_scan_log_func:
+                    add_scan_log_func("info", f"  Screenshot {i+1}/{num_screenshots} already exists")
                 continue
             
             # Calculate timestamp (distribute evenly across video)
             timestamp = (length / (num_screenshots + 1)) * (i + 1)
             
-            # Extract frame
+            if add_scan_log_func:
+                add_scan_log_func("info", f"  Extracting screenshot {i+1}/{num_screenshots} at {timestamp:.1f}s...")
+            
+            # Basic ffmpeg command (no optimizations - diagnose why it's slow)
             cmd = [
                 ffmpeg_exe,
                 "-i", str(video_path),
@@ -488,17 +625,48 @@ def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmp
             ]
             
             if shutdown_flag.is_set():
+                if add_scan_log_func:
+                    add_scan_log_func("warning", f"  Screenshot extraction interrupted")
                 break
             
-            result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
-            if result and result.returncode == 0 and screenshot_path.exists():
-                screenshots.append(str(screenshot_path))
-            elif result:
-                logger.warning(f"Failed to extract screenshot {i+1} from {video_path}")
+            start_time = time.time()
+            try:
+                result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
+                elapsed = time.time() - start_time
+                
+                if add_scan_log_func:
+                    add_scan_log_func("info", f"  Subprocess total time: {elapsed:.2f}s")
+                
+                if result and result.returncode == 0 and screenshot_path.exists():
+                    file_size = screenshot_path.stat().st_size
+                    if add_scan_log_func:
+                        add_scan_log_func("success", f"  Screenshot {i+1}/{num_screenshots} extracted in {elapsed:.2f}s ({file_size/1024:.1f}KB)")
+                    screenshots.append(str(screenshot_path))
+                elif result:
+                    error_msg = result.stderr.decode('utf-8', errors='ignore') if result.stderr else 'Unknown error'
+                    error_preview = error_msg[:200] + "..." if len(error_msg) > 200 else error_msg
+                    if add_scan_log_func:
+                        add_scan_log_func("error", f"  Screenshot {i+1}/{num_screenshots} failed (exit {result.returncode}): {error_preview}")
+                    logger.warning(f"Failed to extract screenshot {i+1} from {video_path}: {error_preview}")
+            except subprocess.TimeoutExpired:
+                elapsed = time.time() - start_time
+                if add_scan_log_func:
+                    add_scan_log_func("error", f"  Screenshot {i+1}/{num_screenshots} timed out after {elapsed:.1f}s at {timestamp:.1f}s")
+                logger.warning(f"Screenshot {i+1} extraction timed out for {video_path} at {timestamp:.1f}s (took {elapsed:.1f}s)")
     except subprocess.TimeoutExpired:
+        if add_scan_log_func:
+            add_scan_log_func("error", f"  Screenshot extraction timed out for {video_name}")
         logger.warning(f"Screenshot extraction timed out for {video_path}")
     except Exception as e:
-        logger.error(f"Error extracting screenshots from {video_path}: {e}")
+        if add_scan_log_func:
+            add_scan_log_func("error", f"  Screenshot extraction error: {str(e)[:100]}")
+        logger.error(f"Error extracting screenshots from {video_path}: {e}", exc_info=True)
+    
+    if add_scan_log_func:
+        if screenshots:
+            add_scan_log_func("success", f"  Extracted {len(screenshots)}/{num_screenshots} screenshot(s)")
+        else:
+            add_scan_log_func("warning", f"  No screenshots extracted")
     
     return screenshots
 
