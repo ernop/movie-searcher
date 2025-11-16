@@ -29,6 +29,15 @@ Simple movie search and management application for local movie collections. Perf
   - Autocomplete suggestions for quick selection
   - Search limited to a sensible number of matches for responsiveness (defaults to 50)
 
+- **Explore your collection**
+  
+  [![Explore Movies](docs/explore-header.png)](#explore-your-collection)
+  
+  - Browse all movies with filtering options
+  - Filter by watched/unwatched status
+  - Filter by audio language
+  - Paginated results for large collections
+
 - **Incremental, reliable indexing**
   - One-time deep scan of your library, then only re-indexes changed files
   - File change detection via modified time and size
