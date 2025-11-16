@@ -13,7 +13,7 @@ import logging
 from models import (
     Base,
     Movie, Rating, WatchHistory, SearchHistory, LaunchHistory, 
-    IndexedPath, Config, MovieFrame, SchemaVersion,
+    IndexedPath, Config, Screenshot, Image, SchemaVersion,
     CURRENT_SCHEMA_VERSION
 )
 
@@ -201,6 +201,83 @@ def migrate_db_schema():
             set_schema_version(2, "Added autoincrement id column to config table")
             current_version = 2
         
+        if current_version < 3:
+            logger.info("Migrating to schema version 3: create screenshots and images tables, remove JSON columns from movies.")
+            
+            with engine.begin() as conn:
+                # Drop old tables if they exist
+                conn.execute(text("DROP TABLE IF EXISTS movie_frames"))
+                
+                # Create screenshots table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS screenshots (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        movie_id INTEGER NOT NULL,
+                        shot_path VARCHAR NOT NULL,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_screenshots_movie_id ON screenshots (movie_id)"))
+                
+                # Create images table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS images (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        movie_id INTEGER NOT NULL,
+                        image_path VARCHAR NOT NULL,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_movie_id ON images (movie_id)"))
+                
+                # Check if movies table has images/screenshots columns and remove them
+                movies_columns = {col['name']: col for col in inspector.get_columns("movies")}
+                has_images_column = "images" in movies_columns
+                has_screenshots_column = "screenshots" in movies_columns
+                
+                if has_images_column or has_screenshots_column:
+                    logger.info("Removing images and screenshots columns from movies table...")
+                    # SQLite doesn't support DROP COLUMN, so recreate the table
+                    conn.execute(text("""
+                        CREATE TABLE movies_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            path VARCHAR NOT NULL UNIQUE,
+                            name VARCHAR NOT NULL,
+                            year INTEGER,
+                            length FLOAT,
+                            size INTEGER,
+                            hash VARCHAR,
+                            created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                            updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_path ON movies_new (path)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_name ON movies_new (name)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_hash ON movies_new (hash)"))
+                    
+                    # Copy data (excluding images and screenshots columns)
+                    conn.execute(text("""
+                        INSERT INTO movies_new (id, path, name, year, length, size, hash, created, updated)
+                        SELECT id, path, name, year, length, size, hash, created, updated
+                        FROM movies
+                    """))
+                    
+                    # Drop old table and rename new one
+                    conn.execute(text("DROP TABLE movies"))
+                    conn.execute(text("ALTER TABLE movies_new RENAME TO movies"))
+                    
+                    # Recreate indexes
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_path ON movies (path)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_name ON movies (name)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_hash ON movies (hash)"))
+            
+            set_schema_version(3, "Created screenshots and images tables, removed JSON columns from movies")
+            current_version = 3
+        
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "
@@ -236,13 +313,13 @@ def migrate_db_schema():
         tables_to_drop = [
             "movies_new", "ratings_new", "watch_history_new", 
             "search_history_new", "launch_history_new", 
-            "indexed_paths_new", "config_new", "movie_frames_new"
+            "indexed_paths_new", "config_new", "screenshots_new", "images_new"
         ]
         indexes_to_drop = [
             "ix_movies_path", "ix_movies_name", "ix_movies_hash",
             "ix_ratings_movie_id", "ix_watch_history_movie_id",
             "ix_search_history_query", "ix_launch_history_movie_id",
-            "ix_indexed_paths_path", "ix_config_key", "ix_movie_frames_movie_id"
+            "ix_indexed_paths_path", "ix_config_key", "ix_screenshots_movie_id", "ix_images_movie_id"
         ]
         
         # Drop tables first (this automatically drops their indexes in SQLite)
@@ -269,7 +346,7 @@ def migrate_db_schema():
         # Step 2: Create new tables with correct schema
         logger.info("Creating new tables with updated schema...")
         
-        # Create new movies table
+        # Create new movies table (without images/screenshots columns)
         conn.execute(text("""
             CREATE TABLE movies_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -279,8 +356,6 @@ def migrate_db_schema():
                 length FLOAT,
                 size INTEGER,
                 hash VARCHAR,
-                images TEXT,
-                screenshots TEXT,
                 created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                 updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
             )
@@ -292,24 +367,45 @@ def migrate_db_schema():
         # Migrate movies data
         logger.info("Migrating movies data...")
         # Handle created field - convert from string ISO format to datetime
-        conn.execute(text("""
-            INSERT INTO movies_new (path, name, year, length, size, hash, images, screenshots, created, updated)
-            SELECT 
-                path,
-                name,
-                year,
-                length,
-                size,
-                hash,
-                images,
-                screenshots,
-                CASE 
-                    WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
-                    ELSE datetime(created)
-                END,
-                CURRENT_TIMESTAMP
-            FROM movies
-        """))
+        # Check if old table has images/screenshots columns
+        old_movies_columns = {col['name']: col for col in inspector.get_columns("movies")}
+        has_old_images = "images" in old_movies_columns
+        has_old_screenshots = "screenshots" in old_movies_columns
+        
+        if has_old_images or has_old_screenshots:
+            conn.execute(text("""
+                INSERT INTO movies_new (path, name, year, length, size, hash, created, updated)
+                SELECT 
+                    path,
+                    name,
+                    year,
+                    length,
+                    size,
+                    hash,
+                    CASE 
+                        WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
+                        ELSE datetime(created)
+                    END,
+                    CURRENT_TIMESTAMP
+                FROM movies
+            """))
+        else:
+            conn.execute(text("""
+                INSERT INTO movies_new (path, name, year, length, size, hash, created, updated)
+                SELECT 
+                    path,
+                    name,
+                    year,
+                    length,
+                    size,
+                    hash,
+                    CASE 
+                        WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
+                        ELSE datetime(created)
+                    END,
+                    CURRENT_TIMESTAMP
+                FROM movies
+            """))
         
         # Create new ratings table
         conn.execute(text("""
@@ -464,33 +560,32 @@ def migrate_db_schema():
                 FROM config
             """))
         
-        # Create new movie_frames table
-        migrated_movie_frames = False
-        if needs_movie_frames_migration:
-            migrated_movie_frames = True
-            conn.execute(text("""
-                CREATE TABLE movie_frames_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                    movie_id INTEGER NOT NULL,
-                    path VARCHAR NOT NULL,
-                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                    FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
-                )
-            """))
-            conn.execute(text("CREATE INDEX ix_movie_frames_movie_id ON movie_frames_new (movie_id)"))
-            
-            logger.info("Migrating movie_frames data...")
-            conn.execute(text("""
-                INSERT INTO movie_frames_new (movie_id, path, created, updated)
-                SELECT 
-                    m.id,
-                    mf.path,
-                    COALESCE(mf.created_at, CURRENT_TIMESTAMP),
-                    COALESCE(mf.created_at, CURRENT_TIMESTAMP)
-                FROM movie_frames mf
-                JOIN movies_new m ON m.path = mf.movie_id
-            """))
+        # Create screenshots and images tables
+        # Create screenshots table
+        conn.execute(text("""
+            CREATE TABLE screenshots_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                movie_id INTEGER NOT NULL,
+                shot_path VARCHAR NOT NULL,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX ix_screenshots_movie_id ON screenshots_new (movie_id)"))
+        
+        # Create images table
+        conn.execute(text("""
+            CREATE TABLE images_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                movie_id INTEGER NOT NULL,
+                image_path VARCHAR NOT NULL,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX ix_images_movie_id ON images_new (movie_id)"))
         
         # Step 3: Drop old tables
         logger.info("Dropping old tables...")
@@ -501,7 +596,8 @@ def migrate_db_schema():
         conn.execute(text("DROP TABLE IF EXISTS indexed_paths"))
         if "config" in existing_tables and 'id' not in config_columns:
             conn.execute(text("DROP TABLE IF EXISTS config"))
-        if migrated_movie_frames:
+        # Drop old movie_frames table if it exists (data will be re-processed)
+        if "movie_frames" in existing_tables:
             conn.execute(text("DROP TABLE IF EXISTS movie_frames"))
         conn.execute(text("DROP TABLE IF EXISTS movies"))
         
@@ -515,8 +611,8 @@ def migrate_db_schema():
         conn.execute(text("ALTER TABLE indexed_paths_new RENAME TO indexed_paths"))
         if "config" in existing_tables and 'id' not in config_columns:
             conn.execute(text("ALTER TABLE config_new RENAME TO config"))
-        if migrated_movie_frames:
-            conn.execute(text("ALTER TABLE movie_frames_new RENAME TO movie_frames"))
+        conn.execute(text("ALTER TABLE screenshots_new RENAME TO screenshots"))
+        conn.execute(text("ALTER TABLE images_new RENAME TO images"))
     
     # Record migration completion
     set_schema_version(CURRENT_SCHEMA_VERSION, "Migrated from old schema (path PK) to new schema (id PK)")
@@ -552,8 +648,11 @@ def remove_sample_files():
         
         # Remove related records for each sample movie
         for movie in sample_movies:
-            # Delete MovieFrame records
-            db.query(MovieFrame).filter(MovieFrame.movie_id == movie.id).delete()
+            # Delete Screenshot records
+            db.query(Screenshot).filter(Screenshot.movie_id == movie.id).delete()
+            
+            # Delete Image records
+            db.query(Image).filter(Image.movie_id == movie.id).delete()
             
             # Delete Rating records
             db.query(Rating).filter(Rating.movie_id == movie.id).delete()
@@ -600,10 +699,10 @@ def get_indexed_paths_set(db: Session):
         paths.add(indexed_path.path)
     return paths
 
-def get_movie_frame_path(db: Session, movie_id: int):
-    """Get the frame path for a movie from the database"""
-    frame = db.query(MovieFrame).filter(MovieFrame.movie_id == movie_id).first()
-    if frame and os.path.exists(frame.path):
-        return frame.path
+def get_movie_screenshot_path(db: Session, movie_id: int):
+    """Get a screenshot path for a movie from the database"""
+    screenshot = db.query(Screenshot).filter(Screenshot.movie_id == movie_id).first()
+    if screenshot and os.path.exists(screenshot.shot_path):
+        return screenshot.shot_path
     return None
 

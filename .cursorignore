@@ -8,9 +8,9 @@ movie_index.json
 search_history.json
 watched_movies.json
 config.json
-movie_searcher.log
+*.db
+*.log
 .env
 screenshots/
 frames/
-movie_searcher.db
 

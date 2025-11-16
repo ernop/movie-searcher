@@ -20,20 +20,18 @@ except ImportError:
     HAS_MUTAGEN = False
 
 # Import database models and session
-from database import SessionLocal, Movie, MovieFrame
+from database import SessionLocal, Movie, Screenshot
 
 logger = logging.getLogger(__name__)
 
 # Configuration - will be set by main.py
 SCRIPT_DIR = None
-FRAMES_DIR = None
 SCREENSHOT_DIR = None
 
 def initialize_video_processing(script_dir):
     """Initialize video processing with script directory"""
-    global SCRIPT_DIR, FRAMES_DIR, SCREENSHOT_DIR
+    global SCRIPT_DIR, SCREENSHOT_DIR
     SCRIPT_DIR = Path(script_dir)
-    FRAMES_DIR = SCRIPT_DIR / "frames"
     SCREENSHOT_DIR = SCRIPT_DIR / "screenshots"
 
 # Shutdown and process tracking
@@ -184,8 +182,8 @@ def find_ffmpeg(load_config_func):
         logger.error("Please fix the ffmpeg_path configuration. Frame extraction will not work until this is corrected.")
         return None
 
-def generate_frame_filename(video_path, timestamp_seconds):
-    """Generate a sensible frame filename based on movie name and timestamp"""
+def generate_screenshot_filename(video_path, timestamp_seconds):
+    """Generate a sensible screenshot filename based on movie name and timestamp"""
     video_path_obj = Path(video_path)
     movie_name = video_path_obj.stem  # Get filename without extension
     
@@ -198,28 +196,28 @@ def generate_frame_filename(video_path, timestamp_seconds):
     if len(sanitized_name) > 100:
         sanitized_name = sanitized_name[:100]
     
-    # Format: movie_name_frame150s.jpg
-    frame_filename = f"{sanitized_name}_frame{int(timestamp_seconds)}s.jpg"
-    return FRAMES_DIR / frame_filename
+    # Format: movie_name_screenshot150s.jpg
+    screenshot_filename = f"{sanitized_name}_screenshot{int(timestamp_seconds)}s.jpg"
+    return SCREENSHOT_DIR / screenshot_filename
 
-def extract_movie_frame_sync(video_path, timestamp_seconds, find_ffmpeg_func):
-    """Extract a single frame from video synchronously (blocking)"""
+def extract_movie_screenshot_sync(video_path, timestamp_seconds, find_ffmpeg_func):
+    """Extract a single screenshot from video synchronously (blocking)"""
     video_path_obj = Path(video_path)
     
-    # Create frames directory if it doesn't exist
-    FRAMES_DIR.mkdir(exist_ok=True)
+    # Create screenshots directory if it doesn't exist
+    SCREENSHOT_DIR.mkdir(exist_ok=True)
     
-    # Generate frame filename based on movie name and timestamp
-    frame_path = generate_frame_filename(video_path, timestamp_seconds)
+    # Generate screenshot filename based on movie name and timestamp
+    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds)
     
-    # Check if frame already exists
-    if frame_path.exists():
-        return str(frame_path)
+    # Check if screenshot already exists
+    if screenshot_path.exists():
+        return str(screenshot_path)
     
     # Find ffmpeg
     ffmpeg_exe = find_ffmpeg_func()
     if not ffmpeg_exe:
-        logger.warning(f"ffmpeg not found, skipping frame extraction for {video_path}")
+        logger.warning(f"ffmpeg not found, skipping screenshot extraction for {video_path}")
         return None
     
     # Try to get video length to validate timestamp
@@ -229,7 +227,7 @@ def extract_movie_frame_sync(video_path, timestamp_seconds, find_ffmpeg_func):
         timestamp_seconds = min(30, max(10, length * 0.1))
         logger.info(f"Timestamp exceeds video length {length}s, using {timestamp_seconds}s instead")
     
-    # Extract frame
+    # Extract screenshot
     try:
         cmd = [
             ffmpeg_exe,
@@ -238,46 +236,46 @@ def extract_movie_frame_sync(video_path, timestamp_seconds, find_ffmpeg_func):
             "-vframes", "1",
             "-q:v", "2",  # High quality
             "-y",  # Overwrite
-            str(frame_path)
+            str(screenshot_path)
         ]
         
         result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
-        if result and result.returncode == 0 and frame_path.exists():
-            logger.info(f"Extracted frame from {video_path} at {timestamp_seconds}s")
-            return str(frame_path)
+        if result and result.returncode == 0 and screenshot_path.exists():
+            logger.info(f"Extracted screenshot from {video_path} at {timestamp_seconds}s")
+            return str(screenshot_path)
         elif result:
             error_msg = result.stderr.decode() if result.stderr else 'Unknown error'
-            logger.warning(f"Failed to extract frame from {video_path}: {error_msg}")
+            logger.warning(f"Failed to extract screenshot from {video_path}: {error_msg}")
             return None
         else:
             return None
     except subprocess.TimeoutExpired:
-        logger.warning(f"Frame extraction timed out for {video_path}")
+        logger.warning(f"Screenshot extraction timed out for {video_path}")
         return None
     except Exception as e:
-        logger.error(f"Error extracting frame from {video_path}: {e}")
+        logger.error(f"Error extracting screenshot from {video_path}: {e}")
         return None
 
-def extract_movie_frame(video_path, timestamp_seconds, async_mode, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func):
-    """Extract a single frame from video - can be synchronous or queued for async processing"""
+def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func):
+    """Extract a single screenshot from video - can be synchronous or queued for async processing"""
     video_path_obj = Path(video_path)
     
-    # Create frames directory if it doesn't exist
-    FRAMES_DIR.mkdir(exist_ok=True)
+    # Create screenshots directory if it doesn't exist
+    SCREENSHOT_DIR.mkdir(exist_ok=True)
     
-    # Generate frame filename based on movie name and timestamp
-    frame_path = generate_frame_filename(video_path, timestamp_seconds)
+    # Generate screenshot filename based on movie name and timestamp
+    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds)
     
-    # Check if frame already exists
-    if frame_path.exists():
-        add_scan_log_func("info", f"Frame already exists: {frame_path.name}")
-        return str(frame_path)
+    # Check if screenshot already exists
+    if screenshot_path.exists():
+        add_scan_log_func("info", f"Screenshot already exists: {screenshot_path.name}")
+        return str(screenshot_path)
     
     # Find ffmpeg
     ffmpeg_exe = find_ffmpeg_func(load_config_func)
     if not ffmpeg_exe:
-        add_scan_log_func("warning", f"ffmpeg not found, skipping frame extraction")
-        logger.warning(f"ffmpeg not found, skipping frame extraction for {video_path}")
+        add_scan_log_func("warning", f"ffmpeg not found, skipping screenshot extraction")
+        logger.warning(f"ffmpeg not found, skipping screenshot extraction for {video_path}")
         return None
     
     # If async mode, queue it for background processing
@@ -294,30 +292,30 @@ def extract_movie_frame(video_path, timestamp_seconds, async_mode, load_config_f
         })
         scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
         scan_progress_dict["frames_total"] = scan_progress_dict.get("frames_total", 0) + 1
-        add_scan_log_func("info", f"Queued frame extraction (queue: {frame_extraction_queue.qsize()})")
+        add_scan_log_func("info", f"Queued screenshot extraction (queue: {frame_extraction_queue.qsize()})")
         return None  # Return None to indicate it's queued, will be processed later
     else:
         # Synchronous mode
-        return extract_movie_frame_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_func(load_config_func))
+        return extract_movie_screenshot_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_func(load_config_func))
 
-def process_frame_extraction_worker(frame_info):
-    """Worker function to extract a frame - runs in thread pool"""
+def process_screenshot_extraction_worker(screenshot_info):
+    """Worker function to extract a screenshot - runs in thread pool"""
     try:
-        video_path = frame_info["video_path"]
-        timestamp_seconds = frame_info["timestamp_seconds"]
-        ffmpeg_exe = frame_info["ffmpeg_exe"]
-        scan_progress_dict = frame_info["scan_progress_dict"]
-        add_scan_log_func = frame_info["add_scan_log_func"]
+        video_path = screenshot_info["video_path"]
+        timestamp_seconds = screenshot_info["timestamp_seconds"]
+        ffmpeg_exe = screenshot_info["ffmpeg_exe"]
+        scan_progress_dict = screenshot_info["scan_progress_dict"]
+        add_scan_log_func = screenshot_info["add_scan_log_func"]
         
         # Try to get video length to validate timestamp
         length = get_video_length(video_path)
         if length and timestamp_seconds > length:
             timestamp_seconds = min(30, max(10, length * 0.1))
         
-        # Regenerate frame path with potentially adjusted timestamp
-        frame_path = generate_frame_filename(video_path, timestamp_seconds)
+        # Regenerate screenshot path with potentially adjusted timestamp
+        screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds)
         
-        add_scan_log_func("info", f"Extracting frame: {Path(video_path).name} at {timestamp_seconds:.1f}s...")
+        add_scan_log_func("info", f"Extracting screenshot: {Path(video_path).name} at {timestamp_seconds:.1f}s...")
         
         cmd = [
             ffmpeg_exe,
@@ -326,63 +324,63 @@ def process_frame_extraction_worker(frame_info):
             "-vframes", "1",
             "-q:v", "2",
             "-y",
-            str(frame_path)
+            str(screenshot_path)
         ]
         
         if shutdown_flag.is_set():
             return False
         
         result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
-        if result and result.returncode == 0 and Path(frame_path).exists():
+        if result and result.returncode == 0 and Path(screenshot_path).exists():
             # Save to database
             db = SessionLocal()
             try:
                 # Get movie ID from path
                 movie = db.query(Movie).filter(Movie.path == video_path).first()
                 if not movie:
-                    logger.warning(f"Movie not found for frame extraction: {video_path}")
+                    logger.warning(f"Movie not found for screenshot extraction: {video_path}")
                     return
                 
                 # Check if entry already exists
-                existing = db.query(MovieFrame).filter(MovieFrame.movie_id == movie.id).first()
+                existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
                 if not existing:
-                    movie_frame = MovieFrame(
+                    screenshot = Screenshot(
                         movie_id=movie.id,
-                        path=str(frame_path)
+                        shot_path=str(screenshot_path)
                     )
-                    db.add(movie_frame)
+                    db.add(screenshot)
                     db.commit()
                 
                 scan_progress_dict["frames_processed"] = scan_progress_dict.get("frames_processed", 0) + 1
                 scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
-                add_scan_log_func("success", f"Frame extracted: {Path(video_path).name}")
-                logger.info(f"Extracted frame from {video_path}")
+                add_scan_log_func("success", f"Screenshot extracted: {Path(video_path).name}")
+                logger.info(f"Extracted screenshot from {video_path}")
             finally:
                 db.close()
             return True
         else:
             error_msg = result.stderr.decode() if result.stderr else 'Unknown error'
-            add_scan_log_func("error", f"Frame extraction failed: {Path(video_path).name} - {error_msg[:80]}")
-            logger.warning(f"Failed to extract frame from {video_path}: {error_msg}")
+            add_scan_log_func("error", f"Screenshot extraction failed: {Path(video_path).name} - {error_msg[:80]}")
+            logger.warning(f"Failed to extract screenshot from {video_path}: {error_msg}")
             return False
     except subprocess.TimeoutExpired:
-        add_scan_log_func("error", f"Frame extraction timed out: {Path(video_path).name}")
-        logger.warning(f"Frame extraction timed out for {video_path}")
+        add_scan_log_func("error", f"Screenshot extraction timed out: {Path(video_path).name}")
+        logger.warning(f"Screenshot extraction timed out for {video_path}")
         return False
     except Exception as e:
-        add_scan_log_func("error", f"Frame extraction error: {Path(video_path).name} - {str(e)[:80]}")
-        logger.error(f"Error extracting frame from {video_path}: {e}")
+        add_scan_log_func("error", f"Screenshot extraction error: {Path(video_path).name} - {str(e)[:80]}")
+        logger.error(f"Error extracting screenshot from {video_path}: {e}")
         return False
 
 def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
-    """Process queued frame extractions in background thread pool"""
+    """Process queued screenshot extractions in background thread pool"""
     global frame_executor, frame_processing_active, frame_extraction_queue
     
     if frame_processing_active:
         return
     
     frame_processing_active = True
-    add_scan_log_func("info", "Starting background frame extraction...")
+    add_scan_log_func("info", "Starting background screenshot extraction...")
     
     def worker():
         global frame_executor
@@ -392,9 +390,9 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
         processed_count = 0
         while not shutdown_flag.is_set():
             try:
-                # Get frame info from queue (with timeout to periodically check scan status)
+                # Get screenshot info from queue (with timeout to periodically check scan status)
                 try:
-                    frame_info = frame_extraction_queue.get(timeout=2)
+                    screenshot_info = frame_extraction_queue.get(timeout=2)
                 except:
                     # Queue empty, check if scan is done and queue is truly empty
                     if shutdown_flag.is_set():
@@ -404,7 +402,7 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
                     continue
                 
                 # Submit to thread pool (non-blocking)
-                future = frame_executor.submit(process_frame_extraction_worker, frame_info)
+                future = frame_executor.submit(process_screenshot_extraction_worker, screenshot_info)
                 processed_count += 1
                 frame_extraction_queue.task_done()
                 
@@ -412,7 +410,7 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
                 # Just track that we submitted it
                 
             except Exception as e:
-                logger.error(f"Error in frame extraction worker: {e}")
+                logger.error(f"Error in screenshot extraction worker: {e}")
         
         # Shutdown executor with timeout (interruptible)
         if frame_executor:
@@ -425,9 +423,9 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
         frame_processing_active = False
         remaining = frame_extraction_queue.qsize()
         if remaining == 0:
-            add_scan_log_func("success", f"All frame extractions completed ({processed_count} processed)")
+            add_scan_log_func("success", f"All screenshot extractions completed ({processed_count} processed)")
         else:
-            add_scan_log_func("warning", f"Frame extraction stopped with {remaining} items remaining")
+            add_scan_log_func("warning", f"Screenshot extraction stopped with {remaining} items remaining")
     
     # Start worker thread
     worker_thread = threading.Thread(target=worker, daemon=True)

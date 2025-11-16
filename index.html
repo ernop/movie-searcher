@@ -1741,7 +1741,8 @@
                         // Scan complete
                         clearInterval(progressInterval);
                         progressInterval = null;
-                        if (progressContainer) progressContainer.classList.remove('active');
+                        // Keep progress container visible to show scan logs
+                        // Don't remove 'active' class so log window remains visible
                         if (scanBtn) {
                             scanBtn.disabled = false;
                             scanBtn.textContent = 'Scan Movies Folder';
@@ -1750,6 +1751,20 @@
                         // Final log render
                         if (data.logs && logWindow) {
                             renderLogs(logWindow, data.logs);
+                        }
+                        
+                        // Update progress status to show completion
+                        if (progressStatus) {
+                            if (data.status === 'complete') {
+                                progressStatus.textContent = `Scan complete: ${data.current} movies indexed`;
+                                if (progressBar) {
+                                    progressBar.style.width = '100%';
+                                    progressBar.textContent = '100%';
+                                }
+                                if (progressFile) progressFile.textContent = '';
+                            } else if (data.status.startsWith('error')) {
+                                progressStatus.textContent = 'Scan error: ' + data.status;
+                            }
                         }
                         
                         if (data.status === 'complete') {

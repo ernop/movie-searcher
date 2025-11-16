@@ -17,8 +17,6 @@ class Movie(Base):
     length = Column(Float, nullable=True)
     size = Column(Integer, nullable=True)
     hash = Column(String, nullable=True, index=True)
-    images = Column(Text, nullable=True)  # JSON array as string
-    screenshots = Column(Text, nullable=True)  # JSON array as string
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -75,12 +73,23 @@ class Config(Base):
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
-class MovieFrame(Base):
-    __tablename__ = "movie_frames"
+class Screenshot(Base):
+    """Screenshots extracted from video files using ffmpeg"""
+    __tablename__ = "screenshots"
     
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
-    path = Column(String, nullable=False)  # Path to the extracted frame image
+    shot_path = Column(String, nullable=False)  # Path to the extracted screenshot image
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+class Image(Base):
+    """Images that came with the movie (posters, covers, thumbnails, etc.) - existing files found in movie folder"""
+    __tablename__ = "images"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
+    image_path = Column(String, nullable=False)  # Path to the image file
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -94,5 +103,5 @@ class SchemaVersion(Base):
     applied_at = Column(DateTime, default=func.now(), nullable=False)
 
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 

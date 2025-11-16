@@ -40,9 +40,9 @@ except ImportError:
 # Database setup - import from database module
 from database import (
     Base, SessionLocal, get_db,
-    Movie, Rating, WatchHistory, SearchHistory, LaunchHistory, IndexedPath, Config, MovieFrame, SchemaVersion,
+    Movie, Rating, WatchHistory, SearchHistory, LaunchHistory, IndexedPath, Config, Screenshot, Image, SchemaVersion,
     init_db, migrate_db_schema, remove_sample_files,
-    get_movie_id_by_path, get_indexed_paths_set, get_movie_frame_path
+    get_movie_id_by_path, get_indexed_paths_set, get_movie_screenshot_path
 )
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import func
@@ -53,10 +53,26 @@ from video_processing import (
     shutdown_flag, kill_all_active_subprocesses,
     run_interruptible_subprocess,
     get_video_length as get_video_length_vp, validate_ffmpeg_path, find_ffmpeg as find_ffmpeg_core,
-    extract_movie_frame_sync, generate_frame_filename,
+    extract_movie_screenshot_sync, generate_screenshot_filename,
     extract_screenshots as extract_screenshots_core,
     frame_extraction_queue, process_frame_queue as process_frame_queue_core,
-    FRAMES_DIR, SCREENSHOT_DIR
+    SCREENSHOT_DIR
+)
+
+# Import VLC integration
+from vlc_integration import (
+    launch_movie_in_vlc, get_currently_playing_movies,
+    has_been_launched, find_subtitle_file
+)
+
+# Import scanning module
+from scanning import (
+    scan_progress, run_scan_async, scan_directory, index_movie,
+    add_scan_log, is_sample_file, get_file_hash, find_images_in_folder,
+    clean_movie_name, filter_yts_images, extract_year_from_name,
+    load_cleaning_patterns, extract_screenshots, extract_movie_screenshot,
+    process_frame_queue, VIDEO_EXTENSIONS, IMAGE_EXTENSIONS,
+    set_callbacks as set_scanning_callbacks
 )
 
 # FastAPI app will be created after lifespan function is defined
@@ -69,17 +85,7 @@ SCRIPT_DIR = Path(__file__).parent.absolute()
 # Initialize video processing
 initialize_video_processing(SCRIPT_DIR)
 
-VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
 SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.vtt', '.ass', '.ssa'}
-IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
-
-def is_sample_file(file_path):
-    """Check if a file should be excluded (contains 'sample' in name, case-insensitive)"""
-    if isinstance(file_path, Path):
-        name = file_path.stem.lower()
-    else:
-        name = Path(file_path).stem.lower()
-    return 'sample' in name
 
 def load_config():
     """Load configuration from database"""
@@ -177,20 +183,6 @@ def auto_detect_ffmpeg():
 
 auto_detect_ffmpeg()
 
-# Scan progress tracking (in-memory)
-scan_progress = {
-    "is_scanning": False,
-    "current": 0,
-    "total": 0,
-    "current_file": "",
-    "status": "idle",
-    "logs": [],  # List of log entries: {"timestamp": str, "level": str, "message": str}
-    "frame_queue_size": 0,
-    "frames_processed": 0,
-    "frames_total": 0
-}
-
-
 # Define lifespan function after all dependencies are available
 from contextlib import asynccontextmanager
 
@@ -207,6 +199,9 @@ async def lifespan(app):
     if removed_count > 0:
         print(f"Removed {removed_count} sample file(s) from database")
     
+    # Set up callbacks for scanning module to avoid circular imports
+    set_scanning_callbacks(load_config, get_movies_folder)
+    
     yield
     
     # Shutdown
@@ -217,20 +212,6 @@ async def lifespan(app):
 # Create FastAPI app with lifespan
 app = FastAPI(title="Movie Searcher", lifespan=lifespan)
 
-
-def add_scan_log(level: str, message: str):
-    """Add a log entry to scan progress"""
-    global scan_progress
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    log_entry = {
-        "timestamp": timestamp,
-        "level": level,  # "info", "success", "warning", "error"
-        "message": message
-    }
-    scan_progress["logs"].append(log_entry)
-    # Keep only last 1000 log entries to prevent memory issues
-    if len(scan_progress["logs"]) > 1000:
-        scan_progress["logs"] = scan_progress["logs"][-1000:]
 
 class MovieInfo(BaseModel):
     path: str
@@ -256,109 +237,13 @@ class ConfigRequest(BaseModel):
     movies_folder: Optional[str] = None
     settings: Optional[dict] = None
 
-def has_been_launched(movie_path):
-    """Check if a movie has ever been launched"""
-    db = SessionLocal()
-    try:
-        movie = db.query(Movie).filter(Movie.path == movie_path).first()
-        if not movie:
-            return False
-        count = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count()
-        return count > 0
-    finally:
-        db.close()
-
 def get_video_length(file_path):
     """Extract video length using mutagen if available, otherwise return None"""
     return get_video_length_vp(file_path)
 
-def get_file_hash(file_path):
-    """Generate hash for file to detect changes"""
-    stat = os.stat(file_path)
-    return hashlib.md5(f"{file_path}:{stat.st_mtime}:{stat.st_size}".encode()).hexdigest()
-
-def find_images_in_folder(video_path):
-    """Find image files in the same folder as the video"""
-    video_path_obj = Path(video_path)
-    video_dir = video_path_obj.parent
-    base_name = video_path_obj.stem
-    
-    images = []
-    for ext in IMAGE_EXTENSIONS:
-        # Check for exact match
-        img_path = video_dir / f"{base_name}{ext}"
-        if img_path.exists() and "www.YTS.AM" not in img_path.name:
-            images.append(str(img_path))
-        
-        # Check for common patterns (poster, cover, etc.)
-        for pattern in [f"{base_name}_poster{ext}", f"{base_name}_cover{ext}", f"{base_name}_thumb{ext}",
-                        f"poster{ext}", f"cover{ext}", f"folder{ext}", f"thumb{ext}"]:
-            img_path = video_dir / pattern
-            if img_path.exists() and str(img_path) not in images and "www.YTS.AM" not in img_path.name:
-                images.append(str(img_path))
-    
-    # Also check for any images in the folder (limit to first 10)
-    for img_file in video_dir.iterdir():
-        if img_file.suffix.lower() in IMAGE_EXTENSIONS and str(img_file) not in images and "www.YTS.AM" not in img_file.name:
-            images.append(str(img_file))
-            if len(images) >= 10:
-                break
-    
-    return images[:10]  # Limit to 10 images
-
 def find_ffmpeg():
     """Find ffmpeg executable - requires configured path, no fallbacks"""
     return find_ffmpeg_core(load_config)
-
-def extract_movie_frame(video_path, timestamp_seconds=150, async_mode=True):
-    """Extract a single frame from video - can be synchronous or queued for async processing"""
-    if async_mode:
-        # Use video_processing module's extract_movie_frame which handles async queuing
-        from video_processing import extract_movie_frame as vp_extract_movie_frame
-        return vp_extract_movie_frame(
-            video_path, timestamp_seconds, async_mode,
-            load_config, find_ffmpeg_core, scan_progress, add_scan_log
-        )
-    else:
-        # Synchronous mode
-        return extract_movie_frame_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_core(load_config))
-
-def process_frame_queue(max_workers=3):
-    """Process queued frame extractions in background thread pool"""
-    process_frame_queue_core(max_workers, scan_progress, add_scan_log)
-
-def extract_screenshots(video_path, num_screenshots=5):
-    """Extract screenshots from video using ffmpeg"""
-    return extract_screenshots_core(video_path, num_screenshots, load_config, find_ffmpeg_core)
-
-def load_cleaning_patterns():
-    """Load approved cleaning patterns from database"""
-    db = SessionLocal()
-    try:
-        config_row = db.query(Config).filter(Config.key == 'cleaning_patterns').first()
-        if config_row:
-            try:
-                data = json.loads(config_row.value)
-                return {
-                    'exact_strings': set(data.get('exact_strings', [])),
-                    'bracket_patterns': data.get('bracket_patterns', []),
-                    'parentheses_patterns': data.get('parentheses_patterns', []),
-                    'year_patterns': data.get('year_patterns', True),  # Default to True
-                }
-            except Exception as e:
-                logger.error(f"Error parsing cleaning patterns from database: {e}")
-    except Exception as e:
-        logger.error(f"Error loading cleaning patterns: {e}")
-    finally:
-        db.close()
-    
-    # Return defaults if not found
-    return {
-        'exact_strings': set(),
-        'bracket_patterns': [],
-        'parentheses_patterns': [],
-        'year_patterns': True,
-    }
 
 def save_cleaning_patterns(patterns):
     """Save approved cleaning patterns to database"""
@@ -381,62 +266,6 @@ def save_cleaning_patterns(patterns):
         return False
     finally:
         db.close()
-
-def extract_year_from_name(name):
-    """Extract year from movie name (1900-2035)"""
-    # Look for 4-digit years in the range 1900-2035
-    year_pattern = r'\b(19\d{2}|20[0-2]\d|203[0-5])\b'
-    matches = re.findall(year_pattern, name)
-    if matches:
-        # Return the first valid year found
-        year = int(matches[0])
-        if 1900 <= year <= 2035:
-            return year
-    return None
-
-def clean_movie_name(name, patterns=None):
-    """Clean movie name using approved patterns and extract year"""
-    if patterns is None:
-        patterns = load_cleaning_patterns()
-    
-    original_name = name
-    year = None
-    
-    # Extract year first if enabled
-    if patterns.get('year_patterns', True):
-        year = extract_year_from_name(name)
-        # Remove year from name
-        if year:
-            name = re.sub(rf'\b{year}\b', '', name)
-    
-    # Remove exact strings
-    for exact_str in patterns.get('exact_strings', set()):
-        name = name.replace(exact_str, ' ')
-    
-    # Remove bracket patterns [anything]
-    for pattern in patterns.get('bracket_patterns', []):
-        if pattern == '[anything]':
-            name = re.sub(r'\[.*?\]', '', name)
-        else:
-            name = name.replace(pattern, ' ')
-    
-    # Remove parentheses patterns (anything)
-    for pattern in patterns.get('parentheses_patterns', []):
-        if pattern == '(anything)':
-            # Remove parentheses content, but be smart about it
-            # Don't remove if it's just a year or looks like part of title
-            name = re.sub(r'\([^)]*\)', '', name)
-        else:
-            name = name.replace(pattern, ' ')
-    
-    # Clean up multiple spaces and trim
-    name = re.sub(r'\s+', ' ', name).strip()
-    
-    # If name becomes empty, use original
-    if not name:
-        name = original_name
-    
-    return name, year
 
 def analyze_movie_names():
     """Analyze all movie names to find suspicious patterns"""
@@ -503,195 +332,6 @@ def analyze_movie_names():
     finally:
         db.close()
 
-def index_movie(file_path, db: Session = None):
-    """Index a single movie file"""
-    # Normalize the path to ensure consistent storage
-    # file_path can be either a Path object or a string
-    if isinstance(file_path, Path):
-        path_obj = file_path
-    else:
-        path_obj = Path(file_path)
-    
-    # Use resolve() to get absolute normalized path
-    try:
-        normalized_path_obj = path_obj.resolve()
-    except (OSError, RuntimeError):
-        # If resolve fails, use absolute()
-        normalized_path_obj = path_obj.absolute()
-    
-    # Convert to string - Path objects on Windows already use backslashes
-    normalized_path = str(normalized_path_obj)
-    
-    file_hash = get_file_hash(normalized_path)
-    
-    # Use provided session or create new one
-    should_close = False
-    if db is None:
-        db = SessionLocal()
-        should_close = True
-    
-    try:
-        # Check if already indexed and unchanged
-        existing = db.query(Movie).filter(Movie.path == normalized_path).first()
-        file_unchanged = existing and existing.hash == file_hash
-        
-        # Check if frame exists for this movie
-        existing_frame = None
-        if existing:
-            existing_frame = db.query(MovieFrame).filter(MovieFrame.movie_id == existing.id).first()
-        has_frame = existing_frame and os.path.exists(existing_frame.path) if existing_frame else False
-        
-        # If file unchanged and frame exists, no update needed
-        if file_unchanged and has_frame:
-            return False  # No update needed
-        
-        add_scan_log("info", f"  Getting file metadata...")
-        
-        stat = os.stat(normalized_path)
-        created = datetime.fromtimestamp(stat.st_ctime).isoformat()
-        size = stat.st_size
-        
-        # Try to get video length
-        length = get_video_length(normalized_path)
-        
-        # Find images in folder
-        add_scan_log("info", f"  Searching for images in folder...")
-        images = find_images_in_folder(normalized_path)
-        if images:
-            add_scan_log("success", f"  Found {len(images)} image(s)")
-        
-        # Extract screenshots (only if no images found or screenshots missing)
-        screenshots = []
-        if existing and existing.screenshots:
-            screenshots = json.loads(existing.screenshots) if existing.screenshots else []
-            add_scan_log("info", f"  Using existing screenshots")
-        elif len(images) == 0 or not (existing and existing.screenshots):
-            add_scan_log("info", f"  Extracting screenshots...")
-            screenshots = extract_screenshots(normalized_path, num_screenshots=5)
-            if screenshots:
-                add_scan_log("success", f"  Extracted {len(screenshots)} screenshot(s)")
-        
-        # Extract movie frame (at 2-3 minutes, default 2.5 minutes = 150 seconds)
-        add_scan_log("info", f"  Checking frame...")
-        frame_path = None
-        if existing_frame:
-            # Check if the frame file still exists
-            if os.path.exists(existing_frame.path):
-                frame_path = existing_frame.path
-                add_scan_log("info", f"  Frame already exists")
-            else:
-                # Frame file was deleted, remove from DB and queue for re-extraction
-                add_scan_log("warning", f"  Frame file missing, queuing re-extraction...")
-                db.delete(existing_frame)
-                extract_movie_frame(normalized_path, timestamp_seconds=150, async_mode=True)
-        else:
-            # No frame exists, queue for extraction (even if file unchanged)
-            add_scan_log("info", f"  No frame found, queuing extraction...")
-            extract_movie_frame(normalized_path, timestamp_seconds=150, async_mode=True)
-        
-        # Filter out YTS images before storing in database (defense in depth)
-        images = filter_yts_images(images)
-        
-        # Clean movie name and extract year
-        raw_name = normalized_path_obj.stem
-        cleaned_name, year = clean_movie_name(raw_name)
-        
-        # Create or update movie record
-        movie = Movie(
-            path=normalized_path,
-            name=cleaned_name,
-            year=year,
-            length=length,
-            created=created,
-            size=size,
-            hash=file_hash,
-            images=json.dumps(images),
-            screenshots=json.dumps(screenshots)
-        )
-        db.merge(movie)
-        db.commit()
-        return True
-    finally:
-        if should_close:
-            db.close()
-
-def scan_directory(root_path, state=None, progress_callback=None):
-    """Scan directory for video files with optional progress callback"""
-    root = Path(root_path)
-    if not root.exists():
-        add_scan_log("error", f"Path does not exist: {root_path}")
-        return {"indexed": 0, "updated": 0, "errors": []}
-    
-    add_scan_log("info", f"Starting scan of: {root_path}")
-    db = SessionLocal()
-    try:
-        # First pass: count total files
-        global scan_progress
-        scan_progress["status"] = "counting"
-        scan_progress["current_file"] = "Counting files..."
-        add_scan_log("info", "Counting video files...")
-        
-        total_files = 0
-        for ext in VIDEO_EXTENSIONS:
-            files = [f for f in root.rglob(f"*{ext}") if not is_sample_file(f)]
-            count = len(files)
-            total_files += count
-            if count > 0:
-                add_scan_log("info", f"Found {count} {ext} files")
-        
-        scan_progress["total"] = total_files
-        scan_progress["current"] = 0
-        scan_progress["status"] = "scanning"
-        add_scan_log("success", f"Total files to process: {total_files}")
-        
-        indexed = 0
-        updated = 0
-        
-        # Second pass: actually scan
-        # Each movie commits individually - no transaction wrapping the scan
-        # If any movie fails, the entire scan stops immediately
-        add_scan_log("info", "Starting file processing...")
-        for ext in VIDEO_EXTENSIONS:
-            if shutdown_flag.is_set():
-                add_scan_log("warning", "Scan interrupted by shutdown")
-                break
-            for file_path in root.rglob(f"*{ext}"):
-                if shutdown_flag.is_set():
-                    add_scan_log("warning", "Scan interrupted by shutdown")
-                    break
-                
-                # Skip sample files
-                if is_sample_file(file_path):
-                    add_scan_log("info", f"Skipping sample file: {file_path.name}")
-                    continue
-                
-                # Process each movie - if it fails, stop the entire scan immediately
-                # Each movie commits individually, no transaction wrapping the whole scan
-                scan_progress["current"] = indexed + 1
-                scan_progress["current_file"] = file_path.name
-                
-                add_scan_log("info", f"[{indexed + 1}/{total_files}] Processing: {file_path.name}")
-                
-                if index_movie(file_path, db):
-                    updated += 1
-                    add_scan_log("success", f"Indexed: {file_path.name}")
-                else:
-                    add_scan_log("info", f"Skipped (unchanged): {file_path.name}")
-                indexed += 1
-                
-                if progress_callback:
-                    progress_callback(indexed, total_files, file_path.name)
-        
-        # Mark path as indexed
-        db.merge(IndexedPath(path=str(root_path)))
-        db.commit()
-        
-        add_scan_log("success", f"Scan complete: {indexed} files processed, {updated} updated")
-        
-        return {"indexed": indexed, "updated": updated}
-    finally:
-        db.close()
-
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     html_path = SCRIPT_DIR / "index.html"
@@ -707,60 +347,6 @@ async def get_star_rating_js():
             from fastapi.responses import Response
             return Response(content=f.read(), media_type="application/javascript")
     raise HTTPException(status_code=404, detail="star-rating.js not found")
-
-def run_scan_async(root_path: str):
-    """Run scan in background thread"""
-    global scan_progress, frame_extraction_queue
-    try:
-        if shutdown_flag.is_set():
-            return
-        scan_progress["is_scanning"] = True
-        scan_progress["current"] = 0
-        scan_progress["total"] = 0
-        scan_progress["current_file"] = ""
-        scan_progress["status"] = "starting"
-        scan_progress["logs"] = []  # Clear previous logs
-        scan_progress["frames_processed"] = 0
-        scan_progress["frames_total"] = 0
-        
-        # Clear frame queue
-        while not frame_extraction_queue.empty():
-            try:
-                frame_extraction_queue.get_nowait()
-            except:
-                break
-        
-        add_scan_log("info", "=" * 60)
-        add_scan_log("info", "Starting movie scan")
-        add_scan_log("info", f"Root path: {root_path}")
-        add_scan_log("info", "=" * 60)
-        
-        # Start frame extraction processing in parallel (if not already running)
-        process_frame_queue(max_workers=3)
-        
-        result = scan_directory(root_path, progress_callback=None)
-        
-        add_scan_log("info", "=" * 60)
-        add_scan_log("success", f"Scan completed successfully!")
-        add_scan_log("info", f"  Files processed: {result['indexed']}")
-        add_scan_log("info", f"  Files updated: {result['updated']}")
-        queue_size = frame_extraction_queue.qsize()
-        if queue_size > 0:
-            add_scan_log("info", f"  Frames queued: {queue_size} (processing in background)")
-        add_scan_log("info", "=" * 60)
-        
-        scan_progress["status"] = "complete"
-        scan_progress["is_scanning"] = False
-        logger.info(f"Scan complete: {result}")
-    except Exception as e:
-        # If any movie fails, stop the entire scan immediately
-        # Log the error and mark scan as failed - don't continue processing
-        error_msg = str(e)
-        add_scan_log("error", f"Scan failed: {error_msg}")
-        scan_progress["status"] = "error"
-        scan_progress["is_scanning"] = False
-        logger.error(f"Scan failed: {e}", exc_info=True)
-        # Don't re-raise in background thread - just stop and report error
 
 @app.post("/api/index")
 async def index_movies(root_path: str = Query(None)):
@@ -904,27 +490,21 @@ async def search_movies(q: str, filter_type: str = Query("all", pattern="^(all|w
             # Calculate match score (exact start = higher score)
             score = 100 if name_lower.startswith(query_lower) else 50
             
-            # Parse images and screenshots with error handling
-            try:
-                images = json.loads(movie.images) if movie.images else []
-            except (json.JSONDecodeError, TypeError):
-                images = []
-            try:
-                screenshots = json.loads(movie.screenshots) if movie.screenshots else []
-            except (json.JSONDecodeError, TypeError):
-                screenshots = []
+            # Get images and screenshots from tables
+            images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
+            screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
             
             # Filter out YTS images
             images = filter_yts_images(images)
             
-            # Get frame path
-            frame_path = get_movie_frame_path(db, movie.id)
+            # Get screenshot path
+            screenshot_path = get_movie_screenshot_path(db, movie.id)
             
-            # Build info dict for get_largest_image (include frame)
+            # Build info dict for get_largest_image (include screenshot)
             info = {
                 "images": images,
                 "screenshots": screenshots,
-                "frame": frame_path
+                "frame": screenshot_path
             }
             
             # Get largest image
@@ -960,7 +540,6 @@ async def search_movies(q: str, filter_type: str = Query("all", pattern="^(all|w
         # Save to history
         search_entry = SearchHistory(
             query=q,
-            timestamp=datetime.now(),
             results_count=len(results)
         )
         db.add(search_entry)
@@ -997,19 +576,20 @@ async def get_movie_details(path: str = Query(...)):
         # Get rating
         rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
         
-        images = json.loads(movie.images) if movie.images else []
-        screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+        # Get images and screenshots from tables
+        images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
+        screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
         
         # Filter out YTS images
         images = filter_yts_images(images)
         
-        # Get frame path
-        frame_path = get_movie_frame_path(db, movie.id)
+        # Get screenshot path
+        screenshot_path = get_movie_screenshot_path(db, movie.id)
         
         info = {
             "images": images,
             "screenshots": screenshots,
-            "frame": frame_path
+            "frame": screenshot_path
         }
         
         # Get largest image
@@ -1066,14 +646,11 @@ async def get_image(image_path: str):
             try:
                 path_obj.resolve().relative_to(movies_path.resolve())
             except ValueError:
-                # Also allow screenshots and frames directories
+                # Also allow screenshots directory
                 try:
                     path_obj.resolve().relative_to(SCREENSHOT_DIR.resolve())
                 except ValueError:
-                    try:
-                        path_obj.resolve().relative_to(FRAMES_DIR.resolve())
-                    except ValueError:
-                        raise HTTPException(status_code=403, detail="Access denied")
+                    raise HTTPException(status_code=403, detail="Access denied")
         
         return FileResponse(str(path_obj))
     except HTTPException:
@@ -1082,35 +659,10 @@ async def get_image(image_path: str):
         logger.error(f"Error serving image {image_path}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def find_subtitle_file(video_path):
-    """Find subtitle file for a video"""
-    video_path_obj = Path(video_path)
-    base_name = video_path_obj.stem
-    
-    # Check same directory first
-    video_dir = video_path_obj.parent
-    for ext in SUBTITLE_EXTENSIONS:
-        subtitle_path = video_dir / f"{base_name}{ext}"
-        if subtitle_path.exists():
-            return str(subtitle_path)
-    
-    # Check for common subtitle naming patterns
-    for ext in SUBTITLE_EXTENSIONS:
-        for pattern in [f"{base_name}.en{ext}", f"{base_name}.eng{ext}", f"{base_name}_en{ext}"]:
-            subtitle_path = video_dir / pattern
-            if subtitle_path.exists():
-                return str(subtitle_path)
-    
-    return None
-
 @app.post("/api/launch")
 async def launch_movie(request: LaunchRequest):
     """Launch movie in VLC with optional subtitle"""
-    steps = []
-    results = []
-    
-    # The path should always be in the index - use it directly
-    # Paths are stored correctly in the index during scanning
+    # Validate movie exists in index before launching
     db = SessionLocal()
     try:
         movie = db.query(Movie).filter(Movie.path == request.path).first()
@@ -1119,266 +671,38 @@ async def launch_movie(request: LaunchRequest):
     finally:
         db.close()
     
-    movie_path = request.path
-    
-    # Step 1: Verify file exists
-    steps.append("Step 1: Verifying movie file exists")
-    if not os.path.exists(movie_path):
-        error_msg = f"File not found: {movie_path} (original: {request.path})"
-        steps.append(f"  ERROR: {error_msg}")
-        results.append({"step": 1, "status": "error", "message": error_msg})
-        # Return error with steps included
+    # Delegate to VLC integration module
+    try:
+        result = launch_movie_in_vlc(
+            movie_path=request.path,
+            subtitle_path=request.subtitle_path,
+            close_existing=request.close_existing_vlc
+        )
+        return result
+    except HTTPException:
+        raise
+    except FileNotFoundError as e:
+        error_msg = str(e)
         return JSONResponse(
             status_code=404,
             content={
                 "status": "error",
                 "detail": error_msg,
-                "steps": steps,
-                "results": results
+                "steps": [],
+                "results": []
             }
         )
-    results.append({"step": 1, "status": "success", "message": f"File found: {movie_path}"})
-    steps.append(f"  SUCCESS: File exists at {movie_path}")
-    
-    try:
-        # Step 2: Find VLC executable
-        steps.append("Step 2: Locating VLC executable")
-        vlc_paths = [
-            r"C:\Program Files\VideoLAN\VLC\vlc.exe",
-            r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-            os.path.expanduser(r"~\AppData\Local\Programs\VideoLAN\vlc.exe"),
-            "vlc"  # If in PATH
-        ]
-        
-        vlc_exe = None
-        checked_paths = []
-        for path in vlc_paths:
-            checked_paths.append(path)
-            if path == "vlc":
-                # Check if vlc is in PATH
-                try:
-                    result = subprocess.run(["vlc", "--version"], capture_output=True, timeout=2)
-                    if result.returncode == 0:
-                        vlc_exe = path
-                        steps.append(f"  Found VLC in PATH")
-                        break
-                except:
-                    steps.append(f"  Checked PATH: not found")
-            elif os.path.exists(path):
-                vlc_exe = path
-                steps.append(f"  Found VLC at: {path}")
-                break
-            else:
-                steps.append(f"  Checked: {path} (not found)")
-        
-        if not vlc_exe:
-            error_msg = "VLC not found. Please install VLC or set path."
-            steps.append(f"  ERROR: {error_msg}")
-            steps.append(f"  Checked paths: {', '.join(checked_paths)}")
-            results.append({"step": 2, "status": "error", "message": error_msg, "checked_paths": checked_paths})
-            # Return error with steps included
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "error",
-                    "detail": error_msg,
-                    "steps": steps,
-                    "results": results,
-                    "checked_paths": checked_paths
-                }
-            )
-        results.append({"step": 2, "status": "success", "message": f"VLC found at: {vlc_exe}"})
-        
-        # Step 2.5: Close existing VLC windows if requested
-        if request.close_existing_vlc:
-            steps.append("Step 2.5: Closing existing VLC windows")
-            try:
-                if os.name == 'nt':  # Windows
-                    # Find all VLC processes
-                    result = subprocess.run(
-                        ["tasklist", "/FI", "IMAGENAME eq vlc.exe", "/FO", "CSV", "/NH"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    if result.returncode == 0 and result.stdout.strip():
-                        # Count processes
-                        lines = [line for line in result.stdout.strip().split('\n') if line.strip()]
-                        process_count = len(lines)
-                        steps.append(f"  Found {process_count} existing VLC process(es)")
-                        
-                        # Close them
-                        kill_result = subprocess.run(
-                            ["taskkill", "/F", "/IM", "vlc.exe"],
-                            capture_output=True,
-                            text=True,
-                            timeout=5
-                        )
-                        if kill_result.returncode == 0:
-                            steps.append(f"  Successfully closed {process_count} VLC process(es)")
-                            results.append({"step": 2.5, "status": "success", "message": f"Closed {process_count} existing VLC process(es)"})
-                        else:
-                            steps.append(f"  WARNING: Failed to close some VLC processes: {kill_result.stderr}")
-                            results.append({"step": 2.5, "status": "warning", "message": "Some VLC processes may not have closed"})
-                    else:
-                        steps.append("  No existing VLC processes found")
-                        results.append({"step": 2.5, "status": "info", "message": "No existing VLC processes to close"})
-                else:
-                    # Linux/Mac - use pkill or killall
-                    try:
-                        result = subprocess.run(
-                            ["pkill", "-f", "vlc"],
-                            capture_output=True,
-                            timeout=5
-                        )
-                        if result.returncode == 0:
-                            steps.append("  Closed existing VLC processes")
-                            results.append({"step": 2.5, "status": "success", "message": "Closed existing VLC processes"})
-                        else:
-                            steps.append("  No existing VLC processes found")
-                            results.append({"step": 2.5, "status": "info", "message": "No existing VLC processes to close"})
-                    except FileNotFoundError:
-                        # Multiple legal kill agents exist (pkill, killall) - try killall if pkill unavailable
-                        try:
-                            subprocess.run(["killall", "vlc"], capture_output=True, timeout=5)
-                            steps.append("  Closed existing VLC processes (using killall)")
-                            results.append({"step": 2.5, "status": "success", "message": "Closed existing VLC processes"})
-                        except FileNotFoundError:
-                            steps.append("  ERROR: Neither pkill nor killall available - cannot close existing VLC processes")
-                            results.append({"step": 2.5, "status": "error", "message": "No kill agent available (pkill/killall)"})
-            except Exception as e:
-                steps.append(f"  WARNING: Error closing existing VLC processes: {str(e)}")
-                results.append({"step": 2.5, "status": "warning", "message": f"Error closing existing VLC: {str(e)}"})
-        else:
-            steps.append("Step 2.5: Skipping close existing VLC (option disabled)")
-            results.append({"step": 2.5, "status": "info", "message": "Close existing VLC option disabled"})
-        
-        # Step 3: Build VLC command
-        steps.append("Step 3: Building VLC command")
-        vlc_cmd = [vlc_exe, movie_path]
-        steps.append(f"  Base command: {vlc_exe} {movie_path}")
-        results.append({"step": 3, "status": "success", "message": f"Command prepared: {vlc_exe}"})
-        
-        # Step 4: Handle subtitles
-        steps.append("Step 4: Checking for subtitles")
-        subtitle_path = request.subtitle_path
-        if not subtitle_path:
-            steps.append("  No subtitle provided, attempting auto-detection")
-            subtitle_path = find_subtitle_file(movie_path)
-            if subtitle_path:
-                steps.append(f"  Auto-detected subtitle: {subtitle_path}")
-            else:
-                steps.append("  No subtitle file found")
-        else:
-            steps.append(f"  Subtitle provided: {subtitle_path}")
-        
-        if subtitle_path and os.path.exists(subtitle_path):
-            vlc_cmd.extend(["--sub-file", subtitle_path])
-            steps.append(f"  Added subtitle to command: {subtitle_path}")
-            results.append({"step": 4, "status": "success", "message": f"Subtitle loaded: {subtitle_path}"})
-        else:
-            if subtitle_path:
-                steps.append(f"  WARNING: Subtitle file not found: {subtitle_path}")
-                results.append({"step": 4, "status": "warning", "message": f"Subtitle file not found: {subtitle_path}"})
-            else:
-                steps.append("  No subtitle will be used")
-                results.append({"step": 4, "status": "info", "message": "No subtitle file"})
-        
-        # Step 5: Launch VLC
-        steps.append("Step 5: Launching VLC")
-        steps.append(f"  Full command: {' '.join(vlc_cmd)}")
-        try:
-            process = subprocess.Popen(vlc_cmd, shell=False)
-            steps.append(f"  VLC process started (PID: {process.pid})")
-            results.append({"step": 5, "status": "success", "message": f"VLC launched successfully (PID: {process.pid})"})
-        except Exception as e:
-            error_msg = f"Failed to launch VLC: {str(e)}"
-            steps.append(f"  ERROR: {error_msg}")
-            results.append({"step": 5, "status": "error", "message": error_msg})
-            raise
-        
-        # Step 6: Save to history
-        steps.append("Step 6: Saving to history")
-        db = SessionLocal()
-        try:
-            # Get movie ID from path
-            movie = db.query(Movie).filter(Movie.path == movie_path).first()
-            if not movie:
-                raise HTTPException(status_code=404, detail=f"Movie not found in database: {movie_path}")
-            
-            launch_entry = LaunchHistory(
-                movie_id=movie.id,
-                subtitle=subtitle_path,
-                timestamp=datetime.now()
-            )
-            db.add(launch_entry)
-            
-            # Create watch history entry for launch (watch session started)
-            watch_entry = WatchHistory(
-                movie_id=movie.id,
-                watch_status=None  # NULL = unknown (started watching but not finished)
-            )
-            db.add(watch_entry)
-            
-            db.commit()
-            steps.append("  History saved successfully")
-            results.append({"step": 6, "status": "success", "message": "Launch saved to history"})
-        finally:
-            db.close()
-        
-        # Final summary
-        steps.append("=" * 50)
-        steps.append("LAUNCH COMPLETE")
-        steps.append(f"Movie: {movie_path}")
-        steps.append(f"VLC: {vlc_exe}")
-        steps.append(f"Subtitle: {subtitle_path or 'None'}")
-        steps.append(f"Process ID: {process.pid}")
-        steps.append("=" * 50)
-        
-        return {
-            "status": "launched",
-            "subtitle": subtitle_path,
-            "steps": steps,
-            "results": results,
-            "vlc_path": vlc_exe,
-            "command": " ".join(vlc_cmd),
-            "process_id": process.pid
-        }
-    except HTTPException as he:
-        # Include steps in error response if possible
-        error_detail = str(he.detail)
-        steps.append(f"  HTTP ERROR: {error_detail}")
-        results.append({"step": "error", "status": "error", "message": error_detail})
-        # Try to return steps in error response
-        try:
-            return JSONResponse(
-                status_code=he.status_code,
-                content={
-                    "status": "error",
-                    "detail": error_detail,
-                    "steps": steps,
-                    "results": results
-                }
-            )
-        except:
-            raise he
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
-        steps.append(f"  FATAL ERROR: {error_msg}")
-        results.append({"step": "error", "status": "error", "message": error_msg})
-        # Try to return steps in error response
-        try:
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "error",
-                    "detail": error_msg,
-                    "steps": steps,
-                    "results": results
-                }
-            )
-        except:
-            raise HTTPException(status_code=500, detail=error_msg)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "detail": error_msg,
+                "steps": [],
+                "results": []
+            }
+        )
 
 @app.get("/api/history")
 async def get_history():
@@ -1431,7 +755,7 @@ async def get_launch_history():
             Movie,
             watch_alias,
             Rating,
-            MovieFrame
+            Screenshot
         ).join(
             Movie, LaunchHistory.movie_id == Movie.id
         ).outerjoin(
@@ -1443,31 +767,32 @@ async def get_launch_history():
         ).outerjoin(
             Rating, Movie.id == Rating.movie_id
         ).outerjoin(
-            MovieFrame, Movie.id == MovieFrame.movie_id
+            Screenshot, Movie.id == Screenshot.movie_id
         ).order_by(
             LaunchHistory.created.desc()
         ).limit(100).all()
         
         launches_with_info = []
-        for launch, movie, watch_entry, rating_entry, frame in results:
+        for launch, movie, watch_entry, rating_entry, screenshot in results:
             if not movie:
                 continue
             
-            images = json.loads(movie.images) if movie.images else []
-            screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+            # Get images and screenshots from tables
+            images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
+            screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
             
             # Filter out YTS images
             images = filter_yts_images(images)
             
-            # Get frame path
-            frame_path = None
-            if frame and os.path.exists(frame.path):
-                frame_path = frame.path
+            # Get screenshot path
+            screenshot_path = None
+            if screenshot and os.path.exists(screenshot.shot_path):
+                screenshot_path = screenshot.shot_path
             
             info = {
                 "images": images,
                 "screenshots": screenshots,
-                "frame": frame_path
+                "frame": screenshot_path
             }
             
             movie_info = {
@@ -1557,16 +882,17 @@ async def get_watched():
                     # Get rating
                     rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
                     
-                    images = json.loads(movie.images) if movie.images else []
-                    screenshots = json.loads(movie.screenshots) if movie.screenshots else []
+                    # Get images and screenshots from tables
+                    images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
+                    screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
                     
-                    # Get frame path
-                    frame_path = get_movie_frame_path(db, movie.id)
+                    # Get screenshot path
+                    screenshot_path = get_movie_screenshot_path(db, movie.id)
                     
                     info = {
                         "images": images,
                         "screenshots": screenshots,
-                        "frame": frame_path
+                        "frame": screenshot_path
                     }
                     
                     movie_info = {
@@ -1897,202 +1223,11 @@ async def save_cleaning_patterns_endpoint(data: dict):
         logger.error(f"Error saving cleaning patterns: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def get_vlc_window_titles():
-    """Get window titles from running VLC instances on Windows"""
-    if os.name != 'nt':  # Windows only for now
-        return []
-    
-    try:
-        # Use PowerShell to get VLC window titles
-        ps_command = """
-        Get-Process | Where-Object {$_.ProcessName -eq 'vlc'} | ForEach-Object {
-            $proc = $_
-            Add-Type -TypeDefinition @"
-                using System;
-                using System.Runtime.InteropServices;
-                public class Win32 {
-                    [DllImport("user32.dll")]
-                    public static extern IntPtr GetForegroundWindow();
-                    [DllImport("user32.dll")]
-                    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
-                }
-"@
-            $hwnd = $proc.MainWindowHandle
-            if ($hwnd -ne [IntPtr]::Zero) {
-                $title = New-Object System.Text.StringBuilder 256
-                [Win32]::GetWindowText($hwnd, $title, $title.Capacity) | Out-Null
-                $titleText = $title.ToString()
-                if ($titleText) {
-                    Write-Output "$titleText|$($proc.Id)"
-                }
-            }
-        }
-        """
-        
-        result = subprocess.run(
-            ["powershell", "-Command", ps_command],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode == 0 and result.stdout.strip():
-            titles = []
-            for line in result.stdout.strip().split('\n'):
-                if '|' in line:
-                    title, pid = line.split('|', 1)
-                    if title and title.strip():
-                        titles.append({"title": title.strip(), "pid": pid.strip()})
-            return titles
-    except Exception as e:
-        logger.warning(f"Error getting VLC window titles: {e}")
-    
-    return []
-
-def get_vlc_command_lines():
-    """Get command line arguments from running VLC processes"""
-    if os.name != 'nt':  # Windows only
-        return []
-    
-    try:
-        import shlex
-        import re
-        
-        # Use wmic to get command line arguments
-        result = subprocess.run(
-            ["wmic", "process", "where", "name='vlc.exe'", "get", "CommandLine,ProcessId", "/format:csv"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode == 0 and result.stdout.strip():
-            command_lines = []
-            lines = result.stdout.strip().split('\n')
-            
-            # Find header line to determine column positions
-            header_line = None
-            for line in lines:
-                if 'CommandLine' in line and 'ProcessId' in line:
-                    header_line = line
-                    break
-            
-            if not header_line:
-                logger.warning("No header line found in wmic output - cannot parse command lines")
-                return []
-            
-            # Parse header to find column indices
-            header_parts = [p.strip() for p in header_line.split(',')]
-            try:
-                cmd_idx = header_parts.index('CommandLine')
-                pid_idx = header_parts.index('ProcessId')
-            except ValueError as e:
-                logger.warning(f"Required columns not found in wmic output: {e}")
-                return []
-            
-            for line in lines:
-                if not line.strip() or 'CommandLine' in line or 'Node' in line:
-                    continue
-                
-                parts = [p.strip() for p in line.split(',')]
-                if len(parts) < 2:
-                    continue
-                
-                cmd_line = parts[cmd_idx] if cmd_idx < len(parts) else ''
-                pid = parts[pid_idx] if pid_idx < len(parts) else ''
-                
-                if not cmd_line or 'vlc.exe' not in cmd_line.lower():
-                    continue
-                
-                # Extract file path from command line using shlex
-                # VLC command line format: "C:\path\to\vlc.exe" "C:\path\to\movie.mp4"
-                try:
-                    args = shlex.split(cmd_line)
-                    # Find the first argument that's a file path (not vlc.exe itself)
-                    for arg in args[1:]:  # Skip vlc.exe path
-                        if os.path.exists(arg) and Path(arg).suffix.lower() in VIDEO_EXTENSIONS:
-                            command_lines.append({"path": arg, "pid": pid})
-                            break
-                except Exception as e:
-                    logger.warning(f"Failed to parse VLC command line '{cmd_line}': {e}")
-                    continue
-            return command_lines
-    except Exception as e:
-        logger.warning(f"Error getting VLC command lines: {e}")
-    
-    return []
-
 @app.get("/api/currently-playing")
 async def get_currently_playing():
     """Get currently playing movies from VLC instances"""
-    db = SessionLocal()
-    try:
-        playing = []
-        
-        # Get command line arguments
-        vlc_processes = get_vlc_command_lines()
-        
-        # Process command line results
-        for proc_info in vlc_processes:
-            file_path = proc_info["path"]
-            # Normalize path for comparison
-            try:
-                normalized_path = str(Path(file_path).resolve())
-            except:
-                normalized_path = file_path
-            
-            # Check if this path is in our index
-            movie = db.query(Movie).filter(Movie.path == normalized_path).first()
-            if movie:
-                playing.append({
-                    "path": normalized_path,
-                    "name": movie.name,
-                    "pid": proc_info["pid"]
-                })
-            else:
-                # Try case-insensitive match
-                movie = db.query(Movie).filter(func.lower(Movie.path) == normalized_path.lower()).first()
-                if movie:
-                    playing.append({
-                        "path": movie.path,
-                        "name": movie.name,
-                        "pid": proc_info["pid"]
-                    })
-        
-        return {"playing": playing}
-    finally:
-        db.close()
-
-def extract_year_from_name(name):
-    """Extract year from movie name (common patterns: (2023), 2023, -2023)"""
-    import re
-    # Try patterns: (2023), [2023], 2023, -2023
-    patterns = [
-        r'\((\d{4})\)',  # (2023)
-        r'\[(\d{4})\]',  # [2023]
-        r'\b(19\d{2}|20\d{2})\b',  # 2023 or 1999
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, name)
-        if match:
-            year = int(match.group(1))
-            # Reasonable year range
-            if 1900 <= year <= 2100:
-                return year
-    return None
-
-def filter_yts_images(image_paths):
-    """Filter out images with 'www.YTS.AM' in filename"""
-    if not image_paths:
-        return []
-    filtered = []
-    for img_path in image_paths:
-        # Check if filename contains www.YTS.AM
-        img_name = Path(img_path).name
-        if "www.YTS.AM" not in img_name:
-            filtered.append(img_path)
-    return filtered
+    playing = get_currently_playing_movies()
+    return {"playing": playing}
 
 def get_largest_image(movie_info):
     """Get the largest image file from movie's images or screenshots"""
@@ -2241,23 +1376,17 @@ async def explore_movies(
                 if len(movies) < 3:
                     logger.debug(f"No letter filter: '{movie.name}' -> first_letter='{first_letter}'")
             
-            # Parse images and screenshots with error handling
-            try:
-                images = json.loads(movie.images) if movie.images else []
-            except (json.JSONDecodeError, TypeError):
-                images = []
-            try:
-                screenshots = json.loads(movie.screenshots) if movie.screenshots else []
-            except (json.JSONDecodeError, TypeError):
-                screenshots = []
+            # Get images and screenshots from tables
+            images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
+            screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
             
-            # Get frame path
-            frame_path = get_movie_frame_path(db, movie.id)
+            # Get screenshot path
+            screenshot_path = get_movie_screenshot_path(db, movie.id)
             
             info = {
                 "images": images,
                 "screenshots": screenshots,
-                "frame": frame_path
+                "frame": screenshot_path
             }
             
             # Get largest image
