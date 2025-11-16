@@ -249,6 +249,11 @@ class ConfigRequest(BaseModel):
 class CleanNameTestRequest(BaseModel):
     text: str
 
+class ScreenshotsIntervalRequest(BaseModel):
+    path: str
+    every_minutes: int = 5
+    async_mode: bool = True
+
 def get_video_length(file_path):
     """Extract video length using mutagen if available, otherwise return None"""
     return get_video_length_vp(file_path)
@@ -468,11 +473,13 @@ async def admin_reindex(root_path: str = Query(None)):
 async def search_movies(
     q: str,
     filter_type: str = Query("all", pattern="^(all|watched|unwatched)$"),
-    language: Optional[str] = Query("all")
+    language: Optional[str] = Query("all"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200)
 ):
-    """Search movies. Always returns full fields (limited to 50)."""
+    """Search movies with pagination. Returns total for infinite scrolling."""
     if not q or len(q) < 2:
-        return {"results": []}
+        return {"results": [], "total": 0}
     
     db = SessionLocal()
     try:
@@ -497,18 +504,27 @@ async def search_movies(
         if filter_type == "watched":
             if not watched_movie_ids:
                 # No watched movies, return empty
-                return {"results": []}
+                return {"results": [], "total": 0}
             movie_query = movie_query.filter(Movie.id.in_(watched_movie_ids))
         elif filter_type == "unwatched":
             if watched_movie_ids:
                 movie_query = movie_query.filter(~Movie.id.in_(watched_movie_ids))
         
-        # Apply language filter
+        # Apply audio language filter using movie_audio table
         if language and language != "all":
-            movie_query = movie_query.filter(Movie.language == language)
+            from models import MovieAudio
+            # Filter to movies that have at least one audio track matching the selected language
+            movie_query = movie_query.filter(
+                Movie.id.in_(
+                    db.query(MovieAudio.movie_id).filter(
+                        func.lower(func.trim(MovieAudio.audio_type)) == func.lower(func.trim(language))
+                    ).subquery()
+                )
+            )
 
-        # Get movies and calculate scores
+        # Load all matching movies for scoring and total count
         movies = movie_query.all()
+        total_count = len(movies)
         
         # Score and sort: prioritize names starting with query
         scored_movies = []
@@ -517,12 +533,16 @@ async def search_movies(
             score = 100 if name_lower.startswith(query_lower) else 50
             scored_movies.append((score, movie))
         
-        # Sort by score (desc), then name (asc), limit to 50
+        # Sort by score (desc), then name (asc)
         scored_movies.sort(key=lambda x: (-x[0], x[1].name.lower()))
-        scored_movies = scored_movies[:50]
+        # Apply pagination window
+        if offset >= len(scored_movies):
+            page_slice = []
+        else:
+            page_slice = scored_movies[offset:offset + limit]
         
         # Extract result IDs for batch loading
-        result_ids = [movie.id for _, movie in scored_movies]
+        result_ids = [movie.id for _, movie in page_slice]
         results = []
 
         # Preload watch status info (latest watch_status for each movie)
@@ -546,7 +566,7 @@ async def search_movies(
                     watch_status_dict[rating.movie_id]["rating"] = rating.rating
 
         # Build results
-        for score, movie in scored_movies:
+        for score, movie in page_slice:
             watch_info = watch_status_dict.get(movie.id, {})
             watch_status = watch_info.get("watch_status")
             is_watched = watch_status is True  # For backward compatibility
@@ -599,7 +619,7 @@ async def search_movies(
 
         db.commit()
 
-        return {"results": results}
+        return {"results": results, "total": total_count, "offset": offset, "limit": limit}
     finally:
         db.close()
 
@@ -841,6 +861,53 @@ async def get_image(image_path: str):
     except Exception as e:
         logger.error(f"Error serving image {image_path}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/movie/screenshots/interval")
+async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
+    """Queue screenshots every N minutes across the movie duration (default 5 minutes)."""
+    db = SessionLocal()
+    try:
+        movie = db.query(Movie).filter(Movie.path == request.path).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail=f"Movie not found: {request.path}")
+
+        # Determine duration
+        length_seconds = movie.length if movie.length else get_video_length(request.path)
+        if not length_seconds or length_seconds <= 0:
+            raise HTTPException(status_code=400, detail="Unable to determine video length")
+
+        # Compute timestamps (0 to end, step every_minutes)
+        step = max(1, int(request.every_minutes) * 60)
+        timestamps = list(range(0, int(length_seconds), step))
+        if len(timestamps) == 0:
+            timestamps = [0]
+
+        # Queue extractions (async by default)
+        queued = 0
+        for ts in timestamps:
+            try:
+                extract_movie_screenshot(request.path, timestamp_seconds=ts, async_mode=request.async_mode)
+                queued += 1
+            except Exception as e:
+                logger.warning(f"Failed to queue screenshot at {ts}s for {request.path}: {e}")
+                continue
+
+        # Return current known screenshots (new ones will appear as the worker processes them)
+        current_shots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
+        return {
+            "status": "queued",
+            "queued": queued,
+            "every_minutes": request.every_minutes,
+            "timestamps": timestamps,
+            "screenshots": current_shots
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error queuing interval screenshots: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
 
 @app.get("/api/screenshot/{screenshot_id}")
 async def get_screenshot_by_id(screenshot_id: int):
@@ -1091,11 +1158,13 @@ async def mark_watched(request: WatchedRequest):
                 # Ensure rating is a float
                 rating_value = float(request.rating) if request.rating is not None else None
                 logger.debug(f"Saving rating {rating_value} for movie {movie.id}")
-                rating_entry = Rating(
-                    movie_id=movie.id,
-                    rating=rating_value
-                )
-                db.merge(rating_entry)
+                # Replace existing rating (one rating per movie). Do not rely on merge because
+                # the unique key is movie_id, not the primary key.
+                existing_rating = db.query(Rating).filter(Rating.movie_id == movie.id).one_or_none()
+                if existing_rating:
+                    existing_rating.rating = rating_value
+                else:
+                    db.add(Rating(movie_id=movie.id, rating=rating_value))
         
         db.commit()
         
@@ -1451,22 +1520,31 @@ async def get_stats():
 
 @app.get("/api/language-counts")
 async def get_language_counts():
-    """Get counts of movies by language"""
+    """Get counts of movies by audio language (from movie_audio)"""
     db = SessionLocal()
     try:
-        # Get all movies with language set, filter to valid movies (length >= 60 or null)
-        from sqlalchemy import or_
-        language_counts = db.query(
-            Movie.language,
-            func.count(Movie.id).label('count')
-        ).filter(
-            Movie.language.isnot(None),
-            Movie.language != '',
-            or_(Movie.length == None, Movie.length >= 60)
-        ).group_by(Movie.language).order_by(func.count(Movie.id).desc()).all()
-        
-        # Convert to dictionary
-        counts_dict = {lang: count for lang, count in language_counts if lang}
+        # Count distinct movies per audio language code from movie_audio
+        from sqlalchemy import or_, distinct
+        from models import MovieAudio
+
+        # Only consider valid movies (length >= 60 or null) by joining to movies
+        counts_rows = (
+            db.query(
+                func.lower(func.trim(MovieAudio.audio_type)).label("lang"),
+                func.count(distinct(MovieAudio.movie_id)).label("count")
+            )
+            .join(Movie, Movie.id == MovieAudio.movie_id)
+            .filter(
+                MovieAudio.audio_type.isnot(None),
+                func.trim(MovieAudio.audio_type) != '',
+                or_(Movie.length == None, Movie.length >= 60)
+            )
+            .group_by(func.lower(func.trim(MovieAudio.audio_type)))
+            .order_by(func.count(distinct(MovieAudio.movie_id)).desc())
+            .all()
+        )
+
+        counts_dict = {lang: count for lang, count in counts_rows if lang}
         
         # Also get count for "all" (total movies)
         total_count = db.query(Movie).filter(
@@ -1633,7 +1711,8 @@ async def explore_movies(
     filter_type: str = Query("all", pattern="^(all|watched|unwatched)$"),
     letter: Optional[str] = Query(None, pattern="^[A-Z#]$"),
     year: Optional[int] = Query(None, ge=1900, le=2035),
-    decade: Optional[int] = Query(None, ge=1900, le=2030)
+    decade: Optional[int] = Query(None, ge=1900, le=2030),
+    language: Optional[str] = Query("all")
 ):
     """Get all movies for exploration view with pagination and filters"""
     # Normalize letter to uppercase if provided
@@ -1669,6 +1748,42 @@ async def explore_movies(
             # Simple prefix match
             prefix = f"{letter}%"
             movie_q = movie_q.filter(func.substr(Movie.name, 1, 1) == letter)
+
+        # Audio language filter via movie_audio
+        if language and language != "all":
+            from models import MovieAudio
+            # Map canonical codes to all possible variants in the database
+            code_variants = {
+                'en': ['en', 'eng'],
+                'es': ['es', 'spa'],
+                'fr': ['fr', 'fra', 'fre'],
+                'de': ['de', 'ger', 'deu'],
+                'it': ['it', 'ita'],
+                'pt': ['pt', 'por'],
+                'ru': ['ru', 'rus'],
+                'ja': ['ja', 'jpn', 'jap'],
+                'ko': ['ko', 'kor'],
+                'zh': ['zh', 'zho', 'chi'],
+                'hi': ['hi', 'hin'],
+                'sv': ['sv', 'swe'],
+                'da': ['da', 'dan'],
+                'ar': ['ar', 'ara'],
+                'pl': ['pl', 'pol'],
+                'is': ['is', 'ice'],
+                'cs': ['cs', 'cze'],
+                'fi': ['fi', 'fin'],
+                'und': ['und', 'unknown'],
+                'unknown': ['und', 'unknown'],
+                'zxx': ['zxx']
+            }
+            variants = code_variants.get(language.lower(), [language.lower()])
+            movie_q = movie_q.filter(
+                Movie.id.in_(
+                    db.query(MovieAudio.movie_id).filter(
+                        func.lower(func.trim(MovieAudio.audio_type)).in_(variants)
+                    ).subquery()
+                )
+            )
 
         # Year filter (exact year match)
         if year is not None:

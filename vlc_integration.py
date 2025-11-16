@@ -11,6 +11,7 @@ from datetime import datetime
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 import time
+import json
 
 if os.name == 'nt':
 	# Windows-specific imports via ctypes to avoid extra dependencies
@@ -184,73 +185,70 @@ def get_vlc_window_titles():
     return []
 
 def get_vlc_command_lines():
-    """Get command line arguments from running VLC processes"""
-    if os.name != 'nt':  # Windows only
+    """Get command line arguments from running VLC processes (Windows)."""
+    if os.name != 'nt':
         return []
-    
+
     try:
-        # Use wmic to get command line arguments
+        # Use PowerShell CIM to get CommandLine and ProcessId for vlc.exe, return as JSON
+        ps_script = (
+            "Get-CimInstance Win32_Process -Filter \"name = 'vlc.exe'\" "
+            "| Select-Object CommandLine, ProcessId "
+            "| ConvertTo-Json -Compress"
+        )
         result = subprocess.run(
-            ["wmic", "process", "where", "name='vlc.exe'", "get", "CommandLine,ProcessId", "/format:csv"],
+            ["powershell", "-NoProfile", "-Command", ps_script],
             capture_output=True,
             text=True,
             timeout=5
         )
-        
-        if result.returncode == 0 and result.stdout.strip():
-            command_lines = []
-            lines = result.stdout.strip().split('\n')
-            
-            # Find header line to determine column positions
-            header_line = None
-            for line in lines:
-                if 'CommandLine' in line and 'ProcessId' in line:
-                    header_line = line
-                    break
-            
-            if not header_line:
-                return []
-            
-            # Parse header to find column indices
-            header_parts = [p.strip() for p in header_line.split(',')]
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse PowerShell JSON for VLC processes: {e}")
+            return []
+
+        # Normalize to a list
+        processes = data if isinstance(data, list) else [data]
+        command_lines = []
+
+        for proc in processes:
+            cmd_line = (proc.get("CommandLine") or "").strip()
+            pid = str(proc.get("ProcessId") or "").strip()
+            if not cmd_line:
+                continue
+            # Parse arguments - use shlex with posix=False for Windows paths
             try:
-                cmd_idx = header_parts.index('CommandLine')
-                pid_idx = header_parts.index('ProcessId')
-            except ValueError as e:
-                logger.warning(f"Required columns not found in wmic output: {e}")
-                return []
-            
-            for line in lines:
-                if not line.strip() or 'CommandLine' in line or 'Node' in line:
-                    continue
-                
-                parts = [p.strip() for p in line.split(',')]
-                if len(parts) < 2:
-                    continue
-                
-                cmd_line = parts[cmd_idx] if cmd_idx < len(parts) else ''
-                pid = parts[pid_idx] if pid_idx < len(parts) else ''
-                
-                if not cmd_line or 'vlc.exe' not in cmd_line.lower():
-                    continue
-                
-                # Extract file path from command line using shlex
-                # VLC command line format: "C:\path\to\vlc.exe" "C:\path\to\movie.mp4"
+                args = shlex.split(cmd_line, posix=False)
+            except Exception:
+                # Fallback: simple regex to extract quoted and unquoted args
+                import re
+                args = re.findall(r'"[^"]+"|[^\s]+', cmd_line)
+                args = [a.strip('"') for a in args]
+
+            # Skip empty or single-arg (just vlc.exe) invocations
+            if len(args) <= 1:
+                continue
+
+            # Look for a path argument with a known video extension
+            for arg in args[1:]:
                 try:
-                    args = shlex.split(cmd_line)
-                    # Find the first argument that's a file path (not vlc.exe itself)
-                    for arg in args[1:]:  # Skip vlc.exe path
-                        if os.path.exists(arg) and Path(arg).suffix.lower() in VIDEO_EXTENSIONS:
-                            command_lines.append({"path": arg, "pid": pid})
-                            break
-                except Exception as e:
-                    logger.warning(f"Failed to parse VLC command line '{cmd_line}': {e}")
+                    # Handle cases like --started-from-file or other flags
+                    if arg.startswith("-"):
+                        continue
+                    if os.path.exists(arg) and Path(arg).suffix.lower() in VIDEO_EXTENSIONS:
+                        command_lines.append({"path": arg, "pid": pid})
+                        break
+                except Exception:
                     continue
-            return command_lines
+
+        return command_lines
     except Exception as e:
-        logger.warning(f"Error getting VLC command lines: {e}")
-    
-    return []
+        logger.warning(f"Error getting VLC command lines via PowerShell: {e}")
+        return []
 
 def _find_vlc_window_handle():
 	"""Locate a VLC window handle on Windows by enumerating top-level windows.

@@ -61,6 +61,21 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_name": "The Undersea World of Jacques Cousteau 02 A Sound of Dolphins",
         "expected_year": None, #because a removed item in the prior folder name doesn't mean that we lose the actaul filename
     },
+    {
+        "input": r"D:\movies\Love and Death (Woody Allen 1975) DivX DVDRip.avi",
+        "expected_name": "Love and Death",
+        "expected_year": 1975,
+    },
+    
+    {
+        "input":"D:\movies\THE_BOYS_FROM_BRAZIL_Title1.mp4",
+        "expected_name": "The Boys from Brazil", #title1 suffixes are bad text.  most movies _ actually is a space.
+        "expected_year": None,
+    }
+
+    # {
+    #     "input":""
+    # }
     # Add more cases below. Examples:
     # {
     #     "input": "The.Matrix.1999.1080p.BluRay.x264.AC3.mkv",

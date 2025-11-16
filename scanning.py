@@ -16,7 +16,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.sql import func
 
 # Database imports
-from database import SessionLocal, Movie, Screenshot, Image, IndexedPath, Config
+from database import SessionLocal, Movie, Screenshot, Image, IndexedPath, Config, MovieAudio
 
 # Video processing imports
 from video_processing import (
@@ -25,7 +25,8 @@ from video_processing import (
     extract_screenshots as extract_screenshots_core,
     extract_movie_screenshot as extract_movie_screenshot_core,
     find_ffmpeg as find_ffmpeg_core,
-    process_frame_queue as process_frame_queue_core
+    process_frame_queue as process_frame_queue_core,
+    _get_ffprobe_path_from_config
 )
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,75 @@ def get_file_hash(file_path):
     """Generate hash for file to detect changes"""
     stat = os.stat(file_path)
     return hashlib.md5(f"{file_path}:{stat.st_mtime}:{stat.st_size}".encode()).hexdigest()
+
+def _extract_audio_types_with_ffprobe(file_path):
+    """
+    Use ffprobe to extract audio stream language tags. Returns a list of strings.
+    If no tags are present, returns ['unknown'].
+    """
+    try:
+        ffprobe = _get_ffprobe_path_from_config()
+        if not ffprobe:
+            # Respect PRIME DIRECTIVE - do not fallback; fail clearly
+            add_scan_log("warning", "  ffprobe not configured; cannot extract audio types")
+            return ["unknown"]
+        import subprocess, json as _json
+        cmd = [
+            ffprobe,
+            "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=index:stream_tags=language",
+            "-of", "json",
+            str(file_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            return ["unknown"]
+        data = _json.loads(result.stdout or "{}")
+        streams = data.get("streams", []) or []
+        langs = []
+        for s in streams:
+            tags = s.get("tags") or {}
+            lang = tags.get("language") or "unknown"
+            langs.append(str(lang).strip() or "unknown")
+        return langs if langs else ["unknown"]
+    except Exception:
+        return ["unknown"]
+
+def _refresh_movie_audio_rows(db: Session, movie_id: int, audio_types):
+    """
+    Replace movie_audio rows for a given movie with provided audio_types.
+    Ensures uniqueness and minimal writes.
+    """
+    try:
+        # Normalize and deduplicate
+        normalized = []
+        seen = set()
+        for a in audio_types or []:
+            at = (a or "unknown").strip().lower()
+            if not at:
+                at = "unknown"
+            if at not in seen:
+                seen.add(at)
+                normalized.append(at)
+        # Fetch existing
+        existing_rows = db.query(MovieAudio).filter(MovieAudio.movie_id == movie_id).all()
+        existing_set = {row.audio_type for row in existing_rows}
+        new_set = set(normalized if normalized else ["unknown"])
+        # Delete removed
+        to_delete = existing_set - new_set
+        if to_delete:
+            db.query(MovieAudio).filter(
+                MovieAudio.movie_id == movie_id,
+                MovieAudio.audio_type.in_(list(to_delete))
+            ).delete(synchronize_session=False)
+        # Insert new
+        to_insert = new_set - existing_set
+        for at in to_insert:
+            db.add(MovieAudio(movie_id=movie_id, audio_type=at))
+    except Exception:
+        # Fail safe: do not block scan on audio metadata failure
+        pass
 
 def find_images_in_folder(video_path):
     """
@@ -257,6 +327,9 @@ def clean_movie_name(name, patterns=None):
             year_with_context_pattern = rf'(?:[([{{<]\s*)?\b{year}\b\s*(?:[)\]}}>])?.*$'
             # Replace the year and everything after it with empty string
             name = re.sub(year_with_context_pattern, '', name, count=1).strip()
+            # If removing the year left a dangling, unmatched opening bracket at the end
+            # (e.g., "Love and Death (Woody Allen"), drop that trailing bracketed fragment.
+            name = re.sub(r'\s*[\(\[\{<][^)\]}>]*$', '', name).strip()
     
     # STEP 4: Remove exact strings (from DB-configured patterns)
     for exact_str in patterns.get('exact_strings', set()):
@@ -495,7 +568,10 @@ def clean_movie_name(name, patterns=None):
     name = re.sub(r'^\s*[–—\-]+', ' ', name)  # leading dashes
     name = re.sub(r'\s+', ' ', name).strip(' _-.')
 
-    # STEP 14: Final cleanup for trailing punctuation
+    # STEP 14: Remove "Title1", "Title2", etc. suffixes (common in DVD rips)
+    name = re.sub(r'\s+Title\d+\s*$', '', name, flags=re.IGNORECASE)
+    
+    # STEP 15: Final cleanup for trailing punctuation
     name = re.sub(r'[.\-]+$', '', name).strip()
     
     # Clean up multiple spaces and trim
@@ -505,8 +581,55 @@ def clean_movie_name(name, patterns=None):
     if not name:
         name = original_name
     
+    # Helper function for smart title casing
+    def apply_smart_title_case(text, preserve_single_word_caps=False):
+        """Apply smart title casing that preserves acronyms and handles minor words"""
+        if not (text.isupper() or text.islower()):
+            return text  # Preserve mixed case
+        
+        words = text.split()
+        
+        # If preserve_single_word_caps is True and text is a single word in all caps, keep it
+        if preserve_single_word_caps and len(words) == 1 and text.isupper():
+            return text
+        
+        title_cased_words = []
+        # Minor words that should be lowercase (unless first/last word)
+        minor_words = {'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'from', 'in', 
+                      'into', 'of', 'on', 'or', 'the', 'to', 'with'}
+        # Common words that should NOT be treated as acronyms
+        common_words = {'the', 'and', 'for', 'from', 'with', 'that', 'this', 'boys', 'girl', 
+                       'girls', 'man', 'men', 'boys', 'last', 'first', 'good', 'bad', 'new', 
+                       'old', 'big', 'over', 'just', 'only', 'very', 'also', 'back', 'here', 
+                       'come', 'some', 'them', 'then', 'than', 'when', 'what', 'your', 'more'}
+        
+        for i, word in enumerate(words):
+            is_first = (i == 0)
+            is_last = (i == len(words) - 1)
+            
+            # Preserve short uppercase words (likely acronyms like "UHF", "TV", "DVD")
+            # But NOT if they're common English words
+            if len(word) <= 4 and word.isupper() and word.lower() not in common_words:
+                title_cased_words.append(word)
+            # Keep minor words lowercase unless first/last
+            elif word.lower() in minor_words and not is_first and not is_last:
+                title_cased_words.append(word.lower())
+            else:
+                title_cased_words.append(word.title())
+        
+        return ' '.join(title_cased_words)
+    
+    # STEP 16: Apply smart title casing (but skip for TV shows - handle those separately)
+    # Only apply if the name is not mixed case (to preserve intentional casing like "eBay")
+    if (season is None and episode is None) and (name.isupper() or name.islower()):
+        name = apply_smart_title_case(name)
+    
     # Format TV series name with season/episode if found
     if season is not None or episode is not None:
+        # Apply smart title casing to the show name (if all caps or all lowercase)
+        # Preserve single-word all-caps names (like "BEASTARS") as they may be stylized
+        name = apply_smart_title_case(name, preserve_single_word_caps=True)
+        
         season_str = f"S{season:02d}" if season is not None else ""
         episode_str = f"E{episode:02d}" if episode is not None else ""
         
@@ -547,6 +670,9 @@ def clean_movie_name(name, patterns=None):
                 episode_title_cleaned = re.sub(r'\b\d{2,3}\b(?=\s|$)', ' ', episode_title_cleaned)
             # Clean up spaces
             episode_title_cleaned = re.sub(r'\s+', ' ', episode_title_cleaned).strip()
+            
+            # Apply smart title casing to episode title
+            episode_title_cleaned = apply_smart_title_case(episode_title_cleaned)
             
             # Format with leading number if we found one
             if leading_num:
@@ -646,9 +772,13 @@ def index_movie(file_path, db: Session = None):
             existing_screenshot = db.query(Screenshot).filter(Screenshot.movie_id == existing.id).first()
         has_screenshot = existing_screenshot and os.path.exists(existing_screenshot.shot_path) if existing_screenshot else False
         
-        # If file unchanged and screenshot exists, no update needed
+        # If file unchanged and screenshot exists, still refresh audio info, then skip rest
         if file_unchanged and has_screenshot:
-            return False  # No update needed
+            if existing:
+                audio_types = _extract_audio_types_with_ffprobe(normalized_path)
+                _refresh_movie_audio_rows(db, existing.id, audio_types)
+                db.commit()
+            return False  # No other updates needed
         
         add_scan_log("info", f"  Getting file metadata...")
         
@@ -773,6 +903,10 @@ def index_movie(file_path, db: Session = None):
             if shot_path not in existing_shot_paths:
                 screenshot = Screenshot(movie_id=movie.id, shot_path=shot_path)
                 db.add(screenshot)
+
+        # Refresh audio metadata (languages available)
+        audio_types = _extract_audio_types_with_ffprobe(normalized_path)
+        _refresh_movie_audio_rows(db, movie.id, audio_types)
         
         db.commit()
         return True

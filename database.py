@@ -13,7 +13,7 @@ import logging
 from models import (
     Base,
     Movie, Rating, WatchHistory, SearchHistory, LaunchHistory, 
-    IndexedPath, Config, Screenshot, Image, SchemaVersion,
+    IndexedPath, Config, Screenshot, Image, SchemaVersion, MovieAudio,
     CURRENT_SCHEMA_VERSION
 )
 
