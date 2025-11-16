@@ -24,14 +24,44 @@ Simple movie search and management application for local movie collections. Perf
 
 ## Features
 
-- **Search Movies:** Instant search with autocomplete
-- **Track Watched:** Mark movies as watched/unwatched
-- **View History:** See all movies you've watched
-- **Launch with VLC:** Open movies directly in VLC player
-- **Auto Subtitle Detection:** Automatically finds and loads subtitle files
-- **Manual Subtitle Selection:** Choose from available subtitle files
-- **Filter by Watched:** Show only watched or unwatched movies
-- **Persistent Index:** Scans once, updates incrementally
+- **Fast, simple search with autocomplete**
+  - Instant results as you type
+  - Autocomplete suggestions for quick selection
+  - Search limited to a sensible number of matches for responsiveness (defaults to 50)
+
+- **Incremental, reliable indexing**
+  - One-time deep scan of your library, then only re-indexes changed files
+  - File change detection via modified time and size
+  - Supports common video formats: `.mp4`, `.avi`, `.mkv`, `.mov`, `.wmv`, `.flv`, `.webm`, `.m4v`, `.mpg`, `.mpeg`, `.3gp`
+  - Extracts key metadata such as video length (via Mutagen)
+
+- **Playback via VLC (Windows)**
+  - Launches videos directly in VLC from the browser
+  - Auto-detects VLC in common installation paths and via PATH
+  - Starts VLC without blocking the server
+
+- **Subtitle handling**
+  - Automatic subtitle discovery next to the video
+  - Supports `.srt`, `.sub`, `.vtt`, `.ass`, `.ssa`
+  - Manual selection when multiple subtitle files are available
+
+- **Watched and history tracking**
+  - Mark movies as watched/unwatched
+  - Browse your watch history
+  - Launch/search history kept to a practical recent window (defaults to last 100 entries)
+
+- **Clean, static web UI**
+  - Works locally in your browser
+  - Shows posters/images when available
+  - Falls back to extracted screenshots when images are not present (if ffmpeg is available)
+
+- **Practical performance limits**
+  - Search results intentionally capped to keep the app responsive
+  - Autocomplete suggestions limited to a small, useful set
+
+- **Durable, local storage**
+  - Local SQLite database for library state and history
+  - Data lives in the project folder with your app (portable on the same machine)
 
 ## File Structure
 
@@ -46,16 +76,16 @@ removable-drive/
 │   ├── movie1.mp4
 │   ├── movie1.srt        # Subtitles (optional)
 │   └── ...
-├── movie_index.json       # Auto-generated index
-├── watched_movies.json    # Auto-generated watched list
-├── search_history.json    # Auto-generated history
-└── config.json            # Auto-generated config (movies folder path)
+├── movie_searcher.db      # Auto-generated SQLite database
+├── movie_index.json       # (If present) legacy JSON index - migrated on first run
+├── search_history.json    # (If present) legacy JSON history - migrated on first run
+└── logs/                  # Log files (may be created automatically)
 ```
 
 ## Requirements
 
 - **Python 3.8+** (will be checked automatically)
-- **VLC Media Player** (for playing movies)
+- **VLC Media Player** (optional, only required for launching playback)
 - **Windows** (for start.bat script)
 
 ## Usage
@@ -73,7 +103,7 @@ Type in the search box to find movies. Results appear instantly with autocomplet
 
 ### Launching Movies
 
-Click the "Launch" button next to any movie to open it in VLC. If a subtitle file is found automatically, it will be loaded. You can also manually select a subtitle from the dropdown if multiple are available.
+Click the "Launch" button next to any movie to open it in VLC (Windows). If a subtitle file is found automatically, it will be loaded. You can also manually select a subtitle from the dropdown if multiple are available.
 
 ### Tracking Watched Movies
 
@@ -88,6 +118,15 @@ The application automatically detects subtitle files in the same directory as th
 - Looks for files with the same name (e.g., `movie.mp4` and `movie.srt`)
 - Supports: `.srt`, `.sub`, `.vtt`, `.ass`, `.ssa`
 - If multiple subtitles are found, use the dropdown to select one
+
+## How it works (at a glance)
+
+- **Architecture:** FastAPI backend with a static HTML/JS frontend
+- **Indexing:** One-time deep scan followed by incremental updates using file metadata
+- **Metadata:** Video length extracted via Mutagen; images/screenshots associated for display
+- **Storage:** SQLite database holds the library, history, and state
+- **Playback:** VLC is detected and launched in a separate process on Windows
+- **Limits:** Search results capped for responsiveness; history trimmed to recent entries
 
 ## Stopping the Server
 
@@ -111,13 +150,16 @@ The server runs continuously in a separate window titled "Movie Searcher Server"
 
 **Port already in use:**
 - Close any other instances of the application
-- Or modify `main.py` to use a different port (line 392)
+- Or modify `main.py` to use a different port
 
 ## Technical Details
 
 - **Backend:** FastAPI (Python)
 - **Frontend:** Vanilla HTML/CSS/JavaScript
-- **Data Storage:** SQLite database
+- **Data Storage:** SQLite database (automatic migration from legacy JSON on first run)
+- **Indexing:** Incremental using file mtime + size, with hashing avoidance for speed
+- **Supported video formats:** `.mp4`, `.avi`, `.mkv`, `.mov`, `.wmv`, `.flv`, `.webm`, `.m4v`, `.mpg`, `.mpeg`, `.3gp`
+- **Optional tools:** ffmpeg (to extract screenshots when images are not available)
 - **Port:** 8002 (default)
 - **Host:** localhost (127.0.0.1)
 
@@ -129,4 +171,4 @@ The application distinguishes between two types of images:
 
 - **Screenshots**: Frames extracted from the video file itself using ffmpeg. These are generated by the application during scanning, not pre-existing files.
 
-Both are stored in the database and displayed in the movie gallery. Images are preferred if found, otherwise screenshots are extracted as a fallback.
+Both are stored and displayed in the movie gallery. Images are preferred if found; otherwise, screenshots are extracted when possible.

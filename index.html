@@ -569,7 +569,7 @@
             overflow-x: hidden;
             font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
             font-size: 12px;
-            line-height: 1.5;
+            line-height: 1.25;
             padding: 10px;
         }
         
@@ -591,8 +591,8 @@
         }
         
         .log-entry {
-            margin-bottom: 4px;
-            padding: 2px 0;
+            margin-bottom: 1px;
+            padding: 0;
             word-wrap: break-word;
         }
         
@@ -897,7 +897,7 @@
         }
         
         .movie-card-body {
-            padding: 15px;
+            padding: 15px 15px 5px 15px;
         }
         
         .movie-card-title {
@@ -1295,6 +1295,7 @@
             <div style="margin-bottom: 20px;">
                 <button class="btn" onclick="loadCleaningPatterns()">Refresh Analysis</button>
                 <button class="btn btn-success" onclick="saveCleaningPatterns()" style="margin-left: 10px;">Save Approved Patterns</button>
+                <button class="btn" onclick="recleanAllNames()" style="margin-left: 10px;">Re-clean All Movie Names</button>
             </div>
             
             <div id="cleaningStatus" style="margin-bottom: 20px; padding: 10px; background: #2a2a2a; border-radius: 6px; display: none;"></div>
@@ -1303,6 +1304,17 @@
                 <div style="text-align: center; padding: 40px; color: #666;">
                     Click "Refresh Analysis" to analyze movie names and find suspicious patterns.
                 </div>
+            </div>
+
+            <!-- Simple tester for existing clean_movie_name -->
+            <div style="margin-top: 30px; padding: 15px; background: #1f1f1f; border-radius: 6px;">
+                <h2 style="margin-bottom: 10px;">Name Cleaning Tester</h2>
+                <p style="color: #aaa; margin-bottom: 10px;">Enter a raw filename or label to test the existing cleaning logic. This does not modify anything; it only shows the cleaned title and detected year.</p>
+                <input type="text" id="cleanTesterInput" placeholder='e.g. Harold and Maude (1971) 720p BRrip_sujaidr (pimprg).mkv' style="margin-bottom: 10px;">
+                <div>
+                    <button class="btn" onclick="runCleanTester()">Test Clean Name</button>
+                </div>
+                <div id="cleanTesterResult" style="margin-top: 12px; color: #ddd;"></div>
             </div>
         </div>
         
@@ -1455,7 +1467,9 @@
         }
         
         function handleRoute() {
+            // Hash-first routing
             const route = getRoute();
+
             const pages = document.querySelectorAll('.page');
             pages.forEach(page => page.classList.remove('active'));
             
@@ -1473,6 +1487,19 @@
             const pageMovieDetails = document.getElementById('pageMovieDetails');
             const pageHistory = document.getElementById('pageHistory');
             const pageNameCleaning = document.getElementById('pageNameCleaning');
+
+            // Detail routes (hash-based)
+            if (route.startsWith('/movie/')) {
+                const parts = route.split('/').filter(Boolean); // ["movie", "{id}", "{slug?}"]
+                if (parts.length >= 2) {
+                    const movieId = parseInt(parts[1], 10);
+                    if (pageMovieDetails && !Number.isNaN(movieId)) {
+                        pageMovieDetails.classList.add('active');
+                        loadMovieDetailsById(movieId);
+                        return;
+                    }
+                }
+            }
             
             if (route === '/name-cleaning') {
                 if (pageNameCleaning) {
@@ -1498,31 +1525,71 @@
                      pageSetup.classList.add('active');
                      loadSetupPage();
                  }
-             } else if (route.startsWith('/movie/')) {
-                 const path = decodeURIComponent(route.substring(7));
-                 if (pageMovieDetails) {
-                     pageMovieDetails.classList.add('active');
-                     loadMovieDetails(path);
-                 }
-             } else {
+            } else {
                  navigateTo('/home');
              }
         }
         
         window.addEventListener('hashchange', handleRoute);
+        window.addEventListener('popstate', handleRoute);
         window.addEventListener('load', handleRoute);
+
+        async function runCleanTester() {
+            const inputEl = document.getElementById('cleanTesterInput');
+            const resultEl = document.getElementById('cleanTesterResult');
+            if (!inputEl || !resultEl) return;
+            const text = (inputEl.value || '').toString();
+            if (!text.trim()) {
+                resultEl.innerHTML = '<span style="color:#f44336;">Please enter a value to test.</span>';
+                return;
+            }
+            resultEl.textContent = 'Testing...';
+            try {
+                const response = await fetch('/api/clean-name/test', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ text })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    const errMsg = data && (data.detail || data.message) ? (data.detail || data.message) : 'Request failed';
+                    resultEl.innerHTML = `<span style="color:#f44336;">Error: ${escapeHtml(errMsg)}</span>`;
+                    return;
+                }
+                const cleaned = (data.cleaned_name ?? '').toString();
+                const year = (data.year ?? '') ? data.year : '—';
+                resultEl.innerHTML = `
+                    <div style="margin-top:6px;">
+                        <div><span style="color:#999;">Input:</span> ${escapeHtml(text)}</div>
+                        <div><span style="color:#999;">Cleaned Title:</span> <strong>${escapeHtml(cleaned)}</strong></div>
+                        <div><span style="color:#999;">Detected Year:</span> <strong>${year}</strong></div>
+                    </div>
+                `;
+            } catch (error) {
+                resultEl.innerHTML = `<span style="color:#f44336;">Error: ${escapeHtml(error.message || 'Unknown error')}</span>`;
+            }
+        }
         
         // Movie Card Component
         function createMovieCard(movie) {
-            const imageUrl = movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '';
+            const imageUrl = movie.screenshot_id
+                ? `/api/screenshot/${movie.screenshot_id}`
+                : (movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '');
             const watchedClass = movie.watched ? 'watched' : '';
             const fileSize = movie.size ? formatSize(movie.size) : '';
             const year = movie.year ? movie.year : '';
-            const length = movie.length ? formatTime(movie.length) : '';
+            const length = movie.length ? formatMinutes(movie.length) : '';
             const hasLaunched = movie.has_launched || false;
             
+            // Prefer hash-based ID route if we have an id
+            const slug = (movie.name || '').toString()
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+            const cardClick = `openMovieHash(${movie.id}, '${encodeURIComponent(slug)}')`;
+
             return `
-                <div class="movie-card ${watchedClass}" onclick="navigateTo('/movie/${encodeURIComponent(movie.path)}')">
+                <div class="movie-card ${watchedClass}" onclick="${cardClick}">
                     <div class="movie-card-image">
                         ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" loading="lazy" onerror="this.parentElement.innerHTML='No Image'">` : 'No Image'}
                     </div>
@@ -1545,6 +1612,12 @@
                 </div>
             `;
         }
+
+        // Open detail page using hash-based SPA route
+        function openMovieHash(id, slug) {
+            const safeSlug = (slug || '').toString();
+            navigateTo(`/movie/${id}/${safeSlug}`);
+        }
         
         let selectedIndex = -1;
         let currentResults = [];
@@ -1553,10 +1626,13 @@
         let currentSubtitles = {};
         // Explore page state - only for tracking current page, not for building requests
         let currentExplorePage = 1;
-        const EXPLORE_PER_PAGE = 24;
+        const EXPLORE_PER_PAGE = 20;
         // Request sequencing to handle out-of-order AJAX responses
         let searchRequestCounter = 0;
         let lastDisplayedRequestId = -1;
+        let searchAbortController = null;
+        let searchDebounceTimer = null;
+        let currentResultsAreLite = true;
         
         const searchInput = document.getElementById('searchInput');
         const autocomplete = document.getElementById('autocomplete');
@@ -1586,6 +1662,8 @@
         }
         const statusMessage = document.getElementById('statusMessage');
         let progressInterval = null;
+		let progressPollInFlight = false;
+		let progressAbortController = null;
         
         function showStatus(message, type = 'info') {
             statusMessage.innerHTML = `<div class="status-message ${type}">${escapeHtml(message)}</div>`;
@@ -1601,6 +1679,13 @@
             const s = Math.floor(seconds % 60);
             if (h > 0) return `${h}h ${m}m`;
             return `${m}m ${s}s`;
+        }
+
+        function formatMinutes(seconds) {
+            if (!seconds && seconds !== 0) return '';
+            const minutes = Math.round(Number(seconds) / 60);
+            if (!isFinite(minutes) || minutes <= 0) return '';
+            return `${minutes} min`;
         }
         
         function formatDate(dateStr) {
@@ -1697,6 +1782,13 @@
         function startProgressPolling(progressContainer, progressBar, progressStatus, progressCount, progressFile, scanBtn) {
             if (progressInterval) {
                 clearInterval(progressInterval);
+				progressInterval = null;
+			}
+			// Abort any in-flight poll from a previous interval
+			if (progressAbortController) {
+				try { progressAbortController.abort(); } catch (e) {}
+				progressAbortController = null;
+				progressPollInFlight = false;
             }
             
             // Reset log counter
@@ -1710,8 +1802,15 @@
             }
             
             progressInterval = setInterval(async () => {
+				// Prevent overlapping polls if the previous request hasn't finished
+				if (progressPollInFlight) {
+					return;
+				}
                 try {
-                    const response = await fetch('/api/scan-progress');
+					// Create a new controller per tick so we can cancel on stop
+					progressAbortController = new AbortController();
+					progressPollInFlight = true;
+					const response = await fetch('/api/scan-progress', { signal: progressAbortController.signal });
                     const data = await response.json();
                     
                     if (data.is_scanning) {
@@ -1741,6 +1840,12 @@
                         // Scan complete
                         clearInterval(progressInterval);
                         progressInterval = null;
+						// Abort any pending fetch
+						if (progressAbortController) {
+							try { progressAbortController.abort(); } catch (e) {}
+							progressAbortController = null;
+						}
+						progressPollInFlight = false;
                         // Keep progress container visible to show scan logs
                         // Don't remove 'active' class so log window remains visible
                         if (scanBtn) {
@@ -1779,14 +1884,20 @@
                             showStatus('Scan error: ' + data.status, 'error');
                         }
                     }
-                } catch (error) {
+				} catch (error) {
+					// Ignore AbortError noise when we intentionally cancel
                     console.error('Progress polling error:', error);
+				} finally {
+					progressPollInFlight = false;
+					// Do not reuse old controllers
+					progressAbortController = null;
                 }
             }, 500); // Poll every 500ms
         }
         
-        async function search(query) {
-            if (query.length < 1) {
+        // Debounced, abortable search (lite mode)
+        async function doSearch(query) {
+            if (query.length < 2) {
                 autocomplete.style.display = 'none';
                 if (!watchedViewActive) {
                     results.innerHTML = '';
@@ -1797,10 +1908,18 @@
             // Increment request counter for this search
             searchRequestCounter++;
             const requestId = searchRequestCounter;
+
+            // Abort previous in-flight request
+            try {
+                if (searchAbortController) {
+                    searchAbortController.abort();
+                }
+            } catch (e) { /* ignore */ }
+            searchAbortController = new AbortController();
             
             try {
                 const filterType = getWatchFilter();
-                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&filter_type=${filterType}`);
+                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&filter_type=${filterType}`, { signal: searchAbortController.signal });
                 const data = await response.json();
                 
                 // Only display results if this response is from the latest request or newer than what's displayed
@@ -1811,13 +1930,24 @@
                 }
                 // Otherwise, silently discard this stale response
             } catch (error) {
-                console.error('Search error:', error);
+                if (error.name !== 'AbortError') {
+                    console.error('Search error:', error);
+                }
             }
+        }
+
+        function scheduleSearch(query) {
+            if (searchDebounceTimer) {
+                clearTimeout(searchDebounceTimer);
+            }
+            searchDebounceTimer = setTimeout(() => {
+                doSearch(query);
+            }, 250);
         }
         
         function applyFilters() {
             if (searchInput.value.length > 0) {
-                search(searchInput.value);
+                scheduleSearch(searchInput.value);
             }
         }
         
@@ -1917,10 +2047,9 @@
             galleryHtml += `
                 <div class="media-item large" onclick="showMediaOverlay('${escapeHtml(firstMedia.path)}')">
                     <img src="/api/image?image_path=${encodeURIComponent(firstMedia.path)}" 
-                         alt="${escapeHtml(firstMedia.label)}" 
+                         alt="" 
                          loading="lazy"
                          onerror="this.style.display='none'">
-                    <div class="media-label">${escapeHtml(firstMedia.label)}</div>
                 </div>
             `;
             
@@ -1929,10 +2058,9 @@
                 galleryHtml += `
                     <div class="media-item" onclick="showMediaOverlay('${escapeHtml(media.path)}')">
                         <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
-                             alt="${escapeHtml(media.label)}" 
+                             alt="" 
                              loading="lazy"
                              onerror="this.style.display='none'">
-                        <div class="media-label">${escapeHtml(media.label)}</div>
                     </div>
                 `;
             });
@@ -2362,6 +2490,78 @@
                             <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>
                             <div class="movie-details-meta">
                                 ${movie.year ? `<span>${movie.year}</span>` : ''}
+                                ${movie.length ? `<span>${formatMinutes(movie.length)}</span>` : ''}
+                                ${movie.size ? `<span>${formatSize(movie.size)}</span>` : ''}
+                                ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}
+                            </div>
+                            <div class="movie-details-actions">
+                                ${renderStarRating(movie.path, movie.watched, movie.rating)}
+                                <button class="watched-btn ${movie.watched ? 'watched' : ''}" onclick="toggleWatched('${escapeJsString(movie.path)}', ${movie.watched})">
+                                    ${movie.watched ? '✓ Watched' : 'Mark Watched'}
+                                </button>
+                                ${subtitleSelect}
+                                <button class="launch-btn" onclick="launchMovie('${escapeJsString(movie.path)}')">Launch</button>
+                            </div>
+                            <div class="external-links" style="margin-top: 20px;">
+                                <a href="${externalLinks.letterboxd}" target="_blank" class="external-link">Letterboxd</a>
+                                <a href="${externalLinks.wikipedia}" target="_blank" class="external-link">Wikipedia</a>
+                                <a href="${externalLinks.imdb}" target="_blank" class="external-link">IMDb</a>
+                                <a href="${externalLinks.tmdb}" target="_blank" class="external-link">TMDB</a>
+                                <a href="${externalLinks.google}" target="_blank" class="external-link">Google</a>
+                                <a href="#" onclick="event.preventDefault(); openFolder('${escapeJsString(movie.path)}'); return false;" class="external-link">Open Folder</a>
+                            </div>
+                            <div style="margin-top: 20px; color: #999; font-size: 12px;">
+                                <div>Path: ${escapeHtml(movie.path)}</div>
+                                ${movie.created ? `<div>Created: ${formatDate(movie.created)}</div>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    ${mediaGallery}
+                `;
+            } catch (error) {
+                container.innerHTML = `<div class="empty-state">Error loading movie: ${error.message}</div>`;
+            }
+        }
+
+        async function loadMovieDetailsById(id) {
+            const container = document.getElementById('movieDetailsContainer');
+            container.innerHTML = '<div class="loading">Loading movie details...</div>';
+
+            try {
+                const response = await fetch(`/api/movie/${encodeURIComponent(id)}`);
+                const movie = await response.json();
+
+                if (!response.ok) {
+                    container.innerHTML = `<div class="empty-state">Error: ${movie.detail || 'Failed to load movie'}</div>`;
+                    return;
+                }
+
+                const imageUrl = movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '';
+                const externalLinks = generateExternalLinks(movie.name);
+                const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path);
+
+                // Load subtitles
+                await loadSubtitles(movie.path);
+                const subtitles = currentSubtitles[movie.path] || [];
+                let subtitleSelect = '';
+                if (subtitles.length > 0) {
+                    subtitleSelect = `
+                        <select class="subtitle-select" id="subtitle-${escapeHtml(movie.path)}" onchange="updateSubtitle('${escapeJsString(movie.path)}', this.value)">
+                            <option value="">No subtitle</option>
+                            ${subtitles.map(sub => `<option value="${escapeJsString(sub.path)}">${escapeHtml(sub.name)}</option>`).join('')}
+                        </select>
+                    `;
+                }
+
+                container.innerHTML = `
+                    <div class="movie-details-header">
+                        <div class="movie-details-poster">
+                            ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}">` : 'No Image'}
+                        </div>
+                        <div class="movie-details-info">
+                            <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>
+                            <div class="movie-details-meta">
+                                ${movie.year ? `<span>${movie.year}</span>` : ''}
                                 ${movie.length ? `<span>${formatTime(movie.length)}</span>` : ''}
                                 ${movie.size ? `<span>${formatSize(movie.size)}</span>` : ''}
                                 ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}
@@ -2636,7 +2836,7 @@
             const route = getRoute();
             updateClearButtonVisibility();
             if (route === '/home' || route === '/') {
-                search(e.target.value);
+                scheduleSearch(e.target.value);
             }
         });
         
@@ -2658,11 +2858,13 @@
                 e.preventDefault();
                 if (selectedIndex >= 0 && items[selectedIndex]) {
                     const item = currentResults[selectedIndex];
-                    searchInput.value = item.name;
+                    // Navigate to movie details for selected item
                     autocomplete.style.display = 'none';
-                    displayResults([item]);
                     updateClearButtonVisibility();
+                    const slug = (item.name || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                    openMovieHash(item.id, encodeURIComponent(slug));
                 } else if (currentResults.length > 0) {
+                    // Display current results (already full)
                     displayResults(currentResults);
                     autocomplete.style.display = 'none';
                     updateClearButtonVisibility();
@@ -2777,7 +2979,13 @@
                     const firstMovie = data.playing[0];
                     playingEl.className = 'currently-playing has-movie';
                     playingEl.textContent = firstMovie.name;
-                    playingEl.onclick = () => navigateTo(`/movie/${encodeURIComponent(firstMovie.path)}`);
+                    // Use hash route only when id is available
+                    if (firstMovie.id) {
+                        const slug = (firstMovie.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                        playingEl.onclick = () => openMovieHash(firstMovie.id, encodeURIComponent(slug));
+                    } else {
+                        playingEl.onclick = null;
+                    }
                 } else {
                     playingEl.className = 'currently-playing';
                     playingEl.textContent = 'nothing playing';
@@ -2789,13 +2997,12 @@
         }
         
         function startCurrentlyPlayingPolling() {
-            // Update immediately
+            // Single update on load; no continuous polling
             updateCurrentlyPlaying();
-            // Then poll every 3 seconds
             if (currentlyPlayingInterval) {
                 clearInterval(currentlyPlayingInterval);
+                currentlyPlayingInterval = null;
             }
-            currentlyPlayingInterval = setInterval(updateCurrentlyPlaying, 3000);
         }
         
         function stopCurrentlyPlayingPolling() {
@@ -3072,11 +3279,44 @@
                 status.textContent = `Error saving patterns: ${error.message}`;
             }
         }
+
+        async function recleanAllNames() {
+            const status = document.getElementById('cleaningStatus');
+            status.style.display = 'block';
+            status.style.background = '#2a2a2a';
+            status.style.color = '#aaa';
+            status.textContent = 'Re-cleaning all movie names...';
+            
+            try {
+                const response = await fetch('/api/admin/reclean-names', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    status.style.background = '#2d5a2d';
+                    status.style.color = '#aaffaa';
+                    status.textContent = data.message || `Re-cleaned ${data.updated} of ${data.total} movie names`;
+                } else {
+                    status.style.background = '#5a2d2d';
+                    status.style.color = '#ffaaaa';
+                    status.textContent = `Error: ${data.detail || 'Failed to re-clean names'}`;
+                }
+            } catch (error) {
+                status.style.background = '#5a2d2d';
+                status.style.color = '#ffaaaa';
+                status.textContent = `Error: ${error.message || 'Unknown error'}`;
+            }
+        }
+        
+        // Ensure function is globally accessible
+        window.recleanAllNames = recleanAllNames;
         
         // Load stats and folder path on page load
         loadStats();
         loadCurrentFolder();
-        startCurrentlyPlayingPolling();
+        updateCurrentlyPlaying();
     </script>
 </body>
 </html>

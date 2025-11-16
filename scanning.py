@@ -12,6 +12,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Callable
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.sql import func
 
 # Database imports
 from database import SessionLocal, Movie, Screenshot, Image, IndexedPath, Config
@@ -138,8 +140,13 @@ def filter_yts_images(image_paths):
     for img_path in image_paths:
         # Check if filename contains www.YTS.AM
         img_name = Path(img_path).name
-        if "www.YTS.AM" not in img_name:
-            filtered.append(img_path)
+        if "www.yts" in img_name.lower():
+            continue
+        if "www.yify" in img_name.lower():
+            continue
+        if "torrents" in img_name.lower():
+            continue
+        filtered.append(img_path)
     return filtered
 
 def extract_year_from_name(name):
@@ -184,32 +191,85 @@ def load_cleaning_patterns():
     }
 
 def clean_movie_name(name, patterns=None):
-    """Clean movie name using approved patterns and extract year"""
+    """Clean movie name using approved patterns and extract year.
+    Can handle both filenames and full paths. For full paths, extracts season/episode info.
+    """
     if patterns is None:
         patterns = load_cleaning_patterns()
     
     original_name = name
     year = None
+    season = None
+    episode = None
     
+    # Strip "Path: " prefix if present (from UI display format)
+    if name.startswith("Path: "):
+        name = name[6:].strip()
+    
+    # Check if input is a full path (contains path separators)
+    is_full_path = '/' in name or '\\' in name
+    path_obj = None
+    parent_folder = None
+    
+    if is_full_path:
+        # Extract path components
+        path_obj = Path(name)
+        parent_folder = path_obj.parent.name if path_obj.parent.name else None
+        # Use filename for initial cleaning
+        name = path_obj.stem
+    else:
+        # Just a filename, use as-is
+        name = name
+    
+    # STEP 1: Normalize separators and trivial punctuation
+    # - Convert runs of '.' or '_' into single spaces
+    # - Collapse multiple spaces
+    # - Trim leading/trailing spaces/dots/dashes/underscores
+    name = re.sub(r'[._]+', ' ', name)
+    name = re.sub(r'\s+', ' ', name).strip(' \t.-_')
+
+    # STEP 2: Remove consecutive dots (in case any remain due to other chars)
+    name = re.sub(r'\.{2,}', ' ', name)
+
+    # STEP 3: Strip explicit trailing '-' or '.' (defensive after earlier trims)
+    name = re.sub(r'[\s\-\.]+$', '', name)
+
+    # Helper: forbidden markers to strip or detect inside brackets
+    forbidden_markers = [
+        r'rarbg', r'h264', r'vppv', r'yts', r'evo', r'etrg', r'fgp', r'ano',
+        r'proper', r'repack', r'rerip', r'sample',
+        r'webrip', r'web[-\s]*dl', r'webdl', r'hdtv', r'bluray', r'blu[-\s]*ray',
+        r'bdrip', r'brrip', r'remux', r'dvdrip', r'cam', r'ts', r'tc',
+        r'x264', r'x265', r'hevc', r'h\.?264', r'h\.?265', r'avc',
+        r'aac', r'ac3', r'dts(?:-?hd)?', r'truehd', r'atmos', r'mp3', r'eac3',
+        r'2160p', r'1080p', r'720p', r'480p', r'4k', r'uhd',
+        r'hdr10?', r'dolby\s*vision', r'\b5\.1\b', r'\b7\.1\b'
+    ]
+    forbidden_union = r'(?:' + '|'.join(forbidden_markers) + r')'
+
     # Extract year first if enabled
     if patterns.get('year_patterns', True):
         year = extract_year_from_name(name)
-        # Remove year from name
+        # If year found, remove everything from the year onwards (including parentheses/brackets around year)
         if year:
-            name = re.sub(rf'\b{year}\b', '', name)
+            # Pattern to match: optional opening bracket/paren, whitespace, year (with word boundaries), whitespace, optional closing bracket/paren, and everything after
+            # This handles: (1971), [1971], {1971}, <1971>, or just 1971
+            year_with_context_pattern = rf'(?:[([{{<]\s*)?\b{year}\b\s*(?:[)\]}}>])?.*$'
+            # Replace the year and everything after it with empty string
+            name = re.sub(year_with_context_pattern, '', name, count=1).strip()
     
-    # Remove exact strings
+    # STEP 4: Remove exact strings (from DB-configured patterns)
     for exact_str in patterns.get('exact_strings', set()):
         name = name.replace(exact_str, ' ')
     
-    # Remove bracket patterns [anything]
+    # STEP 5: Remove bracket content if configured via patterns list
     for pattern in patterns.get('bracket_patterns', []):
         if pattern == '[anything]':
             name = re.sub(r'\[.*?\]', '', name)
         else:
             name = name.replace(pattern, ' ')
     
-    # Remove parentheses patterns (anything)
+    # STEP 6: Remove parentheses content if configured via patterns list
     for pattern in patterns.get('parentheses_patterns', []):
         if pattern == '(anything)':
             # Remove parentheses content, but be smart about it
@@ -217,6 +277,152 @@ def clean_movie_name(name, patterns=None):
             name = re.sub(r'\([^)]*\)', '', name)
         else:
             name = name.replace(pattern, ' ')
+
+    # STEP 7: Remove common quality/resolution/source/codec/audio tags
+    quality_source_patterns = [
+        r'\b(?:2160p|1080p|720p|480p|4k|uhd)\b',
+        r'\b(?:hdr|hdr10|dolby\s*vision|dv)\b',
+        r'\b(?:webrip|web[-\s]*dl|webdl|hdtv|bluray|blu[-\s]*ray|b[dr]rip|remux|dvdrip|cam|ts|tc)\b',
+        r'\b(?:x264|x265|hevc|h\.?264|h\.?265|avc)\b',
+        r'\b(?:aac|ac3|dts(?:-?hd)?|truehd|atmos|mp3|eac3)\b',
+        r'\b(?:5\.1|7\.1)\b',
+        r'\b(?:rarbg|vppv|yts|evo|etrg|fgp|ano)\b',
+        r'\b(?:h264)\b',
+    ]
+    for p in quality_source_patterns:
+        name = re.sub(p, ' ', name, flags=re.IGNORECASE)
+
+    # STEP 8: Remove edition/packaging flags
+    edition_patterns = [
+        r'\b(?:proper|repack|rerip)\b',
+        r'\b(?:extended|unrated|remastered|final\s*cut|ultimate\s*edition|special\s*edition|theatrical\s*cut)\b',
+        r'\b(?:criterion\s*collection)\b',
+    ]
+    for p in edition_patterns:
+        name = re.sub(p, ' ', name, flags=re.IGNORECASE)
+
+    # STEP 9: Extract season/episode info BEFORE removing tags (for TV series)
+    episode_title = None
+    if is_full_path and path_obj:
+        # Extract season from parent folder name (e.g., "Season 1", "Season 01", "S1", "S01")
+        parent_str = str(path_obj.parent.name) if path_obj.parent.name else str(path_obj.parent)
+        season_match = re.search(r'(?:Season|season)\s*(\d+)', parent_str, re.IGNORECASE)
+        if not season_match:
+            season_match = re.search(r'\bS(\d+)\b', parent_str, re.IGNORECASE)
+        if season_match:
+            season = int(season_match.group(1))
+        
+        # Extract episode from original filename (before cleaning)
+        original_filename = path_obj.stem
+        episode_match = re.search(r'[_-](\d+)(?:\.|$)', original_filename)
+        if not episode_match:
+            episode_match = re.search(r'\bE(\d+)\b', original_filename, re.IGNORECASE)
+        if not episode_match:
+            episode_match = re.search(r'\b(?:ep|episode)\s*(\d+)\b', original_filename, re.IGNORECASE)
+        if episode_match:
+            episode = int(episode_match.group(1))
+        
+        # Extract episode title from filename (text after SXXEXX or episode number)
+        # For example: "024 S02E01 Points of Departure" -> "024 Points of Departure"
+        if season is not None or episode is not None:
+            # Try to find text after SXXEXX pattern
+            sxxexx_match = re.search(r'\bS\d{2}E\d{2}\b\s*(.+)$', original_filename, re.IGNORECASE)
+            if sxxexx_match:
+                episode_title = sxxexx_match.group(1).strip()
+            else:
+                # Try to find text after episode number
+                ep_match = re.search(r'\bE\d+\b\s*(.+)$', original_filename, re.IGNORECASE)
+                if ep_match:
+                    episode_title = ep_match.group(1).strip()
+                else:
+                    # Try to find text after standalone episode number
+                    num_match = re.search(r'^\s*(\d+)\s+(.+)$', original_filename)
+                    if num_match:
+                        episode_title = original_filename.strip()
+        
+        # Extract year from parent folder if not found in filename yet
+        if year is None and parent_str:
+            parent_year = extract_year_from_name(parent_str)
+            if parent_year:
+                year = parent_year
+        
+        # If we found season/episode, try to get show name from parent or grandparent folder
+        if season is not None or episode is not None:
+            # First try parent folder (for cases like "Babylon 5 (1993)")
+            parent_name = parent_str
+            if parent_name and parent_name.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', 'season 1', 'season 2', 's1', 's2']:
+                # Check if parent folder looks like a show name (not a season folder)
+                if not re.search(r'(?:Season|season)\s*\d+|^\s*S\d+\s*$', parent_name, re.IGNORECASE):
+                    # Use parent folder as show name, but clean it first
+                    show_name = parent_name
+                    # Remove year in parentheses
+                    show_name = re.sub(r'\([^)]*\)', '', show_name)
+                    # Remove common folder patterns
+                    show_name = re.sub(r'\[.*?\]', '', show_name)
+                    show_name = re.sub(r'\s+', ' ', show_name).strip()
+                    if show_name:
+                        name = show_name
+                        # If we used parent folder, we already extracted year from it above
+            else:
+                # Fall back to grandparent folder (the show name, skipping the season folder)
+                grandparent = path_obj.parent.parent.name if path_obj.parent.parent.name else None
+                if grandparent and grandparent.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos']:
+                    # Use grandparent folder as show name, but clean it first
+                    show_name = grandparent
+                    # Remove common folder patterns
+                    show_name = re.sub(r'\[.*?\]', '', show_name)
+                    show_name = re.sub(r'\(.*?\)', '', show_name)
+                    show_name = re.sub(r'\s+', ' ', show_name).strip()
+                    if show_name:
+                        name = show_name
+    
+    # Remove season/episode tags from name (they're already extracted)
+    # But preserve episode titles that come after SXXEXX (e.g., "S02E01 Points of Departure")
+    # Only remove the SXXEXX pattern itself, not text after it
+    name = re.sub(r'\bS\d{2}E\d{2}\b\s*', ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'\bSeason\s*\d+\b', ' ', name, flags=re.IGNORECASE)
+    # Only remove standalone E\d+ that's not part of SXXEXX (already removed above)
+    # Don't remove E\d+ if it's followed by text (episode title)
+    name = re.sub(r'\bE\d+\b(?=\s|$)', ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'\b(?:ep|episode)\s*\d+\b', ' ', name, flags=re.IGNORECASE)
+    # Remove leading episode numbers (e.g., "024 S02E01" -> remove "024")
+    name = re.sub(r'^\s*\d+\s+', ' ', name)
+    # Remove episode numbers that are standalone or after dashes/underscores at the start
+    name = re.sub(r'^[_-]\d+(?:\.|$)', ' ', name)
+
+    # STEP 10: Remove release group suffixes like "-RARBG", "-YTS", "-EVO" at end
+    # Only match if preceded by dash (not space) to avoid removing legitimate title words
+    name = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', name)
+
+    # STEP 11: Remove language tags when dashed or standalone (e.g., "- FRENCH")
+    name = re.sub(r'[\s\-\_]*\b(eng|english|french|german|spanish|italian|russian|japanese|korean|hindi)\b', ' ', name, flags=re.IGNORECASE)
+
+    # STEP 12: Bracket-aware truncation if illegal content found AFTER a leading plain title
+    # Pattern: <plain text> <[bracket with forbidden]> <anything>  → keep only <plain text>
+    # But DO NOT apply if the name starts with brackets (to avoid losing true title).
+    # Supports (), [], {}, <> as brackets
+    bracket_any = r'(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\}|<[^>]*>)'
+    m = re.match(r'^(?P<prefix>[^()\[\]{}<>]+?)\s*(?P<bracket>' + bracket_any + r')\s*(?P<suffix>.+)$', name)
+    if m:
+        prefix = m.group('prefix').strip()
+        bracket = m.group('bracket')
+        # Extract inner text of the bracket
+        inner = re.sub(r'^[\(\[\{<]|[\)\]\}>]$', '', bracket)
+        if re.search(forbidden_union, inner, flags=re.IGNORECASE):
+            # Only keep prefix; drop bracket and everything after
+            name = prefix
+
+    # STEP 13: Normalize leftover punctuation/spaces: remove stray dashes/underscores and extra spaces
+    # Preserve dashes that are part of the title (e.g., "L'ultima onda - The Last Wave")
+    # Only convert dashes to spaces if they're clearly separators (multiple dashes, or at start/end)
+    # Single dashes surrounded by spaces are likely part of the title, so preserve them
+    name = re.sub(r'[–—\-]{2,}', ' ', name)  # multiple dashes (separators)
+    name = re.sub(r'[–—\-]+\s*$', ' ', name)  # trailing dashes
+    name = re.sub(r'^\s*[–—\-]+', ' ', name)  # leading dashes
+    name = re.sub(r'\s+', ' ', name).strip(' _-.')
+
+    # STEP 14: Final cleanup for trailing punctuation
+    name = re.sub(r'[.\-]+$', '', name).strip()
     
     # Clean up multiple spaces and trim
     name = re.sub(r'\s+', ' ', name).strip()
@@ -224,6 +430,17 @@ def clean_movie_name(name, patterns=None):
     # If name becomes empty, use original
     if not name:
         name = original_name
+    
+    # Format TV series name with season/episode if found
+    if season is not None or episode is not None:
+        season_str = f"S{season:02d}" if season is not None else ""
+        episode_str = f"E{episode:02d}" if episode is not None else ""
+        if season_str and episode_str:
+            name = f"{name} {season_str}{episode_str}"
+        elif season_str:
+            name = f"{name} {season_str}"
+        elif episode_str:
+            name = f"{name} {episode_str}"
     
     return name, year
 
@@ -309,6 +526,22 @@ def index_movie(file_path, db: Session = None):
         
         # Try to get video length
         length = get_video_length(normalized_path)
+
+        # Exclude files shorter than 60 seconds when length is known
+        if length is not None and length < 60:
+            add_scan_log("warning", f"  Skipping (too short: {length:.1f}s)")
+            # If it exists in DB already, remove it to enforce exclusion
+            if existing:
+                try:
+                    # Delete related screenshots and images first
+                    db.query(Screenshot).filter(Screenshot.movie_id == existing.id).delete()
+                    db.query(Image).filter(Image.movie_id == existing.id).delete()
+                    db.delete(existing)
+                    db.commit()
+                    add_scan_log("info", f"  Removed existing DB entry for short file")
+                except Exception:
+                    db.rollback()
+            return False
         
         # Find images in folder
         # "images" = media files that came with the movie (posters, covers, etc.)
@@ -348,9 +581,8 @@ def index_movie(file_path, db: Session = None):
         # Filter out YTS images before storing in database (defense in depth)
         images = filter_yts_images(images)
         
-        # Clean movie name and extract year
-        raw_name = normalized_path_obj.stem
-        cleaned_name, year = clean_movie_name(raw_name)
+        # Clean movie name and extract year (pass full path to handle TV series with season/episode)
+        cleaned_name, year = clean_movie_name(normalized_path)
         
         # Create or update movie record
         if existing:
@@ -471,7 +703,13 @@ def scan_directory(root_path, state=None, progress_callback=None):
                     progress_callback(indexed, total_files, file_path.name)
         
         # Mark path as indexed
-        db.merge(IndexedPath(path=str(root_path)))
+        stmt = sqlite_insert(IndexedPath).values(path=str(root_path))
+        # Upsert on UNIQUE(path): update the 'updated' timestamp if it exists
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[IndexedPath.path],
+            set_={"updated": func.now()}
+        )
+        db.execute(stmt)
         db.commit()
         
         add_scan_log("success", f"Scan complete: {indexed} files processed, {updated} updated")

@@ -7,14 +7,20 @@
 	"settings": {
 		"files.exclude": {
 			"**/venv": true,
-			"**/venv/**": true
+			"**/venv/**": true,
+			"**/movie_index.json": true,
+			"**/movie_searcher.db": true
 		},
 		"search.exclude": {
 			"**/venv": true,
-			"**/venv/**": true
+			"**/venv/**": true,
+			"**/movie_index.json": true,
+			"**/movie_searcher.db": true
 		},
 		"files.watcherExclude": {
-			"**/venv/**": true
+			"**/venv/**": true,
+			"**/movie_index.json": true,
+			"**/movie_searcher.db": true
 		}
 	}
 }

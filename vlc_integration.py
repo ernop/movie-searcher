@@ -10,6 +10,12 @@ from pathlib import Path
 from datetime import datetime
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+import time
+
+if os.name == 'nt':
+	# Windows-specific imports via ctypes to avoid extra dependencies
+	import ctypes
+	from ctypes import wintypes
 
 # Import database models and session
 from database import SessionLocal, Movie, LaunchHistory, WatchHistory
@@ -246,6 +252,74 @@ def get_vlc_command_lines():
     
     return []
 
+def _find_vlc_window_handle():
+	"""Locate a VLC window handle on Windows by enumerating top-level windows.
+	Returns the first matching HWND or 0 if none found.
+	"""
+	if os.name != 'nt':
+		return 0
+
+	user32 = ctypes.windll.user32
+	kernel32 = ctypes.windll.kernel32
+
+	EnumWindows = user32.EnumWindows
+	EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+	IsWindowVisible = user32.IsWindowVisible
+	GetWindowTextW = user32.GetWindowTextW
+	GetWindowTextLengthW = user32.GetWindowTextLengthW
+
+	found_hwnd = ctypes.c_void_p(0)
+
+	def _callback(hwnd, lParam):
+		if not IsWindowVisible(hwnd):
+			return True
+		length = GetWindowTextLengthW(hwnd)
+		if length == 0:
+			return True
+		buffer = ctypes.create_unicode_buffer(length + 1)
+		GetWindowTextW(hwnd, buffer, length + 1)
+		title = buffer.value or ""
+		# Heuristic: VLC window title usually contains "VLC"
+		if "vlc" in title.lower():
+			# Store and stop enumeration
+			found_hwnd.value = hwnd
+			return False
+		return True
+
+	EnumWindows(EnumWindowsProc(_callback), 0)
+	return found_hwnd.value or 0
+
+def _bring_window_to_foreground(hwnd):
+	"""Bring a given window to the foreground on Windows."""
+	if os.name != 'nt' or not hwnd:
+		return False
+	user32 = ctypes.windll.user32
+	ShowWindow = user32.ShowWindow
+	SetForegroundWindow = user32.SetForegroundWindow
+	# SW_RESTORE = 9 brings the window to its previous size/position if minimized/maximized
+	SW_RESTORE = 9
+	ShowWindow(hwnd, SW_RESTORE)
+	# Attempt to set foreground
+	return bool(SetForegroundWindow(hwnd))
+
+def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1):
+	"""Attempt to bring a VLC window to the foreground on Windows.
+	Will poll for up to wait_timeout_seconds to allow VLC to create its window.
+	"""
+	if os.name != 'nt':
+		return False
+
+	end_time = time.time() + wait_timeout_seconds
+	last_result = False
+	while time.time() < end_time:
+		hwnd = _find_vlc_window_handle()
+		if hwnd:
+			last_result = _bring_window_to_foreground(hwnd)
+			if last_result:
+				return True
+		time.sleep(poll_interval_seconds)
+	return last_result
+
 def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False):
     """Launch movie in VLC with optional subtitle"""
     steps = []
@@ -340,6 +414,21 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False):
         steps.append(f"  ERROR: {error_msg}")
         results.append({"step": 5, "status": "error", "message": error_msg})
         raise
+
+    # Step 5.1: Bring VLC to foreground on Windows
+    if os.name == 'nt':
+        steps.append("Step 5.1: Bringing VLC window to foreground (Windows)")
+        try:
+            focused = bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1)
+            if focused:
+                steps.append("  VLC window brought to foreground")
+                results.append({"step": 5.1, "status": "success", "message": "Foreground set"})
+            else:
+                steps.append("  WARNING: Unable to bring VLC to foreground")
+                results.append({"step": 5.1, "status": "warning", "message": "Failed to set foreground"})
+        except Exception as e:
+            steps.append(f"  WARNING: Error attempting foreground: {str(e)}")
+            results.append({"step": 5.1, "status": "warning", "message": f"Foreground error: {str(e)}"})
     
     # Step 6: Save to history
     steps.append("Step 6: Saving to history")
