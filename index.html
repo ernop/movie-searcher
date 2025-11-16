@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Movie Searcher</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
         * {
             margin: 0;
@@ -645,6 +646,8 @@
             border: 2px solid #3a3a3a;
             transition: border-color 0s, transform 0s;
             background: #1a1a1a;
+            width: fit-content;
+            height: fit-content;
         }
         
         .media-item:hover {
@@ -680,6 +683,8 @@
             display: block;
             max-width: 300px;
             max-height: 300px;
+            width: auto;
+            height: auto;
             object-fit: contain;
             background: #1a1a1a;
         }
@@ -717,6 +722,8 @@
         .media-overlay img {
             max-width: 90%;
             max-height: 90%;
+            width: auto;
+            height: auto;
             object-fit: contain;
         }
         
@@ -1689,13 +1696,13 @@
             <input type="hidden" id="screenshotConfigMovieId">
             <div style="margin-bottom: 20px;">
                 <label style="color: #fff; display: block; margin-bottom: 8px;">Interval (minutes):</label>
-                <input type="number" id="screenshotConfigInterval" value="3" min="1" max="60" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #3a3a3a; color: #fff; border-radius: 4px;">
+                <input type="number" id="screenshotConfigInterval" value="3" min="0.1" max="60" step="0.1" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #3a3a3a; color: #fff; border-radius: 4px;">
             </div>
             <div style="margin-bottom: 20px;">
-                <label style="color: #fff; display: flex; align-items: center; gap: 8px;">
-                    <input type="checkbox" id="screenshotConfigBurnSubtitles">
-                    <span>Burn in English subtitles (if available)</span>
-                </label>
+                <label style="color: #fff; display: block; margin-bottom: 8px;">Subtitle file (optional):</label>
+                <select id="screenshotConfigSubtitle" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #3a3a3a; color: #fff; border-radius: 4px;">
+                    <option value="">No subtitle</option>
+                </select>
             </div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button onclick="closeScreenshotConfig()" style="background: #3a3a3a; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">Cancel</button>
@@ -2369,6 +2376,10 @@
             }
         }
         
+        let currentMediaArray = [];
+        let currentMediaIndex = -1;
+        let currentVideoPath = null;
+        
         function renderMediaGallery(images, screenshots, itemPath, movieId) {
             const allMedia = [];
             
@@ -2399,8 +2410,13 @@
             }
             
             if (allMedia.length === 0) {
+                currentMediaArray = [];
                 return '';
             }
+            
+            // Store media array globally for navigation
+            currentMediaArray = allMedia;
+            currentVideoPath = itemPath;
             
             let galleryHtml = '<div class="media-gallery">';
             
@@ -2422,7 +2438,7 @@
                         }
                     }
                     galleryHtml += `
-                        <div class="media-item" onclick="showMediaOverlay('${escapeJsString(media.path)}', ${timestamp !== null ? timestamp : 'null'}, '${escapeJsString(itemPath)}')" style="position: relative;">
+                        <div class="media-item" onclick="showMediaOverlay('${escapeJsString(media.path)}', ${timestamp !== null ? timestamp : 'null'}, '${escapeJsString(itemPath)}', ${idx})" style="position: relative;">
                             <button 
                                 class="get-more-btn" 
                                 title="Get more screenshots" 
@@ -2435,7 +2451,8 @@
                             <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
                                  alt="" 
                                  loading="lazy"
-                                 onerror="this.style.display='none'">
+                                 onerror="console.error('Failed to load image:', '${escapeJsString(media.path)}'); this.style.display='none'"
+                                 onload="console.log('Loaded image:', '${escapeJsString(media.path)}')">
                         </div>
                     `;
                 } else {
@@ -2449,13 +2466,14 @@
                         }
                     }
                     galleryHtml += `
-                        <div class="media-item" onclick="showMediaOverlay('${escapeJsString(media.path)}', ${timestamp !== null ? timestamp : 'null'}, '${escapeJsString(itemPath)}')" style="position: relative;">
+                        <div class="media-item" onclick="showMediaOverlay('${escapeJsString(media.path)}', ${timestamp !== null ? timestamp : 'null'}, '${escapeJsString(itemPath)}', ${idx})" style="position: relative;">
                             ${launchBtnHtml}
                             ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
                             <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
                                  alt="" 
                                  loading="lazy"
-                                 onerror="this.style.display='none'">
+                                 onerror="console.error('Failed to load image:', '${escapeJsString(media.path)}'); this.style.display='none'"
+                                 onload="console.log('Loaded image:', '${escapeJsString(media.path)}')">
                         </div>
                     `;
                 }
@@ -2476,7 +2494,7 @@
             return `${minutes}:${String(secs).padStart(2, '0')}`;
         }
         
-        function showMediaOverlay(imagePath, timestampSeconds, videoPath) {
+        function showMediaOverlay(imagePath, timestampSeconds, videoPath, index) {
             const overlay = document.getElementById('mediaOverlay');
             const img = document.getElementById('mediaOverlayImage');
             let controls = document.getElementById('mediaOverlayControls');
@@ -2486,6 +2504,10 @@
                 controls.style.cssText = 'position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000;';
                 overlay.appendChild(controls);
             }
+            
+            // Store current index for navigation
+            currentMediaIndex = index !== undefined ? index : -1;
+            
             img.src = `/api/image?image_path=${encodeURIComponent(imagePath)}`;
             
             // Show controls for screenshots with timestamps
@@ -2505,11 +2527,55 @@
             }
             
             overlay.classList.add('active');
+            
+            // Add keyboard event listener if not already added
+            if (!overlay.dataset.keyboardListener) {
+                overlay.dataset.keyboardListener = 'true';
+                document.addEventListener('keydown', handleMediaOverlayKeydown);
+            }
+        }
+        
+        function handleMediaOverlayKeydown(event) {
+            const overlay = document.getElementById('mediaOverlay');
+            if (!overlay.classList.contains('active')) {
+                return;
+            }
+            
+            // Only handle if overlay is active and we have media array
+            if (currentMediaArray.length === 0 || currentMediaIndex < 0) {
+                return;
+            }
+            
+            if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                navigateMedia(-1);
+            } else if (event.key === 'ArrowRight') {
+                event.preventDefault();
+                navigateMedia(1);
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closeMediaOverlay();
+            }
+        }
+        
+        function navigateMedia(direction) {
+            if (currentMediaArray.length === 0 || currentMediaIndex < 0) {
+                return;
+            }
+            
+            const newIndex = currentMediaIndex + direction;
+            if (newIndex < 0 || newIndex >= currentMediaArray.length) {
+                return;
+            }
+            
+            const media = currentMediaArray[newIndex];
+            showMediaOverlay(media.path, media.timestamp, currentVideoPath, newIndex);
         }
         
         function closeMediaOverlay() {
             const overlay = document.getElementById('mediaOverlay');
             overlay.classList.remove('active');
+            currentMediaIndex = -1;
         }
         
         async function jumpToVideo(videoPath, timestampSeconds) {
@@ -2541,7 +2607,7 @@
             }
         }
         
-        function showScreenshotConfig(movieId) {
+        async function showScreenshotConfig(movieId) {
             if (!movieId) {
                 showStatus('Movie ID not available', 'error');
                 return;
@@ -2549,6 +2615,34 @@
             const dialog = document.getElementById('screenshotConfigDialog');
             const movieIdInput = document.getElementById('screenshotConfigMovieId');
             movieIdInput.value = movieId;
+            
+            // Load movie details to get path for subtitle lookup
+            try {
+                const movieResp = await fetch(`/api/movie/${movieId}`);
+                if (movieResp.ok) {
+                    const movieData = await movieResp.json();
+                    const videoPath = movieData.path;
+                    
+                    // Load available subtitles
+                    const subtitles = await loadSubtitles(videoPath);
+                    const subtitleSelect = document.getElementById('screenshotConfigSubtitle');
+                    
+                    // Clear existing options except "No subtitle"
+                    subtitleSelect.innerHTML = '<option value="">No subtitle</option>';
+                    
+                    // Add subtitle options
+                    subtitles.forEach(sub => {
+                        const option = document.createElement('option');
+                        option.value = sub.path;
+                        option.textContent = sub.name;
+                        subtitleSelect.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading subtitles:', error);
+                // Still show dialog even if subtitle loading fails
+            }
+            
             dialog.style.display = 'flex';
         }
         
@@ -2563,8 +2657,9 @@
                 showStatus('Movie ID is required', 'error');
                 return;
             }
-            const interval = parseInt(document.getElementById('screenshotConfigInterval').value) || 3;
-            const burnSubtitles = document.getElementById('screenshotConfigBurnSubtitles').checked;
+            const interval = parseFloat(document.getElementById('screenshotConfigInterval').value) || 3;
+            const subtitleSelect = document.getElementById('screenshotConfigSubtitle');
+            const subtitlePath = subtitleSelect && subtitleSelect.value ? subtitleSelect.value : null;
             
             try {
                 const resp = await fetch('/api/movie/screenshots/interval', {
@@ -2574,7 +2669,7 @@
                         movie_id: movieId, 
                         every_minutes: interval, 
                         async_mode: true,
-                        burn_subtitles: burnSubtitles
+                        subtitle_path: subtitlePath
                     })
                 });
                 const data = await resp.json();
@@ -2594,8 +2689,21 @@
                     const maxPolls = 15;
                     const pollIntervalMs = 2000;
                     const iv = setInterval(() => {
+                        // Stop polling if user navigated away from movie details page
+                        const pageMovieDetails = document.getElementById('pageMovieDetails');
+                        if (!pageMovieDetails || !pageMovieDetails.classList.contains('active')) {
+                            clearInterval(iv);
+                            return;
+                        }
                         const container = document.getElementById('movieDetailsContainer');
                         if (!container || !container.innerHTML) {
+                            clearInterval(iv);
+                            return;
+                        }
+                        // Verify we're still on the same movie by checking route
+                        const route = getRoute();
+                        const expectedRoute = `/movie/${movieId}`;
+                        if (!route.startsWith(expectedRoute)) {
                             clearInterval(iv);
                             return;
                         }
@@ -2613,46 +2721,6 @@
             }
         }
 
-        async function getMoreScreenshots(videoPath) {
-            const btns = document.querySelectorAll('.get-more-btn');
-            btns.forEach(b => { b.disabled = true; b.textContent = 'Queuing...'; });
-            try {
-                const resp = await fetch('/api/movie/screenshots/interval', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: videoPath, every_minutes: 3, async_mode: true })
-                });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    showStatus('Failed to queue screenshots: ' + (data.detail || 'error'), 'error');
-                } else {
-                    showStatus('Queued ' + (data.queued || 0) + ' screenshots', 'success');
-                    // Refresh details after a short delay, then start a short-lived polling
-                    setTimeout(() => loadMovieDetails(videoPath), 1200);
-                    // Poll updates for a short window so new screenshots appear as they are processed
-                    let polls = 0;
-                    const maxPolls = 15; // ~30 seconds
-                    const pollIntervalMs = 2000;
-                    const iv = setInterval(() => {
-                        // If details page is no longer showing this movie, stop polling
-                        const container = document.getElementById('movieDetailsContainer');
-                        if (!container || !container.innerHTML || !container.innerHTML.includes(escapeHtml(videoPath))) {
-                            clearInterval(iv);
-                            return;
-                        }
-                        loadMovieDetails(videoPath);
-                        polls += 1;
-                        if (polls >= maxPolls) {
-                            clearInterval(iv);
-                        }
-                    }, pollIntervalMs);
-                }
-            } catch (e) {
-                showStatus('Failed to queue screenshots: ' + e.message, 'error');
-            } finally {
-                btns.forEach(b => { b.disabled = false; b.textContent = 'Get more'; });
-            }
-        }
         
         async function displayResults(items) {
             // Backward-compatible full replace render
@@ -2768,16 +2836,41 @@
                         // Prefer watch_status if available, fallback to watched boolean
                         currentWatchStatus = currentItem.watch_status !== undefined ? currentItem.watch_status : (currentItem.watched ? true : null);
                     } else {
-                        // Fallback: fetch movie details
+                        // Fallback: try to get ID from route first, then fetch by path if needed
+                        let movieData = null;
                         try {
-                            const movieResponse = await fetch(`/api/movie?path=${encodeURIComponent(path)}`);
-                            if (movieResponse.ok) {
-                                const movieData = await movieResponse.json();
-                                currentWatchStatus = movieData.watch_status !== undefined ? movieData.watch_status : (movieData.watched ? true : null);
-                            } else {
-                                currentWatchStatus = null; // Default to unset
+                            const route = getRoute();
+                            if (route.startsWith('/movie/')) {
+                                const parts = route.split('/').filter(Boolean);
+                                if (parts.length >= 2) {
+                                    const movieId = parseInt(parts[1], 10);
+                                    if (!Number.isNaN(movieId)) {
+                                        const movieResponse = await fetch(`/api/movie/${movieId}`);
+                                        if (movieResponse.ok) {
+                                            movieData = await movieResponse.json();
+                                        }
+                                    }
+                                }
                             }
                         } catch (e) {
+                            // Ignore route-based fetch errors
+                        }
+                        
+                        // If still no data, fallback to path-based fetch
+                        if (!movieData) {
+                            try {
+                                const movieResponse = await fetch(`/api/movie?path=${encodeURIComponent(path)}`);
+                                if (movieResponse.ok) {
+                                    movieData = await movieResponse.json();
+                                }
+                            } catch (e) {
+                                // Ignore fetch errors
+                            }
+                        }
+                        
+                        if (movieData) {
+                            currentWatchStatus = movieData.watch_status !== undefined ? movieData.watch_status : (movieData.watched ? true : null);
+                        } else {
                             currentWatchStatus = null; // Default to unset
                         }
                     }
@@ -3364,80 +3457,6 @@
             
         }
         
-        async function loadMovieDetails(path) {
-            const container = document.getElementById('movieDetailsContainer');
-            container.innerHTML = '<div class="loading">Loading movie details...</div>';
-            
-            try {
-                const response = await fetch(`/api/movie?path=${encodeURIComponent(path)}`);
-                const movie = await response.json();
-                
-                if (!response.ok) {
-                    container.innerHTML = `<div class="empty-state">Error: ${movie.detail || 'Failed to load movie'}</div>`;
-                    return;
-                }
-                
-                const imageUrl = movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '';
-                const externalLinks = generateExternalLinks(movie.name);
-                const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path, movie.id);
-                
-                // Use watch_status if available, fallback to watched boolean for backward compatibility
-                const watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? true : null);
-                const isWatched = watchStatus === true;
-                
-                // Load subtitles
-                await loadSubtitles(movie.path);
-                const subtitles = currentSubtitles[movie.path] || [];
-                let subtitleSelect = '';
-                if (subtitles.length > 0) {
-                    subtitleSelect = `
-                        <select class="subtitle-select" id="subtitle-${escapeHtml(movie.path)}" onchange="updateSubtitle('${escapeJsString(movie.path)}', this.value)">
-                            <option value="">No subtitle</option>
-                            ${subtitles.map(sub => `<option value="${escapeJsString(sub.path)}">${escapeHtml(sub.name)}</option>`).join('')}
-                        </select>
-                    `;
-                }
-                
-                container.innerHTML = `
-                    <div class="movie-details-header">
-                        <div class="movie-details-poster">
-                            ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}">` : 'No Image'}
-                        </div>
-                        <div class="movie-details-info">
-                            <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>
-                            <div class="movie-details-meta">
-                                ${movie.year ? `<span class="year-link" onclick="navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
-                                ${movie.length ? `<span>${formatMinutes(movie.length)}</span>` : ''}
-                                ${movie.size ? `<span>${formatSize(movie.size)}</span>` : ''}
-                                ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}
-                            </div>
-                            <div class="movie-details-actions">
-                                ${renderStarRating(movie.path, isWatched, movie.rating)}
-                                <button class="watched-btn ${isWatched ? 'watched' : ''}" onclick="toggleWatched('${escapeJsString(movie.path)}', ${watchStatus === null ? 'null' : watchStatus})">
-                                    ${isWatched ? '✓ Watched' : watchStatus === false ? '✗ Unwatched' : 'Mark Watched'}
-                                </button>
-                                ${subtitleSelect}
-                                <button class="launch-btn" onclick="launchMovie('${escapeJsString(movie.path)}')">Launch</button>
-                            </div>
-                            <div class="external-links" style="margin-top: 20px;">
-                                <a href="${externalLinks.letterboxd}" target="_blank" class="external-link">Letterboxd</a>
-                                <a href="${externalLinks.google}" target="_blank" class="external-link">Google</a>
-                                <a href="${externalLinks.douban}" target="_blank" class="external-link">Douban</a>
-                                <a href="#" onclick="event.preventDefault(); openFolder('${escapeJsString(movie.path)}'); return false;" class="external-link">Open Folder</a>
-                            </div>
-                            <div style="margin-top: 20px; color: #999; font-size: 12px;">
-                                <div>Path: ${escapeHtml(movie.path)}</div>
-                                ${movie.created ? `<div>Created: ${formatDate(movie.created)}</div>` : ''}
-                            </div>
-                        </div>
-                    </div>
-                    ${mediaGallery}
-                `;
-            } catch (error) {
-                container.innerHTML = `<div class="empty-state">Error loading movie: ${error.message}</div>`;
-            }
-        }
-
         async function loadMovieDetailsById(id) {
             const container = document.getElementById('movieDetailsContainer');
             container.innerHTML = '<div class="loading">Loading movie details...</div>';
@@ -3471,6 +3490,14 @@
                         </select>
                     `;
                 }
+                
+                // Build subtitle indicator - show actual filenames
+                let subtitleIndicator = '';
+                if (subtitles.length > 0) {
+                    const subtitleNames = subtitles.map(sub => escapeHtml(sub.name)).join(', ');
+                    const locations = Array.from(new Set(subtitles.map(sub => sub.location).filter(Boolean))).map(loc => loc === 'subs' ? 'subs folder' : 'current folder').join(', ');
+                    subtitleIndicator = `<div style="font-size: 11px; color: #888; margin-top: 4px;">Subtitles: ${subtitleNames}${locations ? ` (${locations})` : ''}</div>`;
+                }
 
                 container.innerHTML = `
                     <div class="movie-details-header">
@@ -3501,6 +3528,7 @@
                             </div>
                             <div style="margin-top: 20px; color: #999; font-size: 12px;">
                                 <div>Path: ${escapeHtml(movie.path)}</div>
+                                ${subtitleIndicator}
                                 ${movie.created ? `<div>Created: ${formatDate(movie.created)}</div>` : ''}
                             </div>
                         </div>

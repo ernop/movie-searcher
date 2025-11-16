@@ -252,9 +252,9 @@ class CleanNameTestRequest(BaseModel):
 
 class ScreenshotsIntervalRequest(BaseModel):
     movie_id: int
-    every_minutes: int = 3
+    every_minutes: float = 3
     async_mode: bool = True
-    burn_subtitles: bool = False  # Whether to burn in English subtitles if they exist
+    subtitle_path: Optional[str] = None  # Path to subtitle file to burn in (if any)
 
 @app.post("/api/frames/start")
 async def start_frame_worker():
@@ -410,6 +410,15 @@ async def get_star_rating_js():
             from fastapi.responses import Response
             return Response(content=f.read(), media_type="application/javascript")
     raise HTTPException(status_code=404, detail="star-rating.js not found")
+
+@app.get("/favicon.ico")
+async def get_favicon():
+    """Serve the favicon"""
+    from fastapi.responses import FileResponse
+    favicon_path = SCRIPT_DIR / "favicon.ico"
+    if favicon_path.exists():
+        return FileResponse(favicon_path, media_type="image/x-icon")
+    raise HTTPException(status_code=404, detail="favicon.ico not found")
 
 @app.post("/api/index")
 async def index_movies(root_path: str = Query(None)):
@@ -915,47 +924,121 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
             raise HTTPException(status_code=400, detail="Unable to determine video length")
 
         # Compute timestamps (0 to end, step every_minutes)
-        step = max(1, int(request.every_minutes) * 60)
-        timestamps = list(range(0, int(length_seconds), step))
-        # Always skip 0m (0 seconds) - start from first interval
-        timestamps = [ts for ts in timestamps if ts > 0]
+        step_seconds = max(0.1, request.every_minutes * 60)
+        timestamps = []
+        current = step_seconds
+        while current < length_seconds:
+            timestamps.append(int(current))
+            current += step_seconds
         if len(timestamps) == 0:
             # If no timestamps after filtering, use first step instead of 0
-            timestamps = [step] if step < length_seconds else []
+            timestamps = [int(step_seconds)] if step_seconds < length_seconds else []
 
-        # Find subtitle file if burn_subtitles is requested
-        subtitle_path = None
-        if request.burn_subtitles:
-            subtitle_path = find_subtitle_file(movie.path)
-            if not subtitle_path:
-                logger.warning(f"burn_subtitles requested but no subtitle file found for movie_id={request.movie_id}, path={movie.path}")
+        # Delete all existing screenshots for this movie before generating new set
+        # IMPORTANT: Only delete screenshots that are in the database - the database is the source of truth.
+        # Never delete files on disk that aren't in the database (orphaned files). Report them to the user instead.
+        existing_screenshots = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
+        deleted_count = 0
+        for screenshot in existing_screenshots:
+            # Delete file from disk if it exists
+            if screenshot.shot_path and os.path.exists(screenshot.shot_path):
+                try:
+                    os.remove(screenshot.shot_path)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete screenshot file {screenshot.shot_path}: {e}")
+            # Delete from database
+            db.delete(screenshot)
+        db.commit()
+        
+        # Check for orphaned screenshot files (files on disk not in database) and report them
+        orphaned_files = []
+        try:
+            from video_processing import generate_screenshot_filename, SCREENSHOT_DIR
+            video_path_obj = Path(movie.path)
+            movie_name = video_path_obj.stem
+            sanitized_name = re.sub(r'[<>:"/\\|?*]', '_', movie_name).strip('. ')[:100]
+            
+            # Check for screenshots with and without subtitle suffix
+            for suffix in ["", "_subs"]:
+                pattern = f"{sanitized_name}_screenshot*s{suffix}.jpg"
+                for screenshot_file in SCREENSHOT_DIR.glob(pattern):
+                    # Check if this file is in the database (should be empty now after deletion, but check anyway)
+                    file_path_str = str(screenshot_file)
+                    exists_in_db = db.query(Screenshot).filter(Screenshot.shot_path == file_path_str).first() is not None
+                    if screenshot_file.exists() and not exists_in_db:
+                        orphaned_files.append(file_path_str)
+        except Exception as e:
+            logger.warning(f"Error checking for orphaned screenshot files: {e}")
+        
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} existing screenshots for movie_id={request.movie_id} before generating new set")
+        
+        if orphaned_files:
+            logger.warning(f"Found {len(orphaned_files)} orphaned screenshot file(s) on disk not in database for movie_id={request.movie_id}. These were NOT deleted. Files: {orphaned_files}")
+        
+        # Use provided subtitle_path if any
+        subtitle_path = request.subtitle_path
+        if subtitle_path and not os.path.exists(subtitle_path):
+            logger.warning(f"subtitle_path provided but file not found: {subtitle_path}")
+            subtitle_path = None
         
         # Queue extractions (async by default)
         queued = 0
+        skipped_existing = 0
+        errors = 0
+        logger.info(f"Generating screenshots for movie_id={request.movie_id}, path={movie.path}, length={length_seconds}s, timestamps={len(timestamps)} timestamps, subtitle_path={subtitle_path}")
+        logger.info(f"Timestamp range: {timestamps[0] if timestamps else 'none'}s to {timestamps[-1] if timestamps else 'none'}s")
+        
         for ts in timestamps:
             try:
                 # User-triggered work gets higher priority over backlog
-                extract_movie_screenshot(movie.path, timestamp_seconds=ts, async_mode=request.async_mode, priority="user_high", subtitle_path=subtitle_path)
-                queued += 1
+                result = extract_movie_screenshot(movie.path, timestamp_seconds=ts, async_mode=request.async_mode, priority="user_high", subtitle_path=subtitle_path)
+                if result is None:
+                    # None means it was queued successfully (async mode)
+                    queued += 1
+                    if queued <= 5 or queued % 10 == 0:  # Log first 5 and every 10th
+                        logger.info(f"Queued screenshot at {ts}s (total queued: {queued})")
+                elif isinstance(result, str):
+                    # String means screenshot already exists
+                    skipped_existing += 1
+                    logger.info(f"Screenshot already exists at {ts}s: {result}")
+                else:
+                    errors += 1
+                    logger.warning(f"Unexpected return value from extract_movie_screenshot at {ts}s: {result}")
             except Exception as e:
-                logger.warning(f"Failed to queue screenshot at {ts}s for movie_id={request.movie_id}, path={movie.path}: {e}")
+                errors += 1
+                logger.error(f"Failed to queue screenshot at {ts}s for movie_id={request.movie_id}, path={movie.path}: {e}", exc_info=True)
                 continue
-
+        
+        logger.info(f"Screenshot queuing complete: queued={queued}, skipped_existing={skipped_existing}, errors={errors}")
+        
+        # Check queue size before starting worker
+        from video_processing import frame_extraction_queue
+        queue_size_before = frame_extraction_queue.qsize()
+        logger.info(f"Queue size before starting worker: {queue_size_before}")
+        
         # Ensure background worker is running to process the queue now
         try:
-            process_frame_queue()
-        except Exception:
-            pass
+            process_frame_queue(max_workers=3)
+            queue_size_after = frame_extraction_queue.qsize()
+            logger.info(f"Queue size after starting worker: {queue_size_after}")
+        except Exception as e:
+            logger.error(f"Failed to start frame queue processor: {e}", exc_info=True)
 
         # Return current known screenshots (new ones will appear as the worker processes them)
         current_shots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
-        return {
+        response = {
             "status": "queued",
             "queued": queued,
             "every_minutes": request.every_minutes,
             "timestamps": timestamps,
             "screenshots": current_shots
         }
+        if orphaned_files:
+            response["orphaned_files"] = orphaned_files
+            response["warning"] = f"Found {len(orphaned_files)} orphaned screenshot file(s) on disk not in database. These may prevent new screenshots from being generated. Please manually delete them if needed."
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -1310,31 +1393,46 @@ async def get_watched():
 
 @app.get("/api/subtitles")
 async def get_subtitles(video_path: str):
-    """Find available subtitle files for a video"""
+    """Find available subtitle files for a video
+    
+    Searches in:
+    1. Current folder (same directory as video)
+    2. "subs" folder (case insensitive) if it exists in the same directory
+    """
     video_path_obj = Path(video_path)
     video_dir = video_path_obj.parent
-    base_name = video_path_obj.stem
     
     subtitles = []
-    for ext in SUBTITLE_EXTENSIONS:
-        # Check exact match
-        subtitle_path = video_dir / f"{base_name}{ext}"
-        if subtitle_path.exists():
-            subtitles.append({
-                "path": str(subtitle_path),
-                "name": subtitle_path.name,
-                "type": ext[1:].upper()
-            })
-        
-        # Check common patterns
-        for pattern in [f"{base_name}.en{ext}", f"{base_name}.eng{ext}", f"{base_name}_en{ext}"]:
-            subtitle_path = video_dir / pattern
-            if subtitle_path.exists() and str(subtitle_path) not in [s["path"] for s in subtitles]:
-                subtitles.append({
-                    "path": str(subtitle_path),
-                    "name": subtitle_path.name,
-                    "type": ext[1:].upper()
-                })
+    subtitle_paths_found = set()
+    
+    # Search directories: current folder and "subs" folder (case insensitive)
+    search_dirs = [("current", video_dir)]
+    
+    # Check if "subs" folder exists (case insensitive)
+    try:
+        for item in video_dir.iterdir():
+            if item.is_dir() and item.name.lower() == "subs":
+                search_dirs.append(("subs", item))
+                break
+    except Exception as e:
+        logger.warning(f"Error checking for subs folder: {e}")
+    
+    # Search in each directory for any file with a subtitle extension
+    for location, search_dir in search_dirs:
+        try:
+            for subtitle_file in search_dir.iterdir():
+                if subtitle_file.is_file() and subtitle_file.suffix.lower() in SUBTITLE_EXTENSIONS:
+                    path_str = str(subtitle_file)
+                    if path_str not in subtitle_paths_found:
+                        subtitles.append({
+                            "path": path_str,
+                            "name": subtitle_file.name,
+                            "type": subtitle_file.suffix[1:].upper(),
+                            "location": location
+                        })
+                        subtitle_paths_found.add(path_str)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Error scanning {location} directory for subtitles: {e}")
     
     return {"subtitles": subtitles}
 

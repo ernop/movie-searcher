@@ -44,23 +44,35 @@ VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m
 SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.vtt', '.ass', '.ssa'}
 
 def find_subtitle_file(video_path):
-    """Find subtitle file for a video"""
+    """Find subtitle file for a video
+    
+    Searches in:
+    1. Current folder (same directory as video)
+    2. "subs" folder (case insensitive) if it exists in the same directory
+    
+    Returns the first subtitle file found (any file with a subtitle extension).
+    """
     video_path_obj = Path(video_path)
-    base_name = video_path_obj.stem
-    
-    # Check same directory first
     video_dir = video_path_obj.parent
-    for ext in SUBTITLE_EXTENSIONS:
-        subtitle_path = video_dir / f"{base_name}{ext}"
-        if subtitle_path.exists():
-            return str(subtitle_path)
     
-    # Check for common subtitle naming patterns
-    for ext in SUBTITLE_EXTENSIONS:
-        for pattern in [f"{base_name}.en{ext}", f"{base_name}.eng{ext}", f"{base_name}_en{ext}"]:
-            subtitle_path = video_dir / pattern
-            if subtitle_path.exists():
-                return str(subtitle_path)
+    # Search directories: current folder and "subs" folder (case insensitive)
+    search_dirs = [video_dir]
+    
+    # Check if "subs" folder exists (case insensitive)
+    for item in video_dir.iterdir():
+        if item.is_dir() and item.name.lower() == "subs":
+            search_dirs.append(item)
+            break
+    
+    # Search in each directory for any file with a subtitle extension
+    for search_dir in search_dirs:
+        try:
+            for item in search_dir.iterdir():
+                if item.is_file() and item.suffix.lower() in SUBTITLE_EXTENSIONS:
+                    return str(item)
+        except (PermissionError, OSError):
+            # Skip directories we can't read
+            continue
     
     return None
 

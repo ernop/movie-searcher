@@ -9,6 +9,9 @@ search_history.json
 watched_movies.json
 config.json
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.log
 .env
 screenshots/
