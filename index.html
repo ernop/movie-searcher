@@ -16,8 +16,8 @@
             background: #1a1a1a;
             color: #e0e0e0;
             padding: 20px;
-            max-width: 1400px;
             margin: 0 auto;
+            max-width: 55vw;
         }
         
         h1 {
@@ -651,6 +651,31 @@
             border-color: #4a9eff;
         }
         
+        .media-item-launch-btn {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #4a9eff;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            z-index: 20;
+            transition: background 0s;
+        }
+        
+        .media-item-launch-btn:hover {
+            background: #5aaeff;
+        }
+        
+        .media-item:hover .media-item-launch-btn {
+            display: block;
+        }
+        
         .media-item img {
             display: block;
             max-width: 300px;
@@ -1260,8 +1285,8 @@
         }
         
         .movie-details-container {
-            max-width: 1200px;
-            margin: 0 auto;
+            max-width: 1800px;
+            margin: 0 10px;
         }
         
         .movie-details-header {
@@ -1387,6 +1412,42 @@
             margin-left: 28px;
         }
         
+        .screenshot-processor-status {
+            font-size: 12px;
+            color: #ccc;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 6px 10px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .screenshot-processor-status .status-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .screenshot-processor-status .status-label {
+            color: #999;
+        }
+        
+        .screenshot-processor-status .status-value {
+            color: #fff;
+            font-weight: 500;
+        }
+        
+        .screenshot-processor-status .status-value.running {
+            color: #4a9eff;
+        }
+        
+        .screenshot-processor-status .status-value.idle {
+            color: #999;
+        }
+        
         .currently-playing {
             font-size: 20px;
             color: #999;
@@ -1464,6 +1525,7 @@
             </div>
             <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
                 <div id="statusMessage"></div>
+                <div id="screenshotProcessorStatus" class="screenshot-processor-status"></div>
                 <div id="currentlyPlaying" class="currently-playing">nothing playing</div>
                 <a href="#/setup" class="nav-link" id="navSetup">Setup</a>
             </div>
@@ -1621,6 +1683,27 @@
         <img id="mediaOverlayImage" onclick="event.stopPropagation();" alt="Full size image">
     </div>
     
+    <div id="screenshotConfigDialog" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 10000; align-items: center; justify-content: center;">
+        <div style="background: #2a2a2a; padding: 30px; border-radius: 8px; max-width: 500px; width: 90%;">
+            <h2 style="color: #fff; margin-top: 0;">Screenshot Configuration</h2>
+            <input type="hidden" id="screenshotConfigMovieId">
+            <div style="margin-bottom: 20px;">
+                <label style="color: #fff; display: block; margin-bottom: 8px;">Interval (minutes):</label>
+                <input type="number" id="screenshotConfigInterval" value="3" min="1" max="60" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #3a3a3a; color: #fff; border-radius: 4px;">
+            </div>
+            <div style="margin-bottom: 20px;">
+                <label style="color: #fff; display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="screenshotConfigBurnSubtitles">
+                    <span>Burn in English subtitles (if available)</span>
+                </label>
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button onclick="closeScreenshotConfig()" style="background: #3a3a3a; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button onclick="generateScreenshots()" style="background: #4a9eff; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">Generate</button>
+            </div>
+        </div>
+    </div>
+    
     <script>
         // Routing
         function getRoute() {
@@ -1708,6 +1791,7 @@
         window.addEventListener('popstate', handleRoute);
         window.addEventListener('load', handleRoute);
         window.addEventListener('load', startCurrentlyPlayingPolling);
+        window.addEventListener('load', updateScreenshotProcessorStatus);
 
         // Movie Card Component
         function createMovieCard(movie) {
@@ -2285,7 +2369,7 @@
             }
         }
         
-        function renderMediaGallery(images, screenshots, itemPath) {
+        function renderMediaGallery(images, screenshots, itemPath, movieId) {
             const allMedia = [];
             
             // Add folder images first
@@ -2294,18 +2378,22 @@
                     allMedia.push({
                         path: img,
                         type: 'image',
-                        label: idx === 0 ? 'Poster' : `Image ${idx + 1}`
+                        label: idx === 0 ? 'Poster' : `Image ${idx + 1}`,
+                        timestamp: null
                     });
                 });
             }
             
-            // Add screenshots
+            // Add screenshots - handle both old format (strings) and new format (objects)
             if (screenshots && screenshots.length > 0) {
                 screenshots.forEach((screenshot, idx) => {
+                    const path = typeof screenshot === 'string' ? screenshot : screenshot.path;
+                    const timestamp = typeof screenshot === 'object' ? screenshot.timestamp_seconds : null;
                     allMedia.push({
-                        path: screenshot,
+                        path: path,
                         type: 'screenshot',
-                        label: `Screenshot ${idx + 1}`
+                        label: `Screenshot ${idx + 1}`,
+                        timestamp: timestamp
                     });
                 });
             }
@@ -2317,17 +2405,33 @@
             let galleryHtml = '<div class="media-gallery">';
             
             allMedia.forEach((media, idx) => {
+                const isScreenshot = media.type === 'screenshot';
+                const timestamp = media.timestamp;
+                const timestampLabel = timestamp !== null && timestamp !== undefined 
+                    ? formatTimestamp(timestamp) 
+                    : '';
+                
                 if (idx === 0) {
                     // First item gets the "Get more" button
+                    let launchBtnHtml = '';
+                    if (isScreenshot && itemPath) {
+                        if (timestamp !== null && timestamp !== undefined) {
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo('${escapeJsString(itemPath)}', ${timestamp});">Launch</button>`;
+                        } else {
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie('${escapeJsString(itemPath)}');">Launch</button>`;
+                        }
+                    }
                     galleryHtml += `
-                        <div class="media-item" onclick="showMediaOverlay('${escapeHtml(media.path)}')" style="position: relative;">
+                        <div class="media-item" onclick="showMediaOverlay('${escapeJsString(media.path)}', ${timestamp !== null ? timestamp : 'null'}, '${escapeJsString(itemPath)}')" style="position: relative;">
                             <button 
                                 class="get-more-btn" 
                                 title="Get more screenshots" 
-                                onclick="event.stopPropagation(); getMoreScreenshots('${escapeJsString(itemPath)}');" 
-                                style="position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 4px 8px; opacity: 0.85;">
+                                onclick="event.stopPropagation(); showScreenshotConfig(${movieId || 'null'});" 
+                                style="position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 4px 8px; opacity: 0.85; z-index: 10;">
                                 Get more
                             </button>
+                            ${launchBtnHtml}
+                            ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
                             <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
                                  alt="" 
                                  loading="lazy"
@@ -2336,8 +2440,18 @@
                     `;
                 } else {
                     // All other items
+                    let launchBtnHtml = '';
+                    if (isScreenshot && itemPath) {
+                        if (timestamp !== null && timestamp !== undefined) {
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo('${escapeJsString(itemPath)}', ${timestamp});">Launch</button>`;
+                        } else {
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie('${escapeJsString(itemPath)}');">Launch</button>`;
+                        }
+                    }
                     galleryHtml += `
-                        <div class="media-item" onclick="showMediaOverlay('${escapeHtml(media.path)}')">
+                        <div class="media-item" onclick="showMediaOverlay('${escapeJsString(media.path)}', ${timestamp !== null ? timestamp : 'null'}, '${escapeJsString(itemPath)}')" style="position: relative;">
+                            ${launchBtnHtml}
+                            ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
                             <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
                                  alt="" 
                                  loading="lazy"
@@ -2351,16 +2465,152 @@
             return galleryHtml;
         }
         
-        function showMediaOverlay(imagePath) {
+        function formatTimestamp(seconds) {
+            if (seconds === null || seconds === undefined) return '';
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            if (hours > 0) {
+                return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+            }
+            return `${minutes}:${String(secs).padStart(2, '0')}`;
+        }
+        
+        function showMediaOverlay(imagePath, timestampSeconds, videoPath) {
             const overlay = document.getElementById('mediaOverlay');
             const img = document.getElementById('mediaOverlayImage');
+            let controls = document.getElementById('mediaOverlayControls');
+            if (!controls) {
+                controls = document.createElement('div');
+                controls.id = 'mediaOverlayControls';
+                controls.style.cssText = 'position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000;';
+                overlay.appendChild(controls);
+            }
             img.src = `/api/image?image_path=${encodeURIComponent(imagePath)}`;
+            
+            // Show controls for screenshots with timestamps
+            if (timestampSeconds !== null && timestampSeconds !== undefined && videoPath) {
+                controls.innerHTML = `
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <span style="color: #fff; font-size: 14px; background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 4px;">${formatTimestamp(timestampSeconds)}</span>
+                        <button onclick="event.stopPropagation(); jumpToVideo('${escapeJsString(videoPath)}', ${timestampSeconds});" 
+                                style="background: #4a9eff; color: #fff; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px;">
+                            Jump to Video
+                        </button>
+                    </div>
+                `;
+                controls.style.display = 'block';
+            } else {
+                controls.style.display = 'none';
+            }
+            
             overlay.classList.add('active');
         }
         
         function closeMediaOverlay() {
             const overlay = document.getElementById('mediaOverlay');
             overlay.classList.remove('active');
+        }
+        
+        async function jumpToVideo(videoPath, timestampSeconds) {
+            try {
+                const subtitleSelect = document.getElementById(`subtitle-${escapeHtml(videoPath)}`);
+                const subtitlePath = subtitleSelect ? subtitleSelect.value : null;
+                const closeExistingVlc = document.getElementById('setupCloseExistingVlc').checked;
+                
+                const response = await fetch('/api/launch', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        path: videoPath,
+                        subtitle_path: subtitlePath || null,
+                        close_existing_vlc: closeExistingVlc,
+                        start_time: timestampSeconds
+                    })
+                });
+                
+                const data = await response.json();
+                if (response.ok && data.status === 'launched') {
+                    showStatus('Video launched at ' + formatTimestamp(timestampSeconds), 'success');
+                    closeMediaOverlay();
+                } else {
+                    showStatus('Failed to launch video: ' + (data.detail || 'Unknown error'), 'error');
+                }
+            } catch (error) {
+                showStatus('Failed to launch video: ' + error.message, 'error');
+            }
+        }
+        
+        function showScreenshotConfig(movieId) {
+            if (!movieId) {
+                showStatus('Movie ID not available', 'error');
+                return;
+            }
+            const dialog = document.getElementById('screenshotConfigDialog');
+            const movieIdInput = document.getElementById('screenshotConfigMovieId');
+            movieIdInput.value = movieId;
+            dialog.style.display = 'flex';
+        }
+        
+        function closeScreenshotConfig() {
+            const dialog = document.getElementById('screenshotConfigDialog');
+            dialog.style.display = 'none';
+        }
+        
+        async function generateScreenshots() {
+            const movieId = parseInt(document.getElementById('screenshotConfigMovieId').value);
+            if (!movieId) {
+                showStatus('Movie ID is required', 'error');
+                return;
+            }
+            const interval = parseInt(document.getElementById('screenshotConfigInterval').value) || 3;
+            const burnSubtitles = document.getElementById('screenshotConfigBurnSubtitles').checked;
+            
+            try {
+                const resp = await fetch('/api/movie/screenshots/interval', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        movie_id: movieId, 
+                        every_minutes: interval, 
+                        async_mode: true,
+                        burn_subtitles: burnSubtitles
+                    })
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showStatus('Failed to queue screenshots: ' + (data.detail || 'error'), 'error');
+                } else {
+                    showStatus('Queued ' + (data.queued || 0) + ' screenshots', 'success');
+                    closeScreenshotConfig();
+                    // Reload movie details by ID
+                    setTimeout(() => {
+                        if (movieId) {
+                            loadMovieDetailsById(movieId);
+                        }
+                    }, 1200);
+                    // Poll for updates
+                    let polls = 0;
+                    const maxPolls = 15;
+                    const pollIntervalMs = 2000;
+                    const iv = setInterval(() => {
+                        const container = document.getElementById('movieDetailsContainer');
+                        if (!container || !container.innerHTML) {
+                            clearInterval(iv);
+                            return;
+                        }
+                        if (movieId) {
+                            loadMovieDetailsById(movieId);
+                        }
+                        polls += 1;
+                        if (polls >= maxPolls) {
+                            clearInterval(iv);
+                        }
+                    }, pollIntervalMs);
+                }
+            } catch (e) {
+                showStatus('Failed to queue screenshots: ' + e.message, 'error');
+            }
         }
 
         async function getMoreScreenshots(videoPath) {
@@ -3129,7 +3379,7 @@
                 
                 const imageUrl = movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '';
                 const externalLinks = generateExternalLinks(movie.name);
-                const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path);
+                const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path, movie.id);
                 
                 // Use watch_status if available, fallback to watched boolean for backward compatibility
                 const watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? true : null);
@@ -3203,7 +3453,7 @@
 
                 const imageUrl = movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '';
                 const externalLinks = generateExternalLinks(movie.name);
-                const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path);
+                const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path, movie.id);
 
                 // Use watch_status if available, fallback to watched boolean for backward compatibility
                 const watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? true : null);
@@ -3627,6 +3877,42 @@
                 hideFolderDialog();
             }
         });
+        
+        // Screenshot processor status functionality
+        async function updateScreenshotProcessorStatus() {
+            try {
+                const response = await fetch('/api/frames/status');
+                const data = await response.json();
+                const statusEl = document.getElementById('screenshotProcessorStatus');
+                
+                if (!statusEl) return;
+                
+                const isRunning = data.is_running || false;
+                const queueSize = data.queue_size || 0;
+                const processedLastMinute = data.processed_last_minute || 0;
+                
+                statusEl.innerHTML = `
+                    <div class="status-item">
+                        <span class="status-label">Status:</span>
+                        <span class="status-value ${isRunning ? 'running' : 'idle'}">${isRunning ? 'Running' : 'Idle'}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Queued:</span>
+                        <span class="status-value">${queueSize}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Last min:</span>
+                        <span class="status-value">${processedLastMinute}</span>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error updating screenshot processor status:', error);
+                const statusEl = document.getElementById('screenshotProcessorStatus');
+                if (statusEl) {
+                    statusEl.innerHTML = '<div class="status-item"><span class="status-label">Status:</span><span class="status-value idle">Error</span></div>';
+                }
+            }
+        }
         
         // Currently playing functionality
         let currentlyPlayingInterval = null;

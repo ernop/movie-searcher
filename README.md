@@ -26,7 +26,7 @@ Browse your entire library with multiple navigation methods:
 
 Each movie displays with images when available. The system shows posters, covers, and other artwork that came with your movies. If no images exist, screenshots are extracted automatically from the video files themselves, giving you a visual preview of every movie in your collection.
 
-Click any movie to see its full details, including all associated images and screenshots in a gallery view.
+Click any movie to see its full details, including all associated images and screenshots in a gallery view. Hover over any screenshot thumbnail to reveal a launch button that opens the movie at that exact moment. Generate more screenshots at regular intervals (every 3 minutes by default) to get a better visual overview of longer movies.
 
 ### Track What You've Watched
 
@@ -36,9 +36,9 @@ View your complete watch history to see what you've been watching and when.
 
 ### Launch and Play
 
-Click "Launch" to open any movie directly in VLC Media Player. If subtitle files exist in the same folder as your movie, they load automatically. Multiple subtitle files? Select which one you want before launching.
+Click "Launch" to open any movie directly in VLC Media Player. Launch from any screenshot thumbnail to jump directly to that moment in the movie. If subtitle files exist in the same folder as your movie, they load automatically. Multiple subtitle files? Select which one you want before launching.
 
-The system finds and remembers which movies you've launched, helping you track your viewing patterns.
+The system finds and remembers which movies you've launched, helping you track your viewing patterns. When viewing screenshots in fullscreen, use the "Jump to Video" button to start playback at that exact timestamp.
 
 ### Plan Your Viewing
 
@@ -57,6 +57,10 @@ See your recent searches and results. Revisit past queries with a single click. 
 ### Currently Playing
 
 The interface displays which movie is currently playing in VLC, if any. See at a glance what you're watching without switching windows.
+
+### Screenshot Processing
+
+The interface shows real-time status of screenshot generation. See how many screenshots are queued, how many were processed in the last minute, and whether the background processor is actively working. Screenshot generation happens automatically in the background without blocking your browsing.
 
 ## Setup
 

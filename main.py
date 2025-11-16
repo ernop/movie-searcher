@@ -236,6 +236,7 @@ class LaunchRequest(BaseModel):
     path: str
     subtitle_path: Optional[str] = None
     close_existing_vlc: bool = True
+    start_time: Optional[float] = None  # Start time in seconds
 
 class WatchedRequest(BaseModel):
     path: str
@@ -250,9 +251,10 @@ class CleanNameTestRequest(BaseModel):
     text: str
 
 class ScreenshotsIntervalRequest(BaseModel):
-    path: str
+    movie_id: int
     every_minutes: int = 3
     async_mode: bool = True
+    burn_subtitles: bool = False  # Whether to burn in English subtitles if they exist
 
 @app.post("/api/frames/start")
 async def start_frame_worker():
@@ -270,8 +272,22 @@ async def start_frame_worker():
 async def get_frame_worker_status():
     """Report frame extraction queue status."""
     try:
+        from video_processing import (
+            frame_processing_active,
+            screenshot_completion_times, screenshot_completion_lock
+        )
+        import time
+        
+        # Count screenshots processed in the last minute
+        one_minute_ago = time.time() - 60
+        recent_count = 0
+        with screenshot_completion_lock:
+            recent_count = sum(1 for ts in screenshot_completion_times if ts >= one_minute_ago)
+        
         return {
-            "frame_queue_size": frame_extraction_queue.qsize()
+            "is_running": frame_processing_active,
+            "queue_size": frame_extraction_queue.qsize(),
+            "processed_last_minute": recent_count
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -680,7 +696,7 @@ async def get_movie_details(path: str = Query(...)):
         
         # Get images and screenshots from tables
         images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
-        screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
+        screenshots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
         
         # Filter out YTS images
         images = filter_yts_images(images)
@@ -710,14 +726,14 @@ async def get_movie_details(path: str = Query(...)):
                         Screenshot.shot_path == shot_path
                     ).first()
                     if not existing:
-                        db.add(Screenshot(movie_id=movie.id, shot_path=shot_path))
+                        db.add(Screenshot(movie_id=movie.id, shot_path=shot_path, timestamp_seconds=default_ts))
                         db.commit()
                     # Refresh media lists
-                    screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
+                    screenshots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
                     screenshot_path = get_movie_screenshot_path(db, movie.id)
                     info = {
                         "images": images,
-                        "screenshots": screenshots,
+                        "screenshots": [s["path"] for s in screenshots],  # get_largest_image expects list of paths
                         "frame": screenshot_path
                     }
                     largest_image = get_largest_image(info)
@@ -774,7 +790,7 @@ async def get_movie_details_by_id(movie_id: int):
 
         # Get images and screenshots from tables
         images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
-        screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
+        screenshots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
 
         # Filter out YTS images
         images = filter_yts_images(images)
@@ -802,7 +818,7 @@ async def get_movie_details_by_id(movie_id: int):
                         Screenshot.shot_path == shot_path
                     ).first()
                     if not existing:
-                        db.add(Screenshot(movie_id=movie.id, shot_path=shot_path))
+                        db.add(Screenshot(movie_id=movie.id, shot_path=shot_path, timestamp_seconds=default_ts))
                         db.commit()
                     screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
                     screenshot_path = get_movie_screenshot_path(db, movie.id)
@@ -889,30 +905,40 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
     """Queue screenshots every N minutes across the movie duration (default 3 minutes)."""
     db = SessionLocal()
     try:
-        movie = db.query(Movie).filter(Movie.path == request.path).first()
+        movie = db.query(Movie).filter(Movie.id == request.movie_id).first()
         if not movie:
-            raise HTTPException(status_code=404, detail=f"Movie not found: {request.path}")
+            raise HTTPException(status_code=404, detail=f"Movie not found: {request.movie_id}")
 
         # Determine duration
-        length_seconds = movie.length if movie.length else get_video_length(request.path)
+        length_seconds = movie.length if movie.length else get_video_length(movie.path)
         if not length_seconds or length_seconds <= 0:
             raise HTTPException(status_code=400, detail="Unable to determine video length")
 
         # Compute timestamps (0 to end, step every_minutes)
         step = max(1, int(request.every_minutes) * 60)
         timestamps = list(range(0, int(length_seconds), step))
+        # Always skip 0m (0 seconds) - start from first interval
+        timestamps = [ts for ts in timestamps if ts > 0]
         if len(timestamps) == 0:
-            timestamps = [0]
+            # If no timestamps after filtering, use first step instead of 0
+            timestamps = [step] if step < length_seconds else []
 
+        # Find subtitle file if burn_subtitles is requested
+        subtitle_path = None
+        if request.burn_subtitles:
+            subtitle_path = find_subtitle_file(movie.path)
+            if not subtitle_path:
+                logger.warning(f"burn_subtitles requested but no subtitle file found for movie_id={request.movie_id}, path={movie.path}")
+        
         # Queue extractions (async by default)
         queued = 0
         for ts in timestamps:
             try:
                 # User-triggered work gets higher priority over backlog
-                extract_movie_screenshot(request.path, timestamp_seconds=ts, async_mode=request.async_mode, priority="user_high")
+                extract_movie_screenshot(movie.path, timestamp_seconds=ts, async_mode=request.async_mode, priority="user_high", subtitle_path=subtitle_path)
                 queued += 1
             except Exception as e:
-                logger.warning(f"Failed to queue screenshot at {ts}s for {request.path}: {e}")
+                logger.warning(f"Failed to queue screenshot at {ts}s for movie_id={request.movie_id}, path={movie.path}: {e}")
                 continue
 
         # Ensure background worker is running to process the queue now
@@ -922,7 +948,7 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
             pass
 
         # Return current known screenshots (new ones will appear as the worker processes them)
-        current_shots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
+        current_shots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
         return {
             "status": "queued",
             "queued": queued,
@@ -989,7 +1015,8 @@ async def launch_movie(request: LaunchRequest):
         result = launch_movie_in_vlc(
             movie_path=request.path,
             subtitle_path=request.subtitle_path,
-            close_existing=request.close_existing_vlc
+            close_existing=request.close_existing_vlc,
+            start_time=request.start_time
         )
         return result
     except HTTPException:

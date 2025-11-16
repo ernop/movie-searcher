@@ -81,6 +81,7 @@ class Screenshot(Base):
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
     shot_path = Column(String, nullable=False)  # Path to the extracted screenshot image
+    timestamp_seconds = Column(Float, nullable=True)  # Timestamp in seconds when screenshot was taken
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -114,5 +115,5 @@ class SchemaVersion(Base):
     applied_at = Column(DateTime, default=func.now(), nullable=False)
 
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 

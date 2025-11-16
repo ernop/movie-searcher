@@ -310,6 +310,18 @@ def migrate_db_schema():
             set_schema_version(5, "Created movie_audio table")
             current_version = 5
         
+        if current_version < 6:
+            logger.info("Migrating to schema version 6: add timestamp_seconds column to screenshots table.")
+            existing_columns = {col['name']: col for col in inspector.get_columns("screenshots")}
+            if "timestamp_seconds" not in existing_columns:
+                with engine.begin() as conn:
+                    logger.info("Adding 'timestamp_seconds' column to screenshots table...")
+                    conn.execute(text("ALTER TABLE screenshots ADD COLUMN timestamp_seconds FLOAT"))
+                    logger.info("Migration complete: added 'timestamp_seconds' column")
+            
+            set_schema_version(6, "Added timestamp_seconds column to screenshots table")
+            current_version = 6
+        
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "

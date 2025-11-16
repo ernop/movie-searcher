@@ -1,0 +1,12 @@
+{
+  "files.exclude": {
+    "screenshots": true
+  },
+  "search.exclude": {
+    "screenshots": true
+  },
+  "files.watcherExclude": {
+    "screenshots": true
+  }
+}
+

@@ -78,6 +78,16 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_name": "13 Assassins",
         "expected_year": 2010,
     },
+    {
+        "input": r"D:\movies\720pMkv.Com_The.Baader.Meinhof.Complex.2008.720p.BluRay.x264.mp4",
+        "expected_name": "The Baader Meinhof Complex",
+        "expected_year": 2008,
+    },
+    {
+        "input": r"D:\movies\2.or.3.Things.I.Know.About.Her.1967.BRRip.720p.x264-Classics\2.or.3.Things.I.Know.About.Her.1967.BRRip.720p.x264-Classics.mkv",
+        "expected_name": "2 or 3 Things I Know about her",
+        "expected_year": 1967,
+    },
     # {
     #     "input":""
     # }

@@ -1,5 +1,8 @@
 """
 VLC player integration and currently playing detection for Movie Searcher.
+
+CRITICAL: When parsing VLC command lines from PowerShell, quotes MUST be stripped
+from all arguments after parsing. See get_vlc_command_lines() docstring for details.
 """
 import os
 import subprocess
@@ -16,7 +19,20 @@ import json
 if os.name == 'nt':
 	# Windows-specific imports via ctypes to avoid extra dependencies
 	import ctypes
-	from ctypes import wintypes
+	from ctypes import wintypes, Structure, POINTER, byref
+	
+	# Windows API structures for monitor enumeration
+	class RECT(Structure):
+		_fields_ = [("left", ctypes.c_long),
+					("top", ctypes.c_long),
+					("right", ctypes.c_long),
+					("bottom", ctypes.c_long)]
+	
+	class MONITORINFO(Structure):
+		_fields_ = [("cbSize", ctypes.c_ulong),
+					("rcMonitor", RECT),
+					("rcWork", RECT),
+					("dwFlags", ctypes.c_ulong)]
 
 # Import database models and session
 from database import SessionLocal, Movie, LaunchHistory, WatchHistory
@@ -185,7 +201,25 @@ def get_vlc_window_titles():
     return []
 
 def get_vlc_command_lines():
-    """Get command line arguments from running VLC processes (Windows)."""
+    """Get command line arguments from running VLC processes (Windows).
+    
+    Returns a list of dicts with 'path' and 'pid' keys for each VLC process
+    that has a video file in its command line.
+    
+    CRITICAL QUOTE-STRIPPING REQUIREMENT:
+    PowerShell's Win32_Process.CommandLine returns paths with quotes preserved
+    (e.g., '"C:\Program Files\VLC\vlc.exe" "D:\movies\file.mkv"'). When we parse
+    this with shlex.split(), it correctly splits the arguments but may leave
+    quotes in the resulting strings. Since os.path.exists() will fail on a path
+    like '"D:\movies\file.mkv"' (with quotes), we MUST strip quotes from all
+    arguments after parsing. This is why both the primary shlex.split() path
+    and the fallback regex path strip quotes - it's essential for correct
+    path detection.
+    
+    Without quote stripping, currently-playing detection silently fails because
+    os.path.exists() returns False for quoted paths, causing valid VLC processes
+    to be ignored.
+    """
     if os.name != 'nt':
         return []
 
@@ -211,7 +245,7 @@ def get_vlc_command_lines():
             logger.warning(f"Failed to parse PowerShell JSON for VLC processes: {e}")
             return []
 
-        # Normalize to a list
+        # Normalize to a list (PowerShell returns single object for one process, array for multiple)
         processes = data if isinstance(data, list) else [data]
         command_lines = []
 
@@ -220,13 +254,20 @@ def get_vlc_command_lines():
             pid = str(proc.get("ProcessId") or "").strip()
             if not cmd_line:
                 continue
-            # Parse arguments - use shlex with posix=False for Windows paths
+            
+            # Parse command line arguments
+            # PowerShell returns: '"C:\Program Files\VLC\vlc.exe" "D:\movies\file.mkv"'
+            # We need to split this into individual arguments and strip quotes
             try:
                 args = shlex.split(cmd_line, posix=False)
+                # CRITICAL: Strip quotes - shlex.split() may leave quotes in the strings,
+                # and os.path.exists() will fail on quoted paths like '"D:\path\file.mkv"'
+                args = [a.strip('"') for a in args]
             except Exception:
                 # Fallback: simple regex to extract quoted and unquoted args
                 import re
                 args = re.findall(r'"[^"]+"|[^\s]+', cmd_line)
+                # CRITICAL: Strip quotes here too - same reason as above
                 args = [a.strip('"') for a in args]
 
             # Skip empty or single-arg (just vlc.exe) invocations
@@ -236,13 +277,29 @@ def get_vlc_command_lines():
             # Look for a path argument with a known video extension
             for arg in args[1:]:
                 try:
-                    # Handle cases like --started-from-file or other flags
+                    # Skip command-line flags (e.g., --started-from-file, --sub-file, etc.)
                     if arg.startswith("-"):
                         continue
-                    if os.path.exists(arg) and Path(arg).suffix.lower() in VIDEO_EXTENSIONS:
-                        command_lines.append({"path": arg, "pid": pid})
-                        break
-                except Exception:
+                    
+                    # Normalize path for existence check (resolve relative paths, handle case)
+                    # This ensures we match paths correctly even if they're stored differently in DB
+                    try:
+                        normalized_arg = str(Path(arg).resolve())
+                    except (OSError, ValueError):
+                        # If resolve fails (e.g., path doesn't exist), try original
+                        normalized_arg = arg
+                    
+                    # Check if path exists and has a video extension
+                    # Note: We check the normalized path but store the original arg
+                    # to preserve the exact format from the command line
+                    if os.path.exists(normalized_arg):
+                        suffix = Path(normalized_arg).suffix.lower()
+                        if suffix in VIDEO_EXTENSIONS:
+                            command_lines.append({"path": normalized_arg, "pid": pid})
+                            break
+                except Exception as e:
+                    # Log but continue - don't let one bad argument break the whole function
+                    logger.debug(f"Error processing VLC command line argument '{arg}': {e}")
                     continue
 
         return command_lines
@@ -300,26 +357,190 @@ def _bring_window_to_foreground(hwnd):
 	# Attempt to set foreground
 	return bool(SetForegroundWindow(hwnd))
 
+def _get_monitor_bounds():
+	"""Get bounds of all monitors on Windows.
+	Returns a list of RECT structures representing monitor boundaries.
+	"""
+	if os.name != 'nt':
+		return []
+	
+	user32 = ctypes.windll.user32
+	monitors = []
+	
+	# MONITORINFO structure
+	MONITORINFOF_PRIMARY = 0x00000001
+	
+	def _monitor_enum_proc(hMonitor, hdcMonitor, lprcMonitor, dwData):
+		mi = MONITORINFO()
+		mi.cbSize = ctypes.sizeof(MONITORINFO)
+		if user32.GetMonitorInfoW(hMonitor, byref(mi)):
+			monitors.append(mi.rcMonitor)
+		return True
+	
+	MonitorEnumProc = ctypes.WINFUNCTYPE(
+		ctypes.c_bool,
+		wintypes.HMONITOR,
+		wintypes.HDC,
+		POINTER(RECT),
+		wintypes.LPARAM
+	)
+	
+	user32.EnumDisplayMonitors(None, None, MonitorEnumProc(_monitor_enum_proc), 0)
+	return monitors
+
+def _get_window_rect(hwnd):
+	"""Get window rectangle (position and size) on Windows.
+	Returns RECT structure or None on failure.
+	"""
+	if os.name != 'nt' or not hwnd:
+		return None
+	
+	user32 = ctypes.windll.user32
+	rect = RECT()
+	if user32.GetWindowRect(hwnd, byref(rect)):
+		return rect
+	return None
+
+def _rect_intersects(rect1, rect2):
+	"""Check if two rectangles intersect."""
+	return not (rect1.right <= rect2.left or 
+				rect1.left >= rect2.right or 
+				rect1.bottom <= rect2.top or 
+				rect1.top >= rect2.bottom)
+
+def _rect_contains(outer, inner):
+	"""Check if outer rectangle fully contains inner rectangle."""
+	return (inner.left >= outer.left and 
+			inner.right <= outer.right and 
+			inner.top >= outer.top and 
+			inner.bottom <= outer.bottom)
+
+def _ensure_window_in_single_monitor(hwnd):
+	"""Ensure a window is fully contained within a single monitor.
+	If the window spans multiple monitors, reposition/resize it to fit within one.
+	Returns True if repositioned, False otherwise.
+	"""
+	if os.name != 'nt' or not hwnd:
+		return False
+	
+	try:
+		user32 = ctypes.windll.user32
+		
+		# Get window rectangle
+		window_rect = _get_window_rect(hwnd)
+		if not window_rect:
+			return False
+		
+		# Get all monitors
+		monitors = _get_monitor_bounds()
+		if not monitors:
+			return False
+		
+		# Check which monitors the window overlaps
+		overlapping_monitors = []
+		for i, monitor in enumerate(monitors):
+			if _rect_intersects(window_rect, monitor):
+				overlapping_monitors.append((i, monitor))
+		
+		# If window is already fully within a single monitor, no action needed
+		if len(overlapping_monitors) == 1:
+			monitor = overlapping_monitors[0][1]
+			if _rect_contains(monitor, window_rect):
+				return False
+		
+		# Window spans multiple monitors or extends beyond monitor bounds
+		# Find the monitor that contains the center of the window
+		window_center_x = (window_rect.left + window_rect.right) // 2
+		window_center_y = (window_rect.top + window_rect.bottom) // 2
+		
+		target_monitor = None
+		for i, monitor in enumerate(monitors):
+			if (monitor.left <= window_center_x <= monitor.right and
+				monitor.top <= window_center_y <= monitor.bottom):
+				target_monitor = monitor
+				break
+		
+		# If center not in any monitor, use primary monitor (first one)
+		if not target_monitor:
+			target_monitor = monitors[0]
+		
+		# Calculate new position and size
+		window_width = window_rect.right - window_rect.left
+		window_height = window_rect.bottom - window_rect.top
+		monitor_width = target_monitor.right - target_monitor.left
+		monitor_height = target_monitor.bottom - target_monitor.top
+		
+		# If window is too large for monitor, resize it
+		if window_width > monitor_width:
+			window_width = monitor_width - 20  # Leave small margin
+		if window_height > monitor_height:
+			window_height = monitor_height - 20
+		
+		# Center window in target monitor (or position at top-left with small margin)
+		new_x = target_monitor.left + (monitor_width - window_width) // 2
+		new_y = target_monitor.top + (monitor_height - window_height) // 2
+		
+		# Ensure window doesn't go outside monitor bounds
+		new_x = max(target_monitor.left, min(new_x, target_monitor.right - window_width))
+		new_y = max(target_monitor.top, min(new_y, target_monitor.bottom - window_height))
+		
+		# Reposition/resize window
+		# SWP_NOZORDER = 0x0004 keeps z-order unchanged
+		# SWP_SHOWWINDOW = 0x0040 shows window
+		SWP_NOZORDER = 0x0004
+		SWP_SHOWWINDOW = 0x0040
+		result = user32.SetWindowPos(
+			hwnd,
+			0,  # hWndInsertAfter (0 = no change to z-order)
+			new_x,
+			new_y,
+			window_width,
+			window_height,
+			SWP_NOZORDER | SWP_SHOWWINDOW
+		)
+		
+		return bool(result)
+	except Exception as e:
+		logger.warning(f"Error ensuring window in single monitor: {e}")
+		return False
+
 def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1):
 	"""Attempt to bring a VLC window to the foreground on Windows.
 	Will poll for up to wait_timeout_seconds to allow VLC to create its window.
+	Also ensures the window is contained within a single monitor.
 	"""
 	if os.name != 'nt':
 		return False
 
 	end_time = time.time() + wait_timeout_seconds
 	last_result = False
+	hwnd_found = None
 	while time.time() < end_time:
 		hwnd = _find_vlc_window_handle()
 		if hwnd:
+			hwnd_found = hwnd
 			last_result = _bring_window_to_foreground(hwnd)
 			if last_result:
-				return True
+				break
 		time.sleep(poll_interval_seconds)
+	
+	# Ensure window is in single monitor after bringing to foreground
+	if hwnd_found:
+		# Small delay to let window finish positioning
+		time.sleep(0.2)
+		_ensure_window_in_single_monitor(hwnd_found)
+	
 	return last_result
 
-def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False):
-    """Launch movie in VLC with optional subtitle"""
+def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, start_time=None):
+    """Launch movie in VLC with optional subtitle and start time
+    
+    Args:
+        movie_path: Path to video file
+        subtitle_path: Optional path to subtitle file
+        close_existing: Whether to close existing VLC windows
+        start_time: Optional start time in seconds
+    """
     steps = []
     results = []
     
@@ -399,6 +620,12 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False):
         else:
             steps.append("  No subtitle will be used")
             results.append({"step": 4, "status": "info", "message": "No subtitle file"})
+    
+    # Step 4.5: Handle start time
+    if start_time is not None and start_time > 0:
+        vlc_cmd.extend(["--start-time", str(start_time)])
+        steps.append(f"  Added start time: {start_time}s")
+        results.append({"step": 4.5, "status": "success", "message": f"Start time set to {start_time}s"})
     
     # Step 5: Launch VLC
     steps.append("Step 5: Launching VLC")

@@ -25,7 +25,7 @@ SCREENSHOT_DIR = None
 # Cache for resolved tool paths
 _CACHED_FFMPEG_PATH = None
 
-def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path):
+def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
     try:
         cmd = [
             ffmpeg,
@@ -33,11 +33,22 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path):
             "-loglevel", "error",
             "-ss", str(ts),
             "-i", str(video_path_local),
+        ]
+        
+        # Add subtitle filter if burning subtitles
+        if subtitle_path and os.path.exists(subtitle_path):
+            # Escape path for ffmpeg subtitles filter (Windows paths need special handling)
+            escaped_path = subtitle_path.replace('\\', '/').replace(':', '\\:')
+            cmd.extend([
+                "-vf", f"subtitles={escaped_path}:force_style='FontSize=24,OutlineColour=&H80000000,BorderStyle=3'"
+            ])
+        
+        cmd.extend([
             "-vframes", "1",
             "-q:v", "2",
             "-y",
             str(out_path)
-        ]
+        ])
         start = time.time()
         proc = subprocess.run(cmd, capture_output=True, timeout=30)
         elapsed = time.time() - start
@@ -85,6 +96,10 @@ frame_extraction_queue = PriorityQueue()
 frame_executor = None
 process_executor = None
 frame_processing_active = False
+
+# Track completion timestamps for rate calculation
+screenshot_completion_times = []
+screenshot_completion_lock = threading.Lock()
 
 def register_subprocess(proc: subprocess.Popen):
     """Register a subprocess so it can be killed on shutdown"""
@@ -308,8 +323,14 @@ def find_ffmpeg(load_config_func):
         logger.error("Please fix the ffmpeg_path configuration. Frame extraction will not work until this is corrected.")
         return None
 
-def generate_screenshot_filename(video_path, timestamp_seconds):
-    """Generate a sensible screenshot filename based on movie name and timestamp"""
+def generate_screenshot_filename(video_path, timestamp_seconds, suffix=""):
+    """Generate a sensible screenshot filename based on movie name and timestamp
+    
+    Args:
+        video_path: Path to video file
+        timestamp_seconds: Timestamp in seconds
+        suffix: Optional suffix to add before .jpg (e.g., "_subs" for subtitles)
+    """
     video_path_obj = Path(video_path)
     movie_name = video_path_obj.stem  # Get filename without extension
     
@@ -322,19 +343,28 @@ def generate_screenshot_filename(video_path, timestamp_seconds):
     if len(sanitized_name) > 100:
         sanitized_name = sanitized_name[:100]
     
-    # Format: movie_name_screenshot150s.jpg
-    screenshot_filename = f"{sanitized_name}_screenshot{int(timestamp_seconds)}s.jpg"
+    # Format: movie_name_screenshot150s.jpg or movie_name_screenshot150s_subs.jpg
+    screenshot_filename = f"{sanitized_name}_screenshot{int(timestamp_seconds)}s{suffix}.jpg"
     return SCREENSHOT_DIR / screenshot_filename
 
-def extract_movie_screenshot_sync(video_path, timestamp_seconds, find_ffmpeg_func):
-    """Extract a single screenshot from video synchronously (blocking)"""
+def extract_movie_screenshot_sync(video_path, timestamp_seconds, find_ffmpeg_func, subtitle_path=None):
+    """Extract a single screenshot from video synchronously (blocking)
+    
+    Args:
+        video_path: Path to video file
+        timestamp_seconds: Timestamp in seconds to extract screenshot
+        find_ffmpeg_func: Function to find ffmpeg executable
+        subtitle_path: Optional path to subtitle file to burn in
+    """
     video_path_obj = Path(video_path)
     
     # Create screenshots directory if it doesn't exist
     SCREENSHOT_DIR.mkdir(exist_ok=True)
     
     # Generate screenshot filename based on movie name and timestamp
-    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds)
+    # Include subtitle indicator in filename if burning subtitles
+    suffix = "_subs" if subtitle_path else ""
+    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix)
     
     # Check if screenshot already exists
     if screenshot_path.exists():
@@ -362,11 +392,21 @@ def extract_movie_screenshot_sync(video_path, timestamp_seconds, find_ffmpeg_fun
             "-loglevel", "error",
             "-ss", str(timestamp_seconds),
             "-i", str(video_path),
+        ]
+        
+        # Add subtitle filter if burning subtitles
+        if subtitle_path and os.path.exists(subtitle_path):
+            # Use subtitles filter to burn in subtitles
+            cmd.extend([
+                "-vf", f"subtitles={subtitle_path}:force_style='FontSize=24,OutlineColour=&H80000000,BorderStyle=3'"
+            ])
+        
+        cmd.extend([
             "-vframes", "1",
             "-q:v", "2",  # High quality
             "-y",  # Overwrite
             str(screenshot_path)
-        ]
+        ])
         
         logger.debug(f"Running ffmpeg command: {' '.join(cmd)}")
         start_time = time.time()
@@ -398,15 +438,20 @@ def extract_movie_screenshot_sync(video_path, timestamp_seconds, find_ffmpeg_fun
         logger.error(f"Error extracting screenshot from {video_path}: {e}")
         return None
 
-def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func, priority: str = "normal"):
-    """Extract a single screenshot from video - can be synchronous or queued for async processing"""
+def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func, priority: str = "normal", subtitle_path=None):
+    """Extract a single screenshot from video - can be synchronous or queued for async processing
+    
+    Args:
+        subtitle_path: Optional path to subtitle file to burn in
+    """
     video_path_obj = Path(video_path)
     
     # Create screenshots directory if it doesn't exist
     SCREENSHOT_DIR.mkdir(exist_ok=True)
     
     # Generate screenshot filename based on movie name and timestamp
-    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds)
+    suffix = "_subs" if subtitle_path else ""
+    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix)
     
     # Check if screenshot already exists
     if screenshot_path.exists():
@@ -432,6 +477,7 @@ def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_con
             {
                 "video_path": video_path,
                 "timestamp_seconds": timestamp_seconds,
+                "subtitle_path": subtitle_path,
                 "ffmpeg_exe": ffmpeg_exe,
                 "load_config_func": load_config_func,
                 "find_ffmpeg_func": find_ffmpeg_func,
@@ -450,13 +496,14 @@ def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_con
         return None  # Return None to indicate it's queued, will be processed later
     else:
         # Synchronous mode
-        return extract_movie_screenshot_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_func(load_config_func))
+        return extract_movie_screenshot_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_func(load_config_func), subtitle_path=subtitle_path)
 
 def process_screenshot_extraction_worker(screenshot_info):
     """Worker function to extract a screenshot - runs in thread pool"""
     try:
         video_path = screenshot_info["video_path"]
         timestamp_seconds = screenshot_info["timestamp_seconds"]
+        subtitle_path = screenshot_info.get("subtitle_path")
         ffmpeg_exe = screenshot_info["ffmpeg_exe"]
         scan_progress_dict = screenshot_info["scan_progress_dict"]
         add_scan_log_func = screenshot_info["add_scan_log_func"]
@@ -468,7 +515,8 @@ def process_screenshot_extraction_worker(screenshot_info):
             length = get_video_length(video_path)
             if length and timestamp_seconds > length:
                 timestamp_seconds = min(30, max(10, length * 0.1))
-            screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds)
+            suffix = "_subs" if subtitle_path else ""
+            screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix)
 
         # Early-out if already exists (quick DB sync only, no ffmpeg)
         if screenshot_path.exists():
@@ -479,7 +527,7 @@ def process_screenshot_extraction_worker(screenshot_info):
                 if movie:
                     existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
                     if not existing:
-                        db.add(Screenshot(movie_id=movie.id, shot_path=str(screenshot_path)))
+                        db.add(Screenshot(movie_id=movie.id, shot_path=str(screenshot_path), timestamp_seconds=timestamp_seconds))
                         db.commit()
             finally:
                 db.close()
@@ -507,8 +555,14 @@ def process_screenshot_extraction_worker(screenshot_info):
                     if movie:
                         existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(out_path)).first()
                         if not existing:
-                            db.add(Screenshot(movie_id=movie.id, shot_path=str(out_path)))
+                            db.add(Screenshot(movie_id=movie.id, shot_path=str(out_path), timestamp_seconds=timestamp_seconds))
                             db.commit()
+                            # Track completion time
+                            with screenshot_completion_lock:
+                                screenshot_completion_times.append(time.time())
+                                # Keep only last 1000 timestamps to avoid memory growth
+                                if len(screenshot_completion_times) > 1000:
+                                    screenshot_completion_times.pop(0)
                     scan_progress_dict["frames_processed"] = scan_progress_dict.get("frames_processed", 0) + 1
                     scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
                     si = screenshot_info.get("screenshot_index", None)
@@ -544,7 +598,7 @@ def process_screenshot_extraction_worker(screenshot_info):
 
         # Submit job; if the executor was previously shut down, recreate and retry once
         try:
-            future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path))
+            future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path), subtitle_path)
         except Exception as submit_err:
             # Handle 'cannot schedule new futures after shutdown' and similar states
             try:

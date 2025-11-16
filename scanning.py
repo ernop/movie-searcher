@@ -220,6 +220,8 @@ def filter_yts_images(image_paths):
             continue
         if "torrents" in img_name.lower():
             continue
+        if "Kolla denn" in img_name.lower():
+            continue
         filtered.append(img_path)
     return filtered
 
@@ -290,6 +292,12 @@ def clean_movie_name(name, patterns=None):
     else:
         # Just a filename, use as-is
         name = name
+    
+    # STEP 0.5: Remove prefix markers like ".Com_" and everything before them
+    # Pattern matches ".Com_" and removes everything before and including it
+    # This handles cases like "720pMkv.Com_The.Baader.Meinhof.Complex" -> "The Baader Meinhof Complex"
+    name = re.sub(r'^.*?\.Com[._\s]+', '', name, flags=re.IGNORECASE)
+    name = name.strip()
     
     # STEP 1: Normalize separators and trivial punctuation
     # - Convert runs of '.' or '_' into single spaces
@@ -515,6 +523,8 @@ def clean_movie_name(name, patterns=None):
                 show_name = re.sub(r'\bS\d+\b', ' ', show_name, flags=re.IGNORECASE)
                 show_name = re.sub(r'\bSeason\s*\d+\b', ' ', show_name, flags=re.IGNORECASE)
                 show_name = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', show_name)
+                # Remove year if present (for comparison purposes)
+                show_name = re.sub(r'\b(19\d{2}|20[0-2]\d|203[0-5])\b', '', show_name)
                 show_name = re.sub(r'\s+', ' ', show_name).strip()
                 # Clean the episode title
                 episode_title_cleaned = title_part
@@ -526,7 +536,26 @@ def clean_movie_name(name, patterns=None):
                 episode_title_cleaned = re.sub(r'\b\d+\.\d+\b', ' ', episode_title_cleaned)
                 episode_title_cleaned = re.sub(r'\s+', ' ', episode_title_cleaned).strip()
                 # Only adopt this pattern when parent doesn't simply duplicate the file's base title
-                if show_name and show_name.lower() not in original_filename.lower():
+                # Clean the original filename similarly to compare properly
+                original_cleaned = original_filename
+                for p in quality_source_patterns:
+                    original_cleaned = re.sub(p, ' ', original_cleaned, flags=re.IGNORECASE)
+                for p in edition_patterns:
+                    original_cleaned = re.sub(p, ' ', original_cleaned, flags=re.IGNORECASE)
+                original_cleaned = re.sub(r'[._]+', ' ', original_cleaned)
+                original_cleaned = re.sub(r'\b\d+\.\d+\b', ' ', original_cleaned)
+                original_cleaned = re.sub(r'\([^)]*\)', '', original_cleaned)
+                original_cleaned = re.sub(r'\[.*?\]', '', original_cleaned)
+                original_cleaned = re.sub(r'\bS\d+\b', ' ', original_cleaned, flags=re.IGNORECASE)
+                original_cleaned = re.sub(r'\bSeason\s*\d+\b', ' ', original_cleaned, flags=re.IGNORECASE)
+                original_cleaned = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', original_cleaned)
+                # Remove year if present
+                original_cleaned = re.sub(r'\b(19\d{2}|20[0-2]\d|203[0-5])\b', '', original_cleaned)
+                original_cleaned = re.sub(r'\s+', ' ', original_cleaned).strip()
+                # Remove the leading number from original_cleaned for comparison
+                original_cleaned_no_num = re.sub(r'^\s*\d+\s+', '', original_cleaned).strip()
+                # Only treat as episode if parent folder is significantly different from filename
+                if show_name and show_name.lower() != original_cleaned_no_num.lower() and show_name.lower() not in original_cleaned.lower():
                     # Apply smart title case to show name later; assign interim
                     name = f"{show_name} {int(leading_num):02d} {episode_title_cleaned}"
                         # If we used parent folder, we already extracted year from it above
@@ -635,7 +664,7 @@ def clean_movie_name(name, patterns=None):
         
         title_cased_words = []
         # Minor words that should be lowercase (unless first/last word)
-        minor_words = {'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'from', 'in', 
+        minor_words = {'a', 'an', 'and', 'as', 'at', 'about', 'but', 'by', 'for', 'from', 'her', 'him', 'his', 'in', 
                       'into', 'of', 'on', 'or', 'the', 'to', 'with'}
         # Common words that should NOT be treated as acronyms
         common_words = {'the', 'and', 'for', 'from', 'with', 'that', 'this', 'boys', 'girl', 
@@ -652,6 +681,9 @@ def clean_movie_name(name, patterns=None):
             if len(word) <= 4 and word.isupper() and word.lower() not in common_words:
                 title_cased_words.append(word)
             # Keep minor words lowercase unless first/last
+            # Some words (like "her") should always be lowercase even when first/last
+            elif word.lower() in {'her', 'him', 'his'}:
+                title_cased_words.append(word.lower())
             elif word.lower() in minor_words and not is_first and not is_last:
                 title_cased_words.append(word.lower())
             else:
@@ -661,8 +693,40 @@ def clean_movie_name(name, patterns=None):
     
     # STEP 16: Apply smart title casing (but skip for TV shows - handle those separately)
     # Only apply if the name is not mixed case (to preserve intentional casing like "eBay")
-    if (season is None and episode is None) and (name.isupper() or name.islower()):
-        name = apply_smart_title_case(name)
+    # But also handle cases where filename cleaning left title-case minor words that should be lowercase
+    if season is None and episode is None:
+        # Check if name has title-case minor words in the middle that should be lowercase
+        # (e.g., "About", "Her" in "2 or 3 Things I Know About Her")
+        words = name.split()
+        minor_words_set = {'a', 'an', 'and', 'as', 'at', 'about', 'but', 'by', 'for', 'from', 'her', 'him', 'his', 'in', 
+                          'into', 'of', 'on', 'or', 'the', 'to', 'with'}
+        always_lowercase_set = {'her', 'him', 'his'}
+        # Normalize incorrectly cased minor words to lowercase first
+        # But preserve capitalization for words after dashes (they're start of new phrases)
+        normalized_words = []
+        for i, word in enumerate(words):
+            word_lower = word.lower()
+            is_first = (i == 0)
+            is_last = (i == len(words) - 1)
+            # Check if previous word is a dash (indicating new phrase)
+            is_after_dash = i > 0 and words[i-1] == '-'
+            # Always lowercase words (like "her") should always be lowercase (unless after dash)
+            if word_lower in always_lowercase_set and word != word_lower and not is_after_dash:
+                normalized_words.append(word_lower)
+            # Minor words in the middle should be lowercase (if they're title case), but not after dash
+            elif word_lower in minor_words_set and not is_first and not is_last and not is_after_dash and word[0].isupper() and word[1:].islower():
+                normalized_words.append(word_lower)
+            else:
+                normalized_words.append(word)
+        name = ' '.join(normalized_words)
+        # Apply title case if name is all uppercase, all lowercase, or we normalized some words
+        was_normalized = any(words[i] != normalized_words[i] for i in range(len(words)))
+        if was_normalized and not (name.isupper() or name.islower()):
+            # If we normalized words but name is still mixed case, normalize to lowercase first
+            # then apply title case to get proper capitalization
+            name = name.lower()
+        if name.isupper() or name.islower():
+            name = apply_smart_title_case(name)
     
     # Format TV series name with season/episode if found
     if season is not None or episode is not None:
@@ -759,18 +823,18 @@ def extract_screenshots(video_path, num_screenshots=5, async_mode=True, scan_pro
     """
     return extract_screenshots_core(video_path, num_screenshots, load_config, find_ffmpeg_core, add_scan_log, async_mode, scan_progress_dict)
 
-def extract_movie_screenshot(video_path, timestamp_seconds=150, async_mode=True, priority: str = "normal"):
+def extract_movie_screenshot(video_path, timestamp_seconds=150, async_mode=True, priority: str = "normal", subtitle_path=None):
     """Extract a single screenshot from video - can be synchronous or queued for async processing"""
     if async_mode:
         # Use video_processing module's extract_movie_screenshot which handles async queuing
         return extract_movie_screenshot_core(
             video_path, timestamp_seconds, async_mode,
-            load_config, find_ffmpeg_core, scan_progress, add_scan_log, priority
+            load_config, find_ffmpeg_core, scan_progress, add_scan_log, priority, subtitle_path=subtitle_path
         )
     else:
         # Synchronous mode - import here to avoid circular dependency
         from video_processing import extract_movie_screenshot_sync
-        return extract_movie_screenshot_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_core(load_config))
+        return extract_movie_screenshot_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_core(load_config), subtitle_path=subtitle_path)
 
 def process_frame_queue(max_workers=3):
     """Process queued frame extractions in background thread pool"""
@@ -943,7 +1007,16 @@ def index_movie(file_path, db: Session = None):
             shot_path = screenshots[0]
             existing_shot_paths = {s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()}
             if shot_path not in existing_shot_paths:
-                screenshot = Screenshot(movie_id=movie.id, shot_path=shot_path)
+                # Extract timestamp from filename if possible (format: movie_name_screenshot150s.jpg)
+                timestamp_seconds = None
+                try:
+                    import re
+                    match = re.search(r'_screenshot(\d+)s\.jpg$', shot_path)
+                    if match:
+                        timestamp_seconds = float(match.group(1))
+                except Exception:
+                    pass
+                screenshot = Screenshot(movie_id=movie.id, shot_path=shot_path, timestamp_seconds=timestamp_seconds)
                 db.add(screenshot)
 
         # Refresh audio metadata (languages available)
