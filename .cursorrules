@@ -7,12 +7,166 @@
 
 # PRIME DIRECTIVE - NO FALLBACKS
 
-If we need something:
-1. Set up a system to get it
-2. If that fails, we fail and fix step 2
-3. NEVER add a fallback/hacky patch (step 4) to try to work around the failure
+When something fails, fix the root cause. Never add alternative logic that tries to work around the failure.
 
-Fail fast, fail clearly. Fix the root cause, don't paper over it.
+## What is a Fallback?
+
+A fallback is code that silently tries alternative methods when the primary method fails, instead of surfacing and fixing the failure.
+
+## Example 1: Library Loading
+
+WRONG:
+```python
+try:
+    import preferred_library
+    parser = preferred_library.Parser()
+except ImportError:
+    import backup_library
+    parser = backup_library.Parser()
+```
+
+RIGHT:
+```python
+import preferred_library
+parser = preferred_library.Parser()
+```
+If import fails, fix the environment or dependencies. Don't mask it.
+
+## Example 2: Data Extraction (This Project's Core Case)
+
+WRONG:
+```python
+# In indexing
+movie.year = extract_year(filename)  # Returns None if extraction fails
+
+# Later in API endpoint
+def get_movie_details(movie):
+    year = movie.year or try_parse_year_again(movie.filename) or "Unknown"
+    return {"title": movie.title, "year": year}
+```
+
+RIGHT:
+```python
+# In indexing
+movie.year = extract_year(filename)  # Returns None if extraction fails
+
+# In API endpoint
+def get_movie_details(movie):
+    return {"title": movie.title, "year": movie.year}
+```
+If year is missing, improve `extract_year()` and re-index. Don't re-parse in the API.
+
+## Example 3: Configuration Detection
+
+WRONG:
+```python
+def get_vlc_path():
+    path = os.environ.get("VLC_PATH")
+    if not path:
+        path = find_in_program_files()
+    if not path:
+        path = find_in_registry()
+    if not path:
+        path = "/usr/bin/vlc"  # Linux fallback
+    return path
+```
+
+RIGHT:
+```python
+def get_vlc_path():
+    path = os.environ.get("VLC_PATH")
+    if not path:
+        raise ConfigError("VLC_PATH not set. Set it in environment or config file.")
+    return path
+```
+If VLC path is wrong, fix the configuration. Don't guess.
+
+## Example 4: External Tool Calls
+
+WRONG:
+```python
+try:
+    duration = extract_duration_ffmpeg(video_file)
+except Exception:
+    try:
+        duration = extract_duration_mediainfo(video_file)
+    except Exception:
+        duration = estimate_from_filesize(video_file)
+```
+
+RIGHT:
+```python
+duration = extract_duration_ffmpeg(video_file)
+```
+If ffmpeg fails, fix ffmpeg installation or the extraction logic. Don't cascade through alternatives.
+
+## Example 5: tryAscertainValue Pattern
+
+WRONG:
+```python
+def tryAscertainValue(data):
+    # Try method 1
+    value = parse_from_field_a(data)
+    if value:
+        return value
+    
+    # Try method 2
+    value = parse_from_field_b(data)
+    if value:
+        return value
+    
+    # Try method 3
+    value = guess_from_context(data)
+    if value:
+        return value
+    
+    return "default"
+```
+
+RIGHT:
+```python
+def get_value(data):
+    return parse_from_field_a(data)
+```
+If field_a doesn't have the value, fix the data source or the data model. Don't try alternate fields.
+
+## Example 6: Retry Loops
+
+WRONG:
+```python
+def connect_to_service():
+    for i in range(10):
+        try:
+            return service.connect()
+        except ConnectionError:
+            time.sleep(1)
+    raise ConnectionError("Failed after 10 retries")
+```
+
+RIGHT:
+```python
+def connect_to_service():
+    return service.connect()
+```
+If connection fails, fix the service availability, network config, or credentials. Don't retry and hope.
+
+## The Rule
+
+1. Use the correct method
+2. If it fails, the error should be visible
+3. Fix the method or fix the environment
+4. Never add a second/third method to "help" when the first fails
+
+## Why No Fallbacks?
+
+Fallbacks create multiple sources of truth, hide bugs, and make debugging harder. They seem helpful but cause:
+
+1. Inconsistent behavior - different code paths produce different results
+2. Hidden failures - errors are masked instead of fixed
+3. Maintenance burden - multiple methods to maintain and keep in sync
+4. False confidence - system appears to work but produces unreliable data
+
+When you see missing data or failures, the fix is always to improve the single upstream source, never to add downstream alternatives.
 
 # DATABASE SCHEMA RULES
 
@@ -34,24 +188,3 @@ Fail fast, fail clearly. Fix the root cause, don't paper over it.
 - UI elements must NEVER move, scale, or transform on hover
 - Only change colors, borders, opacity, or other visual properties that don't affect layout or position
 - No transform: scale(), translate(), rotate(), or z-index changes on hover states
-
-
-
-
-
-### Cursor Rules (Project-specific)
-
-- No fallbacks that recompute data downstream. If normalization or extraction happens upstream and fails, do not retry with a different method elsewhere. Fix the upstream step or re-run it.
-  - Canonical example: Year extraction
-    - Right: Extract year during indexing/cleaning (`scanning.index_movie`), store in `Movie.year`, and only read `Movie.year` in all APIs and UI.
-    - Wrong: If `Movie.year` is null, do not try to parse year again in `/api/movie`, search responses, history, or explore endpoints. This creates a second, divergent source of truth.
-  - Rationale: A single source of truth eliminates drift, racey inconsistencies, and hidden complexity. If the result is missing, the correct fix is to improve the upstream step or re-index, not to introduce a downstream fallback.
-
-- PRIME DIRECTIVE - NO FALLBACKS
-  1. Set up the system to get what we need.
-  2. If it fails, fail and fix step 2.
-  3. Do not add a fallback/hacky patch to work around the failure.
-
-These rules apply to parsing, metadata extraction (e.g., year, duration), configuration detection, and external tool discovery. Move good code upstream; do not mask failures with alternate logic later in the flow.
-*** End Patch}?>
-
