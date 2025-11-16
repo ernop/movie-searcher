@@ -655,20 +655,10 @@
         
         .media-item img {
             display: block;
-            width: 200px;
-            height: 112px;
-            object-fit: cover;
+            max-width: 300px;
+            max-height: 300px;
+            object-fit: contain;
             background: #1a1a1a;
-        }
-        
-        .media-item.large {
-            width: 300px;
-            height: 169px;
-        }
-        
-        .media-item.large img {
-            width: 300px;
-            height: 169px;
         }
         
         .media-label {
@@ -2326,39 +2316,37 @@
                 return '';
             }
             
-            // Show first image larger, rest as thumbnails
-            const firstMedia = allMedia[0];
-            const restMedia = allMedia.slice(1); // Show all remaining media
-            
             let galleryHtml = '<div class="media-gallery">';
             
-            // First image (larger)
-            galleryHtml += `
-                <div class="media-item large" onclick="showMediaOverlay('${escapeHtml(firstMedia.path)}')" style="position: relative;">
-                    <button 
-                        class="get-more-btn" 
-                        title="Get more screenshots" 
-                        onclick="event.stopPropagation(); getMoreScreenshots('${escapeJsString(itemPath)}');" 
-                        style="position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 4px 8px; opacity: 0.85;">
-                        Get more
-                    </button>
-                    <img src="/api/image?image_path=${encodeURIComponent(firstMedia.path)}" 
-                         alt="" 
-                         loading="lazy"
-                         onerror="this.style.display='none'">
-                </div>
-            `;
-            
-            // Rest as thumbnails
-            restMedia.forEach(media => {
-                galleryHtml += `
-                    <div class="media-item" onclick="showMediaOverlay('${escapeHtml(media.path)}')">
-                        <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
-                             alt="" 
-                             loading="lazy"
-                             onerror="this.style.display='none'">
-                    </div>
-                `;
+            allMedia.forEach((media, idx) => {
+                if (idx === 0) {
+                    // First item gets the "Get more" button
+                    galleryHtml += `
+                        <div class="media-item" onclick="showMediaOverlay('${escapeHtml(media.path)}')" style="position: relative;">
+                            <button 
+                                class="get-more-btn" 
+                                title="Get more screenshots" 
+                                onclick="event.stopPropagation(); getMoreScreenshots('${escapeJsString(itemPath)}');" 
+                                style="position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 4px 8px; opacity: 0.85;">
+                                Get more
+                            </button>
+                            <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
+                                 alt="" 
+                                 loading="lazy"
+                                 onerror="this.style.display='none'">
+                        </div>
+                    `;
+                } else {
+                    // All other items
+                    galleryHtml += `
+                        <div class="media-item" onclick="showMediaOverlay('${escapeHtml(media.path)}')">
+                            <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
+                                 alt="" 
+                                 loading="lazy"
+                                 onerror="this.style.display='none'">
+                        </div>
+                    `;
+                }
             });
             
             galleryHtml += '</div>';
