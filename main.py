@@ -1951,11 +1951,10 @@ async def explore_movies(
             decade_end = decade_start + 9
             movie_q = movie_q.filter(Movie.year >= decade_start, Movie.year <= decade_end)
 
-        # Total count after filters
+        # Use normal pagination
         total = movie_q.count()
-
-        # Order and paginate
         rows = movie_q.order_by(Movie.name.asc()).offset((page - 1) * per_page).limit(per_page).all()
+        
         movie_ids = [m.id for m in rows]
 
         # Batched fetch for watch status info (latest watch entry regardless of status) limited to page ids

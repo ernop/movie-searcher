@@ -1579,6 +1579,12 @@
                     <button type="button" class="btn" data-filter="unwatched" onclick="setExploreWatchFilter('unwatched', this)">Unwatched only</button>
                 </div>
                 <div style="margin-left:16px;padding-left:16px;border-left: 2px solid #e0e0e0;">
+                    <div class="btn-group btn-group-toggle" role="group">
+                        <button type="button" class="btn active" data-subs-filter="all" onclick="setExploreSubsFilter('all', this)">All</button>
+                        <button type="button" class="btn" data-subs-filter="true" onclick="setExploreSubsFilter('true', this)">Has any subs</button>
+                    </div>
+                </div>
+                <div style="margin-left:16px;padding-left:16px;border-left: 2px solid #e0e0e0;">
                     <div class="btn-group btn-group-toggle language-filter-group" role="group" id="exploreLanguageFilterGroup" style="display:inline-flex;flex-wrap:wrap;gap:0;align-items:center;">
                         <!-- Audio language buttons will be populated by JavaScript -->
                     </div>
@@ -1715,7 +1721,37 @@
         // Routing
         function getRoute() {
             const hash = window.location.hash || '#/home';
-            return hash.substring(1); // Remove #
+            return hash.substring(1).split('?')[0]; // Remove # and query params
+        }
+        
+        function getRouteParams() {
+            const hash = window.location.hash || '#/home';
+            const parts = hash.substring(1).split('?');
+            if (parts.length < 2) return {};
+            const params = new URLSearchParams(parts[1]);
+            const result = {};
+            for (const [key, value] of params.entries()) {
+                result[key] = value;
+            }
+            return result;
+        }
+        
+        function updateRouteParams(newParams) {
+            const route = getRoute();
+            const currentParams = getRouteParams();
+            // Merge current params with new params
+            const merged = { ...currentParams, ...newParams };
+            // Remove params with null/undefined values
+            Object.keys(merged).forEach(key => {
+                if (merged[key] === null || merged[key] === undefined || merged[key] === 'all') {
+                    delete merged[key];
+                }
+            });
+            // Build new URL
+            const paramsStr = Object.keys(merged).length > 0 
+                ? '?' + new URLSearchParams(merged).toString()
+                : '';
+            window.location.hash = route + paramsStr;
         }
         
         function navigateTo(route) {
@@ -1948,6 +1984,10 @@
                 languageGroup.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
             }
             clickedBtn.classList.add('active');
+            
+            // Update URL params
+            updateRouteParams({ language: languageValue === 'all' ? null : languageValue });
+            
             // Apply filters when language changes
             applyExploreFilters();
         }
@@ -2014,12 +2054,30 @@
         }
         
         function setExploreWatchFilter(filterValue, clickedBtn) {
-            // Remove active class from all explore filter buttons
-            const buttons = document.querySelectorAll('#pageExplore .btn-group-toggle .btn');
-            buttons.forEach(btn => btn.classList.remove('active'));
+            // Remove active class from all watch filter buttons in the same group
+            const group = clickedBtn.closest('.btn-group-toggle');
+            group.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
             
             // Add active class to clicked button
             clickedBtn.classList.add('active');
+            
+            // Update URL params
+            updateRouteParams({ filter_type: filterValue === 'all' ? null : filterValue });
+            
+            // Apply explore filters
+            applyExploreFilters();
+        }
+        
+        function setExploreSubsFilter(filterValue, clickedBtn) {
+            // Remove active class from all subtitle filter buttons in the same group
+            const group = clickedBtn.closest('.btn-group-toggle');
+            group.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+            
+            // Add active class to clicked button
+            clickedBtn.classList.add('active');
+            
+            // Update URL params
+            updateRouteParams({ has_subs: filterValue === 'all' ? null : filterValue });
             
             // Apply explore filters
             applyExploreFilters();
@@ -3023,8 +3081,8 @@
         
         // Standard AJAX pattern: read UI state, build request, fetch, update UI
         function getCurrentExploreFilters() {
-            // Read filter type from button group
-            const activeBtn = document.querySelector('#pageExplore .btn-group-toggle .btn.active');
+            // Read filter type from watch filter button group (first group)
+            const activeBtn = document.querySelector('.explore-filters .btn-group-toggle:first-child .btn.active[data-filter]');
             const filterType = activeBtn ? activeBtn.dataset.filter || 'all' : 'all';
             
             // Read letter from active letter button
@@ -3043,7 +3101,11 @@
             const langBtn = document.querySelector('#exploreLanguageFilterGroup .btn.active[data-language]');
             const language = langBtn ? (langBtn.getAttribute('data-language') || 'all') : 'all';
             
-            return { filterType, letter, decade, year, language };
+            // Read subtitle filter
+            const subsBtn = document.querySelector('.explore-filters .btn.active[data-subs-filter]');
+            const hasSubs = subsBtn ? (subsBtn.getAttribute('data-subs-filter') || 'all') : 'all';
+            
+            return { filterType, letter, decade, year, language, hasSubs };
         }
         
         async function fetchExploreMovies(page, filterType, letter, decade, year) {
@@ -3067,12 +3129,11 @@
                 }
                 
                 // Always include language from current explore state (even 'all' for clarity)
-                const { language } = getCurrentExploreFilters();
+                const { language, hasSubs } = getCurrentExploreFilters();
                 params.append('language', language || 'all');
+                params.append('has_subs', hasSubs || 'all');
                 
                 const url = `/api/explore?${params}`;
-                console.log('fetchExploreMovies called with:', { page, filterType, letter, decade, year, language });
-                console.log('Request URL:', url);
                 const response = await fetch(url);
                 
                 if (!response.ok) {
@@ -3179,8 +3240,60 @@
         
         // Initial load - reads UI state
         function loadExploreMovies() {
-            const { filterType, letter, decade, year } = getCurrentExploreFilters();
-            fetchExploreMovies(currentExplorePage || 1, filterType, letter, decade, year);
+            // Initialize filter buttons from URL params if present
+            const urlParams = getRouteParams();
+            let filtersInitialized = false;
+            
+            // Set watch filter from URL
+            if (urlParams.filter_type) {
+                const watchBtn = document.querySelector(`.explore-filters .btn[data-filter="${urlParams.filter_type}"]`);
+                if (watchBtn) {
+                    // Set button state without triggering applyExploreFilters
+                    const group = watchBtn.closest('.btn-group-toggle');
+                    group.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+                    watchBtn.classList.add('active');
+                    filtersInitialized = true;
+                }
+            }
+            
+            // Set subtitle filter from URL
+            if (urlParams.has_subs) {
+                const subsBtn = document.querySelector(`.explore-filters .btn[data-subs-filter="${urlParams.has_subs}"]`);
+                if (subsBtn) {
+                    // Set button state without triggering applyExploreFilters
+                    const group = subsBtn.closest('.btn-group-toggle');
+                    group.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+                    subsBtn.classList.add('active');
+                    filtersInitialized = true;
+                }
+            }
+            
+            // Set language filter from URL (need to wait for language buttons to load)
+            // This will be handled after language filters are loaded
+            if (urlParams.language) {
+                // Wait a bit for language buttons to be populated
+                setTimeout(() => {
+                    const langBtn = document.querySelector(`#exploreLanguageFilterGroup .btn[data-language="${urlParams.language}"]`);
+                    if (langBtn) {
+                        const languageGroup = document.getElementById('exploreLanguageFilterGroup');
+                        if (languageGroup) {
+                            languageGroup.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+                        }
+                        langBtn.classList.add('active');
+                        applyExploreFilters();
+                    }
+                }, 100);
+            }
+            
+            // Only fetch if we didn't initialize filters (they will trigger their own fetch)
+            if (!filtersInitialized) {
+                const { filterType, letter, decade, year } = getCurrentExploreFilters();
+                fetchExploreMovies(currentExplorePage || 1, filterType, letter, decade, year);
+            } else {
+                // Filters were initialized, they will trigger applyExploreFilters
+                // But we need to make sure applyExploreFilters is called
+                applyExploreFilters();
+            }
         }
         
         function renderLetterNav(letterCounts, activeLetter) {

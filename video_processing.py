@@ -108,8 +108,22 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
             img = img.convert('RGB')
         draw = ImageDraw.Draw(img)
         
-        # Use standard subtitle font size (48px for better visibility)
-        font_size = 48
+        # Calculate dynamic font size based on image height (video resolution)
+        # Industry standards (FEPSS, Venice Film Festival, Capital Captions):
+        # - Font size: 4.6% to 5.6% of screen height (FEPSS: 50-60px for 1080p)
+        # - Line height/subtitle area: ~8% of screen height (BBC standard)
+        # We use 5.5% to match upper end of professional standards
+        image_height = img.size[1]
+        
+        # Calculate font size as percentage of image height (5.5% matches FEPSS upper range)
+        # This ensures subtitles scale proportionally with video resolution
+        font_size = int(image_height * 0.055)
+        
+        # Set reasonable bounds to avoid extremes
+        # Minimum: 20px for very low-res videos (e.g., 360p) - matches Channel 4 SD standard
+        # Maximum: 80px for very high-res videos (e.g., 4K) - allows proper scaling
+        font_size = max(20, min(80, font_size))
+        
         font = None
         
         # Try standard subtitle fonts in order
@@ -163,12 +177,16 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
                     return False
         
         # Calculate total height and max width
-        total_height = sum(line_heights) + (len(lines) - 1) * 5  # 5px spacing between lines
+        # Line spacing also scales with resolution (proportional to font size)
+        line_spacing = max(3, int(font_size * 0.1))  # 10% of font size, minimum 3px
+        total_height = sum(line_heights) + (len(lines) - 1) * line_spacing
         max_width = max(line_widths) if line_widths else 0
         
         # Position at bottom center (standard subtitle position)
+        # Bottom margin scales with resolution (about 2% of image height, minimum 20px)
+        bottom_margin = max(20, int(image_height * 0.02))
         x = (img.size[0] - max_width) // 2
-        y = img.size[1] - total_height - 40  # 40px margin from bottom
+        y = img.size[1] - total_height - bottom_margin
         
         # Draw each line
         current_y = y
@@ -177,7 +195,8 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
             line_x = (img.size[0] - line_w) // 2  # Center each line individually
             
             # Draw black outline (standard subtitle outline)
-            outline_range = 2
+            # Outline thickness scales with font size (about 4% of font size, minimum 1px)
+            outline_range = max(1, int(font_size * 0.04))
             for x_offset in range(-outline_range, outline_range + 1):
                 for y_offset in range(-outline_range, outline_range + 1):
                     if x_offset != 0 or y_offset != 0:  # Skip center position
@@ -187,7 +206,7 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
             draw.text((line_x, current_y), line, font=font, fill='white')
             
             # Move to next line
-            current_y += line_heights[i] + 5
+            current_y += line_heights[i] + line_spacing
         
         # Save the modified image
         img.save(image_path)

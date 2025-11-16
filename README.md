@@ -30,6 +30,8 @@ Launch with subtitles automatically detected. Select which subtitle file if mult
 
 ## Organization
 
+[![Explore Movies](docs/explore-header.png)](#organization)
+
 Filter by alphabet, year, audio language, watch status. Combine filters. Browse unwatched films with Spanish audio from the 1980s. Find exactly what you want.
 
 Open folder in file explorer. Manage your files directly. Trash what you don't want. Share what you love.

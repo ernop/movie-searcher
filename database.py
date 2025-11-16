@@ -96,6 +96,10 @@ def migrate_db_schema():
     
     current_version = get_schema_version()
     
+    # If already at current version, no migration needed - skip all checks
+    if current_version == CURRENT_SCHEMA_VERSION:
+        return
+    
     # If schema_version table doesn't exist or version is None, we need to check for old schema
     if current_version is None:
         # Check if this is old schema (path as PK) or new schema missing version tracking
@@ -114,7 +118,7 @@ def migrate_db_schema():
             # Old schema - needs full migration (will set version after migration)
             pass  # Continue to full migration below
     
-    # Ensure all tables have required created/updated columns (regardless of version)
+    # Ensure all tables have required created/updated columns (only during migrations)
     # This fixes cases where tables were created without these columns
     tables_requiring_timestamps = ["config", "indexed_paths", "search_history"]
     for table_name in tables_requiring_timestamps:
@@ -138,10 +142,6 @@ def migrate_db_schema():
                     needs_fix = True
                 if needs_fix:
                     logger.info(f"Fixed {table_name} table: added missing timestamp columns")
-    
-    # If already at current version, no migration needed
-    if current_version == CURRENT_SCHEMA_VERSION:
-        return
     
     # Check if this is the old schema (no id column in movies)
     existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
