@@ -1579,12 +1579,6 @@
                     <button type="button" class="btn" data-filter="unwatched" onclick="setExploreWatchFilter('unwatched', this)">Unwatched only</button>
                 </div>
                 <div style="margin-left:16px;padding-left:16px;border-left: 2px solid #e0e0e0;">
-                    <div class="btn-group btn-group-toggle" role="group">
-                        <button type="button" class="btn active" data-subs-filter="all" onclick="setExploreSubsFilter('all', this)">All</button>
-                        <button type="button" class="btn" data-subs-filter="true" onclick="setExploreSubsFilter('true', this)">Has any subs</button>
-                    </div>
-                </div>
-                <div style="margin-left:16px;padding-left:16px;border-left: 2px solid #e0e0e0;">
                     <div class="btn-group btn-group-toggle language-filter-group" role="group" id="exploreLanguageFilterGroup" style="display:inline-flex;flex-wrap:wrap;gap:0;align-items:center;">
                         <!-- Audio language buttons will be populated by JavaScript -->
                     </div>
@@ -2068,20 +2062,6 @@
             applyExploreFilters();
         }
         
-        function setExploreSubsFilter(filterValue, clickedBtn) {
-            // Remove active class from all subtitle filter buttons in the same group
-            const group = clickedBtn.closest('.btn-group-toggle');
-            group.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
-            
-            // Add active class to clicked button
-            clickedBtn.classList.add('active');
-            
-            // Update URL params
-            updateRouteParams({ has_subs: filterValue === 'all' ? null : filterValue });
-            
-            // Apply explore filters
-            applyExploreFilters();
-        }
         const statusMessage = document.getElementById('statusMessage');
         let progressInterval = null;
 		let progressPollInFlight = false;
@@ -2968,6 +2948,52 @@
         
         // Star rating functions are now in star-rating.js
         
+        function updateStarRatingUI(path, rating) {
+            // Find all star-rating divs and update the ones that match this path
+            const starRatings = document.querySelectorAll('.star-rating');
+            
+            // Normalize path for comparison (handle both forward and backslashes)
+            const normalizePath = (p) => p.replace(/\\/g, '/').toLowerCase();
+            const normalizedPath = normalizePath(path);
+            
+            starRatings.forEach(starRatingDiv => {
+                // Check if this star-rating belongs to the movie with this path
+                // The onclick handler contains the path (may be escaped)
+                const onclickAttr = starRatingDiv.getAttribute('onclick');
+                if (onclickAttr) {
+                    // Extract path from onclick - it's in the toggleWatched or handleStarClick call
+                    // Try to find the path by looking for the function call with path parameter
+                    let matches = onclickAttr.match(/toggleWatched\(['"]([^'"]+)['"]/);
+                    if (!matches) {
+                        matches = onclickAttr.match(/handleStarClick\([^,]+,\s*['"]([^'"]+)['"]/);
+                    }
+                    
+                    if (matches && matches[1]) {
+                        // Unescape the path and normalize for comparison
+                        const divPath = matches[1].replace(/\\\\/g, '\\').replace(/\\'/g, "'").replace(/\\"/g, '"');
+                        if (normalizePath(divPath) === normalizedPath) {
+                            // This star-rating belongs to our movie - update it
+                            const isWatched = true; // Setting a rating means watched
+                            const newStarRatingHTML = renderStarRating(path, isWatched, rating);
+                            
+                            // Create a temporary div to parse the HTML
+                            const temp = document.createElement('div');
+                            temp.innerHTML = newStarRatingHTML;
+                            const newStarRatingDiv = temp.querySelector('.star-rating');
+                            
+                            if (newStarRatingDiv) {
+                                // Replace the innerHTML (the stars) but keep the outer div structure
+                                starRatingDiv.innerHTML = newStarRatingDiv.innerHTML;
+                                // Update the onclick handler to match the new rating state
+                                starRatingDiv.setAttribute('onclick', newStarRatingDiv.getAttribute('onclick'));
+                                starRatingDiv.setAttribute('title', newStarRatingDiv.getAttribute('title'));
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
         async function setRating(path, rating) {
             // Setting a rating automatically marks as watched
             console.log('setRating called:', {path, rating, ratingType: typeof rating});
@@ -2983,6 +3009,11 @@
                 if (response.ok) {
                     const result = await response.json();
                     console.log('Rating saved successfully:', result);
+                    
+                    // Update the star rating UI immediately
+                    updateStarRatingUI(path, rating);
+                    
+                    // Also refresh views if needed
                     if (watchedViewActive) {
                         loadWatchedMovies();
                     } else if (exploreViewActive) {
@@ -3101,11 +3132,7 @@
             const langBtn = document.querySelector('#exploreLanguageFilterGroup .btn.active[data-language]');
             const language = langBtn ? (langBtn.getAttribute('data-language') || 'all') : 'all';
             
-            // Read subtitle filter
-            const subsBtn = document.querySelector('.explore-filters .btn.active[data-subs-filter]');
-            const hasSubs = subsBtn ? (subsBtn.getAttribute('data-subs-filter') || 'all') : 'all';
-            
-            return { filterType, letter, decade, year, language, hasSubs };
+            return { filterType, letter, decade, year, language };
         }
         
         async function fetchExploreMovies(page, filterType, letter, decade, year) {
@@ -3129,9 +3156,8 @@
                 }
                 
                 // Always include language from current explore state (even 'all' for clarity)
-                const { language, hasSubs } = getCurrentExploreFilters();
+                const { language } = getCurrentExploreFilters();
                 params.append('language', language || 'all');
-                params.append('has_subs', hasSubs || 'all');
                 
                 const url = `/api/explore?${params}`;
                 const response = await fetch(url);
@@ -3256,17 +3282,6 @@
                 }
             }
             
-            // Set subtitle filter from URL
-            if (urlParams.has_subs) {
-                const subsBtn = document.querySelector(`.explore-filters .btn[data-subs-filter="${urlParams.has_subs}"]`);
-                if (subsBtn) {
-                    // Set button state without triggering applyExploreFilters
-                    const group = subsBtn.closest('.btn-group-toggle');
-                    group.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
-                    subsBtn.classList.add('active');
-                    filtersInitialized = true;
-                }
-            }
             
             // Set language filter from URL (need to wait for language buttons to load)
             // This will be handled after language filters are loaded

@@ -23,9 +23,10 @@ function renderStarRating(path, isWatched, rating = null) {
         const escapedPath = path.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
         starsHtml += `
             <span class="star ${starClass}" 
+                  data-star-index="${i}"
                   data-rating-left="${leftHalfRating}" 
                   data-rating-right="${rightHalfRating}"
-                  onclick="event.stopPropagation(); handleStarClick(event, '${escapedPath}', ${leftHalfRating}, ${rightHalfRating})">★</span>`;
+                  onclick="event.stopPropagation(); handleStarClick(event, '${escapedPath}')">★</span>`;
     }
     
     // Escape path for JavaScript string literal
@@ -37,50 +38,75 @@ function renderStarRating(path, isWatched, rating = null) {
     `;
 }
 
-function handleStarClick(event, path, leftRating, rightRating) {
+function handleStarClick(event, path) {
     event.stopPropagation();
     event.preventDefault();
-    // For inline onclick handlers, event.currentTarget might not work correctly
-    // Find the star element (could be event.target or its parent if clicking on text node)
+    
+    console.log('=== STAR CLICK DETECTION ===');
+    console.log('event.target:', event.target);
+    console.log('event.target.nodeType:', event.target.nodeType);
+    console.log('event.target.nodeName:', event.target.nodeName);
+    console.log('event.target.className:', event.target.className);
+    console.log('event.target.textContent:', event.target.textContent);
+    
+    // Get the star element that was actually clicked
+    // event.target might be the span itself or the text node "★" inside it
     let star = event.target;
-    while (star && !star.classList.contains('star')) {
+    if (star.nodeType === Node.TEXT_NODE) {
+        console.log('Detected text node, getting parent element');
+        // If clicking on the text node, get its parent (the span)
         star = star.parentElement;
+        console.log('Parent element:', star);
     }
-    if (!star) {
-        // Fallback: use the element that has the onclick handler
-        star = event.target.closest('.star');
-    }
-    if (!star) {
-        console.error('Could not find star element');
+    
+    // Verify it's actually a star element
+    if (!star || !star.classList.contains('star')) {
+        console.error('Could not find star element', {target: event.target, star});
         return;
     }
     
-    // Use data attributes from the actual clicked star element to ensure we get the correct rating values
-    // This is more reliable than using the function parameters, which might be from a different star
-    const actualLeftRating = parseFloat(star.getAttribute('data-rating-left'));
-    const actualRightRating = parseFloat(star.getAttribute('data-rating-right'));
+    console.log('Star element found:', star);
+    console.log('Star classes:', star.className);
+    console.log('Star index (data-star-index):', star.getAttribute('data-star-index'));
+    
+    // Get rating values from data attributes
+    const leftRating = parseFloat(star.getAttribute('data-rating-left'));
+    const rightRating = parseFloat(star.getAttribute('data-rating-right'));
+    
+    console.log('Star rating values:', {
+        leftRating: leftRating,
+        rightRating: rightRating,
+        'data-rating-left': star.getAttribute('data-rating-left'),
+        'data-rating-right': star.getAttribute('data-rating-right')
+    });
     
     // Validate that we got valid ratings
-    if (isNaN(actualLeftRating) || isNaN(actualRightRating)) {
-        console.error('Invalid rating values from star element', {actualLeftRating, actualRightRating});
+    if (isNaN(leftRating) || isNaN(rightRating)) {
+        console.error('Invalid rating values from star element', {leftRating, rightRating, star});
         return;
     }
     
+    // Calculate which half of the star was clicked
     const rect = star.getBoundingClientRect();
     const clickX = event.clientX - rect.left;
     const width = rect.width;
     
-    // Determine if click was on left or right half using the actual star's rating values
-    const rating = clickX < width / 2 ? actualLeftRating : actualRightRating;
+    console.log('Click position:', {
+        clickX: clickX,
+        width: width,
+        clickXPercent: ((clickX / width) * 100).toFixed(1) + '%',
+        isLeftHalf: clickX < width / 2
+    });
     
-    // Ensure rating is a number, not a string
-    const ratingValue = parseFloat(rating);
-    if (isNaN(ratingValue)) {
-        console.error('Invalid rating calculated', {rating, clickX, width, actualLeftRating, actualRightRating});
-        return;
-    }
+    // Determine rating: left half = leftRating, right half = rightRating
+    const ratingValue = clickX < width / 2 ? leftRating : rightRating;
     
-    console.log('Star clicked:', {path, rating: ratingValue, clickX, width, leftHalf: clickX < width / 2});
+    console.log('=== FINAL RESULT ===');
+    console.log('Selected rating:', ratingValue);
+    console.log('Star index:', star.getAttribute('data-star-index'));
+    console.log('Path:', path);
+    console.log('========================');
+    
     setRating(path, ratingValue);
 }
 
