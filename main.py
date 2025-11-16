@@ -251,8 +251,30 @@ class CleanNameTestRequest(BaseModel):
 
 class ScreenshotsIntervalRequest(BaseModel):
     path: str
-    every_minutes: int = 5
+    every_minutes: int = 3
     async_mode: bool = True
+
+@app.post("/api/frames/start")
+async def start_frame_worker():
+    """Force-start the background screenshot extraction worker."""
+    try:
+        process_frame_queue()
+        return {
+            "status": "started",
+            "frame_queue_size": frame_extraction_queue.qsize()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/frames/status")
+async def get_frame_worker_status():
+    """Report frame extraction queue status."""
+    try:
+        return {
+            "frame_queue_size": frame_extraction_queue.qsize()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def get_video_length(file_path):
     """Extract video length using mutagen if available, otherwise return None"""
@@ -864,7 +886,7 @@ async def get_image(image_path: str):
 
 @app.post("/api/movie/screenshots/interval")
 async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
-    """Queue screenshots every N minutes across the movie duration (default 5 minutes)."""
+    """Queue screenshots every N minutes across the movie duration (default 3 minutes)."""
     db = SessionLocal()
     try:
         movie = db.query(Movie).filter(Movie.path == request.path).first()
@@ -886,11 +908,18 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
         queued = 0
         for ts in timestamps:
             try:
-                extract_movie_screenshot(request.path, timestamp_seconds=ts, async_mode=request.async_mode)
+                # User-triggered work gets higher priority over backlog
+                extract_movie_screenshot(request.path, timestamp_seconds=ts, async_mode=request.async_mode, priority="user_high")
                 queued += 1
             except Exception as e:
                 logger.warning(f"Failed to queue screenshot at {ts}s for {request.path}: {e}")
                 continue
+
+        # Ensure background worker is running to process the queue now
+        try:
+            process_frame_queue()
+        except Exception:
+            pass
 
         # Return current known screenshots (new ones will appear as the worker processes them)
         current_shots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
@@ -1080,6 +1109,7 @@ async def get_launch_history():
             }
             
             movie_info = {
+                "id": movie.id,
                 "path": movie.path,
                 "name": movie.name,
                 "length": movie.length,

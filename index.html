@@ -1547,7 +1547,7 @@
         
         <!-- Movie Details Page -->
         <div class="page" id="pageMovieDetails">
-            <button class="back-button" onclick="navigateTo('/home')">← Back</button>
+            <button class="back-button" onclick="historyBack()">← Back</button>
             <div class="movie-details-container" id="movieDetailsContainer">
                 <div class="loading">Loading movie details...</div>
             </div>
@@ -1643,6 +1643,19 @@
         function navigateTo(route) {
             window.location.hash = route;
             handleRoute();
+        }
+
+        // Back navigation that prefers real history; falls back to home
+        function historyBack() {
+            try {
+                if (window.history.length > 1) {
+                    window.history.back();
+                } else {
+                    navigateTo('/home');
+                }
+            } catch (e) {
+                navigateTo('/home');
+            }
         }
         
         function handleRoute() {
@@ -1761,9 +1774,18 @@
             `;
         }
 
+        // Preserve History scroll position when jumping to details
+        let savedHistoryScroll = null;
+
         // Open detail page using hash-based SPA route
         function openMovieHash(id, slug) {
             const safeSlug = (slug || '').toString();
+            // Save History scroll so back returns exactly where we were
+            const current = getRoute();
+            if (current === '/history') {
+                const list = document.getElementById('historyList');
+                if (list) savedHistoryScroll = list.scrollTop;
+            }
             navigateTo(`/movie/${id}/${safeSlug}`);
         }
         
@@ -1872,7 +1894,7 @@
                     'it': 'Italian', 'pt': 'Portuguese', 'ru': 'Russian', 'ja': 'Japanese',
                     'ko': 'Korean', 'zh': 'Chinese', 'hi': 'Hindi', 'sv': 'Swedish', 'da': 'Danish',
                     'ar': 'Arabic', 'pl': 'Polish', 'is': 'Icelandic', 'cs': 'Czech', 'fi': 'Finnish',
-                    'und': 'Unknown', 'unknown': 'Unknown', 'zxx': 'no language'
+                    'und': 'Unknown', 'unknown': 'Unknown', 'zxx': 'No language'
                 };
 
                 // Merge counts by canonical code
@@ -1891,7 +1913,11 @@
                 const sortedLanguages = Object.keys(mergedCounts).sort((a, b) => {
                     if (a === 'all') return -1;
                     if (b === 'all') return 1;
-                    return mergedCounts[b] - mergedCounts[a];
+                    const countDiff = (mergedCounts[b] - mergedCounts[a]);
+                    if (countDiff !== 0) return countDiff;
+                    const nameA = (languageNames[a] || (a ? a : 'unknown')).toLowerCase();
+                    const nameB = (languageNames[b] || (b ? b : 'unknown')).toLowerCase();
+                    return nameA.localeCompare(nameB);
                 });
                 
                 let html = '<span style="margin-right: 8px; font-weight: 600; white-space: nowrap;">Audio language:</span>';
@@ -2302,7 +2328,7 @@
             
             // Show first image larger, rest as thumbnails
             const firstMedia = allMedia[0];
-            const restMedia = allMedia.slice(1, 6); // Limit to 5 more
+            const restMedia = allMedia.slice(1); // Show all remaining media
             
             let galleryHtml = '<div class="media-gallery">';
             
@@ -2358,7 +2384,7 @@
                 const resp = await fetch('/api/movie/screenshots/interval', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: videoPath, every_minutes: 5, async_mode: true })
+                    body: JSON.stringify({ path: videoPath, every_minutes: 3, async_mode: true })
                 });
                 const data = await resp.json();
                 if (!resp.ok) {
@@ -2475,11 +2501,8 @@
             
             return {
                 letterboxd: `https://letterboxd.com/film/${letterboxdSlug}/`,
-                wikipedia: `https://en.wikipedia.org/wiki/Special:Search/${encodedName}`,
-                imdb: `https://www.imdb.com/find?q=${encodedName}`,
-                tmdb: `https://www.themoviedb.org/search?query=${encodedName}`,
-                douban: `https://movie.douban.com/subject_search?search_text=${encodedName}`,
-                google: `https://www.google.com/search?q=${encodedName}+movie`
+                google: `https://www.google.com/search?q=${encodedName}+movie`,
+                douban: `https://movie.douban.com/subject_search?search_text=${encodedName}`
             };
         }
         
@@ -3162,11 +3185,8 @@
                             </div>
                             <div class="external-links" style="margin-top: 20px;">
                                 <a href="${externalLinks.letterboxd}" target="_blank" class="external-link">Letterboxd</a>
-                                <a href="${externalLinks.wikipedia}" target="_blank" class="external-link">Wikipedia</a>
-                                <a href="${externalLinks.imdb}" target="_blank" class="external-link">IMDb</a>
-                                <a href="${externalLinks.tmdb}" target="_blank" class="external-link">TMDB</a>
-                                <a href="${externalLinks.douban}" target="_blank" class="external-link">Douban</a>
                                 <a href="${externalLinks.google}" target="_blank" class="external-link">Google</a>
+                                <a href="${externalLinks.douban}" target="_blank" class="external-link">Douban</a>
                                 <a href="#" onclick="event.preventDefault(); openFolder('${escapeJsString(movie.path)}'); return false;" class="external-link">Open Folder</a>
                             </div>
                             <div style="margin-top: 20px; color: #999; font-size: 12px;">
@@ -3239,11 +3259,8 @@
                             </div>
                             <div class="external-links" style="margin-top: 20px;">
                                 <a href="${externalLinks.letterboxd}" target="_blank" class="external-link">Letterboxd</a>
-                                <a href="${externalLinks.wikipedia}" target="_blank" class="external-link">Wikipedia</a>
-                                <a href="${externalLinks.imdb}" target="_blank" class="external-link">IMDb</a>
-                                <a href="${externalLinks.tmdb}" target="_blank" class="external-link">TMDB</a>
-                                <a href="${externalLinks.douban}" target="_blank" class="external-link">Douban</a>
                                 <a href="${externalLinks.google}" target="_blank" class="external-link">Google</a>
+                                <a href="${externalLinks.douban}" target="_blank" class="external-link">Douban</a>
                                 <a href="#" onclick="event.preventDefault(); openFolder('${escapeJsString(movie.path)}'); return false;" class="external-link">Open Folder</a>
                             </div>
                             <div style="margin-top: 20px; color: #999; font-size: 12px;">
@@ -3721,17 +3738,26 @@
                     }
                     
                 // Render movie card with a small timestamp below
+                const hasId = movie && movie.id != null && !Number.isNaN(movie.id);
+                const cardHtml = createMovieCard(movie);
                 html += `
                     <div class="history-item">
-                        <div class="history-movie-card">
-                            ${createMovieCard(movie)}
+                        <div class="history-movie-card"${hasId ? '' : ' style="pointer-events: none;"'}>
+                            ${cardHtml}
                         </div>
                         <div class="history-timestamp">${escapeHtml(formattedTime)}</div>
+                        ${hasId ? '' : '<div class="history-timestamp" style="color:#ff9a9a;">Missing movie id; re-index to enable navigation</div>'}
                     </div>
                 `;
                 }
                 
                 historyList.innerHTML = html;
+
+                // Restore prior scroll position, if any
+                if (savedHistoryScroll !== null) {
+                    historyList.scrollTop = savedHistoryScroll;
+                    savedHistoryScroll = null;
+                }
             } catch (error) {
                 historyList.innerHTML = '<div class="empty-state">Error loading history: ' + error.message + '</div>';
                 console.error('History error:', error);

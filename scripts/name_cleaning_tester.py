@@ -52,7 +52,7 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_year": 1993,
     },
     {
-        "input":"D:\movies\BEASTARS.S01.JAPANESE.1080p.NF.WEBRip.DDP2.0.x264-AGLET[rartv]\BEASTARS.S01E10.A.Wolf.in.Sheeps.Clothing.1080p.NF.WEB-DL.DDP2.0.H.264-AGLET.mkv",
+        "input": r"D:\movies\BEASTARS.S01.JAPANESE.1080p.NF.WEBRip.DDP2.0.x264-AGLET[rartv]\BEASTARS.S01E10.A.Wolf.in.Sheeps.Clothing.1080p.NF.WEB-DL.DDP2.0.H.264-AGLET.mkv",
         "expected_name": "BEASTARS S01E10 A Wolf in Sheeps Clothing",
         "expected_year": None,
     },
@@ -68,11 +68,20 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
     },
     
     {
-        "input":"D:\movies\THE_BOYS_FROM_BRAZIL_Title1.mp4",
+        "input": r"D:\movies\THE_BOYS_FROM_BRAZIL_Title1.mp4",
         "expected_name": "The Boys from Brazil", #title1 suffixes are bad text.  most movies _ actually is a space.
         "expected_year": None,
-    }
+    },
 
+    {
+        "input": r"D:\movies\13 Assassins (2010) EXTENDED.720p.BRrip.sujaidr\13 Assassins (2010) EXTENDED.720p.BRrip.sujaidr.mkv",
+        "expected_name": "13 Assassins",
+        "expected_year": 2010,
+    },
+    # {
+    #     "input":""
+    # }
+    
     # {
     #     "input":""
     # }

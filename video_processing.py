@@ -9,7 +9,7 @@ import hashlib
 import re
 import logging
 from pathlib import Path
-from queue import Queue
+from queue import Queue, PriorityQueue
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Future
 
 # Video length extraction will use ffprobe (from the configured ffmpeg bundle)
@@ -80,7 +80,8 @@ active_subprocesses = []  # List of active subprocess.Popen objects
 active_subprocesses_lock = threading.Lock()
 
 # Frame extraction queue and executor
-frame_extraction_queue = Queue()
+# Use PriorityQueue so interactive/on-demand work can preempt backlog
+frame_extraction_queue = PriorityQueue()
 frame_executor = None
 process_executor = None
 frame_processing_active = False
@@ -397,7 +398,7 @@ def extract_movie_screenshot_sync(video_path, timestamp_seconds, find_ffmpeg_fun
         logger.error(f"Error extracting screenshot from {video_path}: {e}")
         return None
 
-def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func):
+def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func, priority: str = "normal"):
     """Extract a single screenshot from video - can be synchronous or queued for async processing"""
     video_path_obj = Path(video_path)
     
@@ -422,18 +423,30 @@ def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_con
     # If async mode, queue it for background processing
     if async_mode:
         global frame_extraction_queue
-        frame_extraction_queue.put({
-            "video_path": video_path,
-            "timestamp_seconds": timestamp_seconds,
-            "ffmpeg_exe": ffmpeg_exe,
-            "load_config_func": load_config_func,
-            "find_ffmpeg_func": find_ffmpeg_func,
-            "scan_progress_dict": scan_progress_dict,
-            "add_scan_log_func": add_scan_log_func
-        })
+        # Map priority label to numeric (lower number = higher priority)
+        prio_map = {"user_high": 0, "high": 1, "normal": 5, "low": 9}
+        prio_value = prio_map.get(priority or "normal", 5)
+        frame_extraction_queue.put((
+            prio_value,
+            time.time(),  # tie-breaker for FIFO within same priority
+            {
+                "video_path": video_path,
+                "timestamp_seconds": timestamp_seconds,
+                "ffmpeg_exe": ffmpeg_exe,
+                "load_config_func": load_config_func,
+                "find_ffmpeg_func": find_ffmpeg_func,
+                "scan_progress_dict": scan_progress_dict,
+                "add_scan_log_func": add_scan_log_func
+            }
+        ))
         scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
         scan_progress_dict["frames_total"] = scan_progress_dict.get("frames_total", 0) + 1
         add_scan_log_func("info", f"Queued screenshot extraction (queue: {frame_extraction_queue.qsize()})")
+        # Ensure worker is running to process the queue
+        try:
+            process_frame_queue(3, scan_progress_dict, add_scan_log_func)
+        except Exception:
+            pass
         return None  # Return None to indicate it's queued, will be processed later
     else:
         # Synchronous mode
@@ -529,7 +542,20 @@ def process_screenshot_extraction_worker(screenshot_info):
             workers = max(2, min(6, (os.cpu_count() or 4)))
             process_executor = ProcessPoolExecutor(max_workers=workers)
 
-        future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path))
+        # Submit job; if the executor was previously shut down, recreate and retry once
+        try:
+            future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path))
+        except Exception as submit_err:
+            # Handle 'cannot schedule new futures after shutdown' and similar states
+            try:
+                # Best-effort: shutdown in case it's a half-closed pool, then recreate
+                process_executor.shutdown(wait=False, cancel_futures=False)
+            except Exception:
+                pass
+            # Recreate a fresh executor and retry submission once
+            workers = max(2, min(6, (os.cpu_count() or 4)))
+            process_executor = ProcessPoolExecutor(max_workers=workers)
+            future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path))
         future.add_done_callback(_on_done)
         # Do not block here; success indicates submission happened
         return True
@@ -547,6 +573,11 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
     global frame_executor, process_executor, frame_processing_active, frame_extraction_queue
     
     if frame_processing_active:
+        # Log that it's already running to aid diagnostics
+        try:
+            add_scan_log_func("info", f"Background screenshot extraction already running (queue: {frame_extraction_queue.qsize()})")
+        except Exception:
+            pass
         return
     
     frame_processing_active = True
@@ -567,7 +598,7 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
             try:
                 # Get screenshot info from queue (with timeout to periodically check scan status)
                 try:
-                    screenshot_info = frame_extraction_queue.get(timeout=2)
+                    queued_item = frame_extraction_queue.get(timeout=2)
                 except:
                     # Queue empty, check if scan is done and queue is truly empty
                     if shutdown_flag.is_set():
@@ -575,7 +606,13 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
                     if not scan_progress_dict.get("is_scanning", False) and frame_extraction_queue.empty():
                         break
                     continue
-                
+
+                # Support both (priority, ts, info) and legacy dicts
+                if isinstance(queued_item, tuple) and len(queued_item) == 3:
+                    _, _, screenshot_info = queued_item
+                else:
+                    screenshot_info = queued_item
+
                 # Submit a light task to thread pool that will in turn submit to process pool
                 future = frame_executor.submit(process_screenshot_extraction_worker, screenshot_info)
                 processed_count += 1
@@ -593,11 +630,15 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
             # Give a short time for tasks to finish, then kill subprocesses
             time.sleep(0.5)
             kill_all_active_subprocesses()
+            # Allow clean recreation on next start
+            frame_executor = None
         if process_executor:
             try:
                 process_executor.shutdown(wait=False, cancel_futures=False)
             except Exception:
                 pass
+            # Allow clean recreation on next start
+            process_executor = None
         
         global frame_processing_active
         frame_processing_active = False
@@ -674,24 +715,34 @@ def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmp
             # Calculate timestamp (distribute evenly across video)
             timestamp = (length / (num_screenshots + 1)) * (i + 1)
             
-            frame_extraction_queue.put({
-                "video_path": video_path,
-                "timestamp_seconds": timestamp,
-                "ffmpeg_exe": ffmpeg_exe,
-                "load_config_func": load_config_func,
-                "find_ffmpeg_func": find_ffmpeg_func,
-                "scan_progress_dict": scan_progress_dict,
-                "add_scan_log_func": add_scan_log_func,
-                "screenshot_index": i + 1,
-                "total_screenshots": num_screenshots,
-                "screenshot_path": str(screenshot_path)
-            })
+            # Normal priority for background/batch work
+            frame_extraction_queue.put((
+                5,  # normal priority
+                time.time(),
+                {
+                    "video_path": video_path,
+                    "timestamp_seconds": timestamp,
+                    "ffmpeg_exe": ffmpeg_exe,
+                    "load_config_func": load_config_func,
+                    "find_ffmpeg_func": find_ffmpeg_func,
+                    "scan_progress_dict": scan_progress_dict,
+                    "add_scan_log_func": add_scan_log_func,
+                    "screenshot_index": i + 1,
+                    "total_screenshots": num_screenshots,
+                    "screenshot_path": str(screenshot_path)
+                }
+            ))
         
         queue_size = frame_extraction_queue.qsize()
         scan_progress_dict["frame_queue_size"] = queue_size
         scan_progress_dict["frames_total"] = scan_progress_dict.get("frames_total", 0) + num_screenshots
         if add_scan_log_func:
             add_scan_log_func("info", f"  Queued {num_screenshots} screenshot extractions (queue: {queue_size})")
+        # Ensure worker is running to process the queue
+        try:
+            process_frame_queue(3, scan_progress_dict, add_scan_log_func)
+        except Exception:
+            pass
         return existing_screenshots  # Return existing screenshots immediately, rest will be processed in background
     
     # Synchronous mode (for backwards compatibility or when async_mode=False)
