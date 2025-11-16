@@ -42,7 +42,7 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-            transition: background 0.2s;
+            transition: background 0s;
         }
         
         .btn:hover {
@@ -85,7 +85,7 @@
             border-radius: 8px;
             color: #fff;
             outline: none;
-            transition: border-color 0.2s;
+            transition: border-color 0s;
         }
         
         #searchInput:focus {
@@ -106,7 +106,7 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-            transition: all 0.2s;
+            transition: all 0s;
         }
         
         .clear-search-btn:hover {
@@ -120,11 +120,16 @@
         
         .filter-options {
             display: flex;
-            gap: 0;
+            gap: 15px;
             align-items: center;
             margin-top: 0;
             margin-bottom: 25px;
             position: relative;
+            flex-wrap: wrap;
+        }
+        
+        .language-filter-group {
+            margin-left: 0;
         }
         
         .btn-group {
@@ -140,7 +145,7 @@
             padding: 8px 16px !important;
             font-size: 14px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0s;
             border-radius: 0 !important;
             margin: 0;
             outline: none;
@@ -214,7 +219,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            transition: background 0.1s;
+            transition: background 0s;
         }
         
         .autocomplete-item:hover,
@@ -247,7 +252,7 @@
             border-radius: 8px;
             padding: 15px 20px;
             margin-bottom: 10px;
-            transition: background 0.2s;
+            transition: background 0s;
         }
         
         .result-item:hover {
@@ -311,7 +316,7 @@
             border-radius: 4px;
             background: #1a1a1a;
             border: 1px solid #3a3a3a;
-            transition: all 0.2s;
+            transition: all 0s;
         }
         
         .external-link:hover {
@@ -335,7 +340,7 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-            transition: background 0.2s;
+            transition: background 0s;
         }
         
         .launch-btn:hover {
@@ -350,7 +355,7 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-            transition: background 0.2s;
+            transition: background 0s;
         }
         
         .watched-btn:hover {
@@ -534,7 +539,7 @@
         .progress-bar {
             height: 100%;
             background: linear-gradient(90deg, #4a9eff, #5aaeff);
-            transition: width 0.3s ease;
+            transition: width 0s;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -638,7 +643,7 @@
             border-radius: 6px;
             overflow: hidden;
             border: 2px solid #3a3a3a;
-            transition: border-color 0.2s, transform 0.2s;
+            transition: border-color 0s, transform 0s;
             background: #1a1a1a;
         }
         
@@ -716,7 +721,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background 0.2s;
+            transition: background 0s;
         }
         
         .media-overlay-close:hover {
@@ -735,7 +740,7 @@
         .star {
             font-size: 18px;
             color: #666;
-            transition: color 0.2s, transform 0.1s;
+            transition: color 0s, transform 0s;
             position: relative;
             width: 18px;
             height: 18px;
@@ -787,24 +792,11 @@
         
         .explore-filters {
             display: flex;
-            gap: 15px;
+            gap: 0;
             align-items: center;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-        }
-        
-        .explore-filters label {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        
-        .explore-filters input[type="radio"] {
-            width: 18px;
-            height: 18px;
-            cursor: pointer;
+            margin-top: 0;
+            margin-bottom: 25px;
+            position: relative;
         }
         
         .letter-nav {
@@ -826,7 +818,7 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 13px;
-            transition: all 0.2s;
+            transition: all 0s;
             min-width: 40px;
             text-align: center;
         }
@@ -849,6 +841,173 @@
             cursor: not-allowed;
         }
         
+        .decade-nav {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            border: 1px solid #3a3a3a;
+        }
+        
+        .decade-btn {
+            background: #3a3a3a;
+            color: #e0e0e0;
+            border: 1px solid #4a4a4a;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0s;
+            min-width: 60px;
+            text-align: center;
+        }
+        
+        .decade-btn:hover {
+            background: #4a4a4a;
+            border-color: #4a9eff;
+        }
+        
+        .decade-btn.active {
+            background: #4a9eff;
+            border-color: #4a9eff;
+            color: #fff;
+        }
+        
+        .decade-btn:disabled {
+            background: #1a1a1a;
+            color: #555;
+            border-color: #2a2a2a;
+            cursor: not-allowed;
+        }
+        
+        .year-filter-container {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .year-input-wrapper {
+            position: relative;
+            flex: 1;
+            min-width: 200px;
+            max-width: 300px;
+        }
+        
+        .year-input {
+            width: 100%;
+            padding: 8px 12px;
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        
+        .year-input:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+        
+        .year-input::placeholder {
+            color: #666;
+        }
+        
+        .year-autocomplete {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            margin-top: 4px;
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 6px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        
+        .year-autocomplete-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            color: #e0e0e0;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .year-autocomplete-item:hover {
+            background: #3a3a3a;
+        }
+        
+        .year-autocomplete-item.active {
+            background: #4a9eff;
+            color: #fff;
+        }
+        
+        .year-chip-container {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+        
+        .year-nav-btn {
+            background: #3a3a3a;
+            color: #e0e0e0;
+            border: 1px solid #4a4a4a;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+            min-width: 32px;
+            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .year-nav-btn:hover:not(:disabled) {
+            background: #4a4a4a;
+            border-color: #4a9eff;
+        }
+        
+        .year-nav-btn:disabled {
+            background: #1a1a1a;
+            color: #555;
+            border-color: #2a2a2a;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        
+        .year-chip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: #4a9eff;
+            color: #fff;
+            border-radius: 16px;
+            font-size: 13px;
+        }
+        
+        .year-chip-close {
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+        
+        .year-chip-close:hover {
+            opacity: 1;
+        }
+        
         .movie-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -861,7 +1020,7 @@
             border: 1px solid #3a3a3a;
             border-radius: 8px;
             overflow: hidden;
-            transition: transform 0.2s, border-color 0.2s;
+            transition: background-color 0s, border-color 0s;
             cursor: pointer;
             max-width: 320px;
             width: 100%;
@@ -870,7 +1029,7 @@
         }
         
         .movie-card:hover {
-            transform: translateY(-4px);
+            background: #333333;
             border-color: #4a9eff;
         }
         
@@ -926,7 +1085,7 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 13px;
-            transition: background 0.2s;
+            transition: background 0s;
         }
         
         .movie-card-launch:hover {
@@ -950,7 +1109,7 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 14px;
-            transition: all 0.2s;
+            transition: all 0s;
         }
         
         .pagination-btn:hover:not(:disabled) {
@@ -993,7 +1152,7 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-            transition: background 0.2s;
+            transition: background 0s;
             text-decoration: none;
             display: inline-block;
         }
@@ -1050,11 +1209,11 @@
             background: transparent;
             color: #e0e0e0;
             border: none;
-            padding: 6px 10px;
+            padding: 0.6px 1px;
             border-radius: 4px;
             cursor: pointer;
             font-size: 12px;
-            transition: background 0.2s;
+            transition: background 0s;
             display: flex;
             align-items: center;
             gap: 6px;
@@ -1069,11 +1228,22 @@
             width: 12px;
             height: 12px;
             border-radius: 2px;
-            background: #4caf50;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
+        }
+        
+        .movie-card-btn .watched-checkbox.unset {
+            background: #2196f3;
+        }
+        
+        .movie-card-btn .watched-checkbox.watched {
+            background: #4caf50;
+        }
+        
+        .movie-card-btn .watched-checkbox.unwatched {
+            background: #f44336;
         }
         
         .movie-card-btn .watched-checkbox::after {
@@ -1147,6 +1317,17 @@
             margin-bottom: 20px;
         }
         
+        .year-link {
+            cursor: pointer;
+            color: #4a9eff;
+            text-decoration: underline;
+            transition: color 0.2s;
+        }
+        
+        .year-link:hover {
+            color: #6bb3ff;
+        }
+        
         .movie-details-actions {
             display: flex;
             gap: 10px;
@@ -1162,7 +1343,7 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-            transition: background 0.2s;
+            transition: background 0s;
             margin-bottom: 20px;
         }
         
@@ -1219,9 +1400,13 @@
         }
         
         .currently-playing {
-            font-size: 13px;
+            font-size: 20px;
             color: #999;
             font-style: italic;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 8px 12px;
+            border-radius: 6px;
+            transition: all 0.2s;
         }
         
         .currently-playing.has-movie {
@@ -1229,12 +1414,14 @@
             color: #4a9eff;
             cursor: pointer;
             text-decoration: none;
-            transition: color 0.2s;
+            background: rgba(74, 158, 255, 0.15);
+            transition: all 0.2s;
         }
         
         .currently-playing.has-movie:hover {
             color: #5aaeff;
             text-decoration: underline;
+            background: rgba(74, 158, 255, 0.25);
         }
         
         .history-list {
@@ -1275,7 +1462,6 @@
     <div id="app">
         <div class="controls" id="globalControls">
             <div style="display: flex; gap: 10px; align-items: center;">
-                <a href="#/name-cleaning" class="nav-link" id="navNameCleaning">Name Cleaning</a>
                 <a href="#/home" class="nav-link" id="navHome">Home</a>
                 <a href="#/explore" class="nav-link" id="navExplore">Explore</a>
                 <a href="#/history" class="nav-link" id="navHistory">History</a>
@@ -1284,37 +1470,6 @@
                 <div id="statusMessage"></div>
                 <div id="currentlyPlaying" class="currently-playing">nothing playing</div>
                 <a href="#/setup" class="nav-link" id="navSetup">Setup</a>
-            </div>
-        </div>
-        
-        <!-- Name Cleaning Page -->
-        <div class="page" id="pageNameCleaning">
-            <h1>Name Cleaning</h1>
-            <p style="margin-bottom: 20px; color: #aaa;">Review and approve patterns to clean from movie names. Patterns you approve will be automatically removed from movie names during indexing.</p>
-            
-            <div style="margin-bottom: 20px;">
-                <button class="btn" onclick="loadCleaningPatterns()">Refresh Analysis</button>
-                <button class="btn btn-success" onclick="saveCleaningPatterns()" style="margin-left: 10px;">Save Approved Patterns</button>
-                <button class="btn" onclick="recleanAllNames()" style="margin-left: 10px;">Re-clean All Movie Names</button>
-            </div>
-            
-            <div id="cleaningStatus" style="margin-bottom: 20px; padding: 10px; background: #2a2a2a; border-radius: 6px; display: none;"></div>
-            
-            <div id="cleaningPatternsContainer">
-                <div style="text-align: center; padding: 40px; color: #666;">
-                    Click "Refresh Analysis" to analyze movie names and find suspicious patterns.
-                </div>
-            </div>
-
-            <!-- Simple tester for existing clean_movie_name -->
-            <div style="margin-top: 30px; padding: 15px; background: #1f1f1f; border-radius: 6px;">
-                <h2 style="margin-bottom: 10px;">Name Cleaning Tester</h2>
-                <p style="color: #aaa; margin-bottom: 10px;">Enter a raw filename or label to test the existing cleaning logic. This does not modify anything; it only shows the cleaned title and detected year.</p>
-                <input type="text" id="cleanTesterInput" placeholder='e.g. Harold and Maude (1971) 720p BRrip_sujaidr (pimprg).mkv' style="margin-bottom: 10px;">
-                <div>
-                    <button class="btn" onclick="runCleanTester()">Test Clean Name</button>
-                </div>
-                <div id="cleanTesterResult" style="margin-top: 12px; color: #ddd;"></div>
             </div>
         </div>
         
@@ -1334,6 +1489,9 @@
                      <button type="button" class="btn" data-filter="watched" onclick="setWatchFilter('watched', this)">Watched only</button>
                      <button type="button" class="btn" data-filter="unwatched" onclick="setWatchFilter('unwatched', this)">Unwatched only</button>
                  </div>
+                 <div class="btn-group btn-group-toggle language-filter-group" role="group" id="languageFilterGroup">
+                     <!-- Language filter buttons will be populated by JavaScript -->
+                 </div>
              </div>
             
             <div class="results" id="results"></div>
@@ -1352,21 +1510,24 @@
             <h1>Explore Movies</h1>
             
             <div class="explore-filters">
-                <label>
-                    <input type="radio" name="exploreFilter" value="all" checked onchange="applyExploreFilters()">
-                    All
-                </label>
-                <label>
-                    <input type="radio" name="exploreFilter" value="watched" onchange="applyExploreFilters()">
-                    Watched Only
-                </label>
-                <label>
-                    <input type="radio" name="exploreFilter" value="unwatched" onchange="applyExploreFilters()">
-                    Unwatched Only
-                </label>
+                <div class="btn-group btn-group-toggle" role="group">
+                    <button type="button" class="btn active" data-filter="all" onclick="setExploreWatchFilter('all', this)">All</button>
+                    <button type="button" class="btn" data-filter="watched" onclick="setExploreWatchFilter('watched', this)">Watched only</button>
+                    <button type="button" class="btn" data-filter="unwatched" onclick="setExploreWatchFilter('unwatched', this)">Unwatched only</button>
+                </div>
             </div>
             
             <div class="letter-nav" id="letterNav"></div>
+            
+            <div class="decade-nav" id="decadeNav"></div>
+            
+            <div class="year-filter-container" id="yearFilterContainer">
+                <div class="year-input-wrapper">
+                    <input type="text" id="yearInput" placeholder="Filter by year..." autocomplete="off" class="year-input">
+                    <div class="year-autocomplete" id="yearAutocomplete"></div>
+                </div>
+                <div class="year-chip-container" id="yearChipContainer"></div>
+            </div>
             
             <div class="movie-grid" id="movieGrid"></div>
             
@@ -1433,6 +1594,13 @@
             </div>
             
             <div class="setup-section">
+                <h3>Name Cleaning</h3>
+                <p>Re-apply name cleaning rules to all movies in the database.</p>
+                <button class="btn" onclick="recleanAllNames()">Re-clean All Movie Names</button>
+                <div id="recleanStatus" style="margin-top: 10px; padding: 10px; background: #2a2a2a; border-radius: 6px; display: none;"></div>
+            </div>
+            
+            <div class="setup-section">
                 <h3>Statistics</h3>
                 <div id="setupStats"></div>
             </div>
@@ -1486,7 +1654,6 @@
             const pageSetup = document.getElementById('pageSetup');
             const pageMovieDetails = document.getElementById('pageMovieDetails');
             const pageHistory = document.getElementById('pageHistory');
-            const pageNameCleaning = document.getElementById('pageNameCleaning');
 
             // Detail routes (hash-based)
             if (route.startsWith('/movie/')) {
@@ -1501,12 +1668,7 @@
                 }
             }
             
-            if (route === '/name-cleaning') {
-                if (pageNameCleaning) {
-                    pageNameCleaning.classList.add('active');
-                    loadCleaningPatterns();
-                }
-            } else if (route === '/home' || route === '/') {
+            if (route === '/home' || route === '/') {
                  if (pageHome) pageHome.classList.add('active');
                  updateClearButtonVisibility();
              } else if (route === '/explore') {
@@ -1534,52 +1696,26 @@
         window.addEventListener('popstate', handleRoute);
         window.addEventListener('load', handleRoute);
 
-        async function runCleanTester() {
-            const inputEl = document.getElementById('cleanTesterInput');
-            const resultEl = document.getElementById('cleanTesterResult');
-            if (!inputEl || !resultEl) return;
-            const text = (inputEl.value || '').toString();
-            if (!text.trim()) {
-                resultEl.innerHTML = '<span style="color:#f44336;">Please enter a value to test.</span>';
-                return;
-            }
-            resultEl.textContent = 'Testing...';
-            try {
-                const response = await fetch('/api/clean-name/test', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ text })
-                });
-                const data = await response.json();
-                if (!response.ok) {
-                    const errMsg = data && (data.detail || data.message) ? (data.detail || data.message) : 'Request failed';
-                    resultEl.innerHTML = `<span style="color:#f44336;">Error: ${escapeHtml(errMsg)}</span>`;
-                    return;
-                }
-                const cleaned = (data.cleaned_name ?? '').toString();
-                const year = (data.year ?? '') ? data.year : '—';
-                resultEl.innerHTML = `
-                    <div style="margin-top:6px;">
-                        <div><span style="color:#999;">Input:</span> ${escapeHtml(text)}</div>
-                        <div><span style="color:#999;">Cleaned Title:</span> <strong>${escapeHtml(cleaned)}</strong></div>
-                        <div><span style="color:#999;">Detected Year:</span> <strong>${year}</strong></div>
-                    </div>
-                `;
-            } catch (error) {
-                resultEl.innerHTML = `<span style="color:#f44336;">Error: ${escapeHtml(error.message || 'Unknown error')}</span>`;
-            }
-        }
-        
         // Movie Card Component
         function createMovieCard(movie) {
             const imageUrl = movie.screenshot_id
                 ? `/api/screenshot/${movie.screenshot_id}`
                 : (movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '');
-            const watchedClass = movie.watched ? 'watched' : '';
+            // Use watch_status if available, fallback to watched boolean for backward compatibility
+            const watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? true : null);
+            const watchedClass = watchStatus === true ? 'watched' : '';
             const fileSize = movie.size ? formatSize(movie.size) : '';
             const year = movie.year ? movie.year : '';
             const length = movie.length ? formatMinutes(movie.length) : '';
             const hasLaunched = movie.has_launched || false;
+            
+            // Determine checkbox class based on watch_status
+            let checkboxClass = 'unset';
+            if (watchStatus === true) {
+                checkboxClass = 'watched';
+            } else if (watchStatus === false) {
+                checkboxClass = 'unwatched';
+            }
             
             // Prefer hash-based ID route if we have an id
             const slug = (movie.name || '').toString()
@@ -1589,23 +1725,23 @@
             const cardClick = `openMovieHash(${movie.id}, '${encodeURIComponent(slug)}')`;
 
             return `
-                <div class="movie-card ${watchedClass}" onclick="${cardClick}">
+                <div class="movie-card ${watchedClass}" data-movie-id="${movie.id || ''}" onclick="${cardClick}">
                     <div class="movie-card-image">
                         ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" loading="lazy" onerror="this.parentElement.innerHTML='No Image'">` : 'No Image'}
                     </div>
                     <div class="movie-card-body">
                         <div class="movie-card-title">${escapeHtml(movie.name)}</div>
                         <div class="movie-card-meta">
-                            ${year ? `<span>${year}</span>` : ''}
+                            ${year ? `<span class="year-link" onclick="event.stopPropagation(); navigateToExploreWithYear(${year}, ${movie.id || 'null'});" title="Filter by ${year}">${year}</span>` : ''}
                             ${length ? `<span>${length}</span>` : ''}
                             ${fileSize ? `<span>${fileSize}</span>` : ''}
                             ${hasLaunched ? '<div class="launch-status-checkbox launched" onclick="event.stopPropagation();"></div>' : ''}
                         </div>
                         <div class="movie-card-buttons">
-                            <button class="movie-card-btn" onclick="event.stopPropagation(); toggleWatched('${escapeJsString(movie.path)}', ${movie.watched})">
-                                ${movie.watched ? '<span class="watched-checkbox"></span>' : ''}watched
+                            <button class="movie-card-btn" onclick="event.stopPropagation(); toggleWatched('${escapeJsString(movie.path)}', ${watchStatus === null ? 'null' : watchStatus})">
+                                <span class="watched-checkbox ${checkboxClass}"></span>watched
                             </button>
-                            ${renderStarRating(movie.path, movie.watched, movie.rating || null)}
+                            ${renderStarRating(movie.path, watchStatus === true, movie.rating || null)}
                             <button class="movie-card-launch" onclick="event.stopPropagation(); launchMovie('${escapeJsString(movie.path)}')">▶</button>
                         </div>
                     </div>
@@ -1626,7 +1762,7 @@
         let currentSubtitles = {};
         // Explore page state - only for tracking current page, not for building requests
         let currentExplorePage = 1;
-        const EXPLORE_PER_PAGE = 20;
+        const EXPLORE_PER_PAGE = 15;
         // Request sequencing to handle out-of-order AJAX responses
         let searchRequestCounter = 0;
         let lastDisplayedRequestId = -1;
@@ -1642,23 +1778,114 @@
         const watchedSection = document.getElementById('watchedSection');
         const watchedList = document.getElementById('watchedList');
         function getWatchFilter() {
-            const activeBtn = document.querySelector('.btn-group-toggle .btn.active');
-            if (activeBtn) {
-                return activeBtn.getAttribute('data-filter') || 'all';
+            // Get watched filter from the first button group (not language filter)
+            const watchedGroup = document.querySelector('.filter-options .btn-group-toggle:not(.language-filter-group)');
+            if (watchedGroup) {
+                const activeBtn = watchedGroup.querySelector('.btn.active');
+                if (activeBtn) {
+                    return activeBtn.getAttribute('data-filter') || 'all';
+                }
+            }
+            return 'all';
+        }
+        
+        function getLanguageFilter() {
+            // Get language filter from language filter group
+            const languageGroup = document.querySelector('.language-filter-group');
+            if (languageGroup) {
+                const activeBtn = languageGroup.querySelector('.btn.active');
+                if (activeBtn) {
+                    return activeBtn.getAttribute('data-language') || 'all';
+                }
             }
             return 'all';
         }
         
         function setWatchFilter(filterValue, clickedBtn) {
-            // Remove active class from all buttons
-            const buttons = document.querySelectorAll('.btn-group-toggle .btn');
-            buttons.forEach(btn => btn.classList.remove('active'));
+            // Remove active class from all watched filter buttons (not language)
+            const watchedGroup = document.querySelector('.filter-options .btn-group-toggle:not(.language-filter-group)');
+            if (watchedGroup) {
+                watchedGroup.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+            }
             
             // Add active class to clicked button
             clickedBtn.classList.add('active');
             
             // Apply filters if there's a search query
             applyFilters();
+        }
+        
+        function setLanguageFilter(languageValue, clickedBtn) {
+            // Remove active class from all language filter buttons
+            const languageGroup = document.querySelector('.language-filter-group');
+            if (languageGroup) {
+                languageGroup.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+            }
+            
+            // Add active class to clicked button
+            clickedBtn.classList.add('active');
+            
+            // Apply filters if there's a search query
+            applyFilters();
+        }
+        
+        async function loadLanguageFilters() {
+            try {
+                const response = await fetch('/api/language-counts');
+                const data = await response.json();
+                const counts = data.counts || {};
+                
+                const languageGroup = document.getElementById('languageFilterGroup');
+                if (!languageGroup) return;
+                
+                // Get language names mapping (common language codes to display names)
+                const languageNames = {
+                    'en': 'English',
+                    'es': 'Spanish',
+                    'fr': 'French',
+                    'de': 'German',
+                    'it': 'Italian',
+                    'pt': 'Portuguese',
+                    'ru': 'Russian',
+                    'ja': 'Japanese',
+                    'ko': 'Korean',
+                    'zh': 'Chinese',
+                    'hi': 'Hindi',
+                    'ar': 'Arabic',
+                    'all': 'All'
+                };
+                
+                // Sort languages by count (descending), but put 'all' first
+                const sortedLanguages = Object.keys(counts).sort((a, b) => {
+                    if (a === 'all') return -1;
+                    if (b === 'all') return 1;
+                    return counts[b] - counts[a];
+                });
+                
+                let html = '';
+                for (const lang of sortedLanguages) {
+                    const count = counts[lang];
+                    const displayName = languageNames[lang] || lang.toUpperCase();
+                    const isActive = lang === 'all' ? 'active' : '';
+                    html += `<button type="button" class="btn ${isActive}" data-language="${lang}" onclick="setLanguageFilter('${lang}', this)">${displayName} (${count})</button>`;
+                }
+                
+                languageGroup.innerHTML = html;
+            } catch (error) {
+                console.error('Error loading language filters:', error);
+            }
+        }
+        
+        function setExploreWatchFilter(filterValue, clickedBtn) {
+            // Remove active class from all explore filter buttons
+            const buttons = document.querySelectorAll('#pageExplore .btn-group-toggle .btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            
+            // Add active class to clicked button
+            clickedBtn.classList.add('active');
+            
+            // Apply explore filters
+            applyExploreFilters();
         }
         const statusMessage = document.getElementById('statusMessage');
         let progressInterval = null;
@@ -1919,7 +2146,9 @@
             
             try {
                 const filterType = getWatchFilter();
-                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&filter_type=${filterType}`, { signal: searchAbortController.signal });
+                const language = getLanguageFilter();
+                const url = `/api/search?q=${encodeURIComponent(query)}&filter_type=${filterType}&language=${encodeURIComponent(language)}`;
+                const response = await fetch(url, { signal: searchAbortController.signal });
                 const data = await response.json();
                 
                 // Only display results if this response is from the latest request or newer than what's displayed
@@ -2153,13 +2382,18 @@
             
             // URL encode the cleaned name
             const encodedName = encodeURIComponent(cleanName);
-            const encodedNameSpaces = encodeURIComponent(cleanName.replace(/\s+/g, '-').toLowerCase());
+            // Create Letterboxd slug: lowercase, spaces to hyphens, remove special chars
+            const letterboxdSlug = cleanName
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')  // Replace non-alphanumeric with hyphens
+                .replace(/^-+|-+$/g, '');     // Remove leading/trailing hyphens
             
             return {
-                letterboxd: `https://letterboxd.com/search/${encodedNameSpaces}/`,
+                letterboxd: `https://letterboxd.com/film/${letterboxdSlug}/`,
                 wikipedia: `https://en.wikipedia.org/wiki/Special:Search/${encodedName}`,
                 imdb: `https://www.imdb.com/find?q=${encodedName}`,
                 tmdb: `https://www.themoviedb.org/search?query=${encodedName}`,
+                douban: `https://movie.douban.com/subject_search?search_text=${encodedName}`,
                 google: `https://www.google.com/search?q=${encodedName}+movie`
             };
         }
@@ -2180,28 +2414,45 @@
             }
         }
         
-        async function toggleWatched(path, currentWatched = null) {
+        async function toggleWatched(path, currentWatchStatus = null) {
             try {
-                // If currentWatched is null, determine from current results or fetch
-                if (currentWatched === null) {
+                // If currentWatchStatus is null, determine from current results or fetch
+                if (currentWatchStatus === null) {
                     // Try to find in current results first
                     const currentItem = currentResults.find(r => r.path === path);
                     if (currentItem) {
-                        currentWatched = currentItem.watched || false;
+                        // Prefer watch_status if available, fallback to watched boolean
+                        currentWatchStatus = currentItem.watch_status !== undefined ? currentItem.watch_status : (currentItem.watched ? true : null);
                     } else {
-                        // Fallback: check watched list
-                        const watchedData = await fetch('/api/watched').then(r => r.json());
-                        currentWatched = watchedData.watched.some(w => typeof w === 'string' ? w === path : w.path === path);
+                        // Fallback: fetch movie details
+                        try {
+                            const movieResponse = await fetch(`/api/movie?path=${encodeURIComponent(path)}`);
+                            if (movieResponse.ok) {
+                                const movieData = await movieResponse.json();
+                                currentWatchStatus = movieData.watch_status !== undefined ? movieData.watch_status : (movieData.watched ? true : null);
+                            } else {
+                                currentWatchStatus = null; // Default to unset
+                            }
+                        } catch (e) {
+                            currentWatchStatus = null; // Default to unset
+                        }
                     }
                 }
                 
-                // Toggle to opposite state
-                const newWatched = !currentWatched;
+                // Cycle through three states: None → True → False → None
+                let newWatchStatus;
+                if (currentWatchStatus === null || currentWatchStatus === undefined) {
+                    newWatchStatus = true;  // unset → watched
+                } else if (currentWatchStatus === true) {
+                    newWatchStatus = false;  // watched → unwatched
+                } else {
+                    newWatchStatus = null;  // unwatched → unset
+                }
                 
                 const response = await fetch('/api/watched', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({path: path, watched: newWatched})
+                    body: JSON.stringify({path: path, watch_status: newWatchStatus})
                 });
                 
                 if (response.ok) {
@@ -2224,14 +2475,19 @@
         
         async function setRating(path, rating) {
             // Setting a rating automatically marks as watched
+            console.log('setRating called:', {path, rating, ratingType: typeof rating});
             try {
+                const requestBody = {path: path, watch_status: true, rating: rating};
+                console.log('Sending rating request:', requestBody);
                 const response = await fetch('/api/watched', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({path: path, watched: true, rating: rating})
+                    body: JSON.stringify(requestBody)
                 });
                 
                 if (response.ok) {
+                    const result = await response.json();
+                    console.log('Rating saved successfully:', result);
                     if (watchedViewActive) {
                         loadWatchedMovies();
                     } else if (exploreViewActive) {
@@ -2240,8 +2496,13 @@
                         search(searchInput.value);
                     }
                     loadStats();
+                } else {
+                    const errorText = await response.text();
+                    console.error('Failed to save rating:', response.status, errorText);
+                    showStatus('Failed to update rating: ' + errorText, 'error');
                 }
             } catch (error) {
+                console.error('Error in setRating:', error);
                 showStatus('Failed to update rating: ' + error.message, 'error');
             }
         }
@@ -2287,26 +2548,64 @@
             navigateTo('/explore');
         }
         
+        // Navigate to explore view with year filter and optionally scroll to specific movie
+        async function navigateToExploreWithYear(year, movieId) {
+            if (!year) return;
+            
+            // Navigate to explore view
+            navigateTo('/explore');
+            
+            // Wait for explore page to be active
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Clear all zone filters first
+            clearAllZoneFilters();
+            
+            // Set the year filter
+            const { filterType } = getCurrentExploreFilters();
+            await fetchExploreMovies(1, filterType, null, null, year);
+            
+            // Year chip will be rendered by renderYearFilter
+            
+            // Wait for movies to render, then scroll to the specific movie if movieId provided
+            if (movieId) {
+                setTimeout(() => {
+                    const movieCard = document.querySelector(`.movie-card[data-movie-id="${movieId}"]`);
+                    if (movieCard) {
+                        movieCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        // Add a highlight effect
+                        movieCard.style.transition = 'box-shadow 0.3s';
+                        movieCard.style.boxShadow = '0 0 20px rgba(74, 158, 255, 0.8)';
+                        setTimeout(() => {
+                            movieCard.style.boxShadow = '';
+                        }, 2000);
+                    }
+                }, 500);
+            }
+        }
+        
         // Standard AJAX pattern: read UI state, build request, fetch, update UI
         function getCurrentExploreFilters() {
-            // Read filter type from radio buttons
-            const filterRadios = document.querySelectorAll('input[name="exploreFilter"]');
-            let filterType = 'all';
-            for (const radio of filterRadios) {
-                if (radio.checked) {
-                    filterType = radio.value;
-                    break;
-                }
-            }
+            // Read filter type from button group
+            const activeBtn = document.querySelector('#pageExplore .btn-group-toggle .btn.active');
+            const filterType = activeBtn ? activeBtn.dataset.filter || 'all' : 'all';
             
             // Read letter from active letter button
             const activeLetterBtn = document.querySelector('.letter-btn.active[data-letter]');
             const letter = activeLetterBtn ? activeLetterBtn.dataset.letter : null;
             
-            return { filterType, letter };
+            // Read decade from active decade button
+            const activeDecadeBtn = document.querySelector('.decade-btn.active[data-decade]');
+            const decade = activeDecadeBtn ? parseInt(activeDecadeBtn.dataset.decade) : null;
+            
+            // Read year from active year chip
+            const yearChip = document.querySelector('.year-chip[data-year]');
+            const year = yearChip ? parseInt(yearChip.dataset.year) : null;
+            
+            return { filterType, letter, decade, year };
         }
         
-        async function fetchExploreMovies(page, filterType, letter) {
+        async function fetchExploreMovies(page, filterType, letter, decade, year) {
             try {
                 const params = new URLSearchParams({
                     page: page.toString(),
@@ -2318,8 +2617,16 @@
                     params.append('letter', letter);
                 }
                 
+                if (decade !== null && decade !== undefined) {
+                    params.append('decade', decade.toString());
+                }
+                
+                if (year !== null && year !== undefined) {
+                    params.append('year', year.toString());
+                }
+                
                 const url = `/api/explore?${params}`;
-                console.log('fetchExploreMovies called with:', { page, filterType, letter });
+                console.log('fetchExploreMovies called with:', { page, filterType, letter, decade, year });
                 console.log('Request URL:', url);
                 const response = await fetch(url);
                 
@@ -2340,14 +2647,16 @@
                 // Update current page
                 currentExplorePage = page;
                 
-                // Render letter navigation with current filter state
-                renderLetterNav(data.letter_counts, letter);
+                // Render navigation with current filter state
+                renderLetterNav(data.letter_counts || {}, letter);
+                renderDecadeNav(data.decade_counts || {}, decade);
+                renderYearFilter(data.year_counts || {}, year);
                 
                 // Render movie grid
                 renderMovieGrid(data.movies || []);
                 
                 // Render pagination
-                renderPagination(data.pagination, filterType, letter);
+                renderPagination(data.pagination, filterType, letter, decade, year);
                 
             } catch (error) {
                 showStatus('Error loading movies: ' + error.message, 'error');
@@ -2357,30 +2666,77 @@
         
         // Filter change handlers - read UI state and make request
         function applyExploreFilters() {
-            const { filterType, letter } = getCurrentExploreFilters();
-            // Reset to page 1 when filter changes, clear letter filter
-            fetchExploreMovies(1, filterType, null);
+            const { filterType } = getCurrentExploreFilters();
+            // Reset to page 1 when filter changes, clear all zone filters
+            clearAllZoneFilters();
+            fetchExploreMovies(1, filterType, null, null, null);
         }
         
         function jumpToLetter(letter) {
             const { filterType } = getCurrentExploreFilters();
-            fetchExploreMovies(1, filterType, letter);
+            // Clear decade and year when selecting letter
+            clearDecadeFilter();
+            clearYearFilter();
+            fetchExploreMovies(1, filterType, letter, null, null);
         }
         
         function clearLetterFilter() {
+            document.querySelectorAll('.letter-btn').forEach(btn => btn.classList.remove('active'));
+        }
+        
+        function jumpToDecade(decade) {
             const { filterType } = getCurrentExploreFilters();
-            fetchExploreMovies(1, filterType, null);
+            // Clear letter and year when selecting decade
+            clearLetterFilter();
+            clearYearFilter();
+            fetchExploreMovies(1, filterType, null, decade, null);
+        }
+        
+        function clearDecadeFilter() {
+            document.querySelectorAll('.decade-btn').forEach(btn => btn.classList.remove('active'));
+        }
+        
+        function jumpToYear(year) {
+            const { filterType } = getCurrentExploreFilters();
+            // Clear letter and decade when selecting year
+            clearLetterFilter();
+            clearDecadeFilter();
+            fetchExploreMovies(1, filterType, null, null, year);
+        }
+        
+        function navigateToAdjacentYear(year, direction) {
+            if (!year || year === null) return;
+            jumpToYear(year);
+        }
+        
+        function clearYearFilter() {
+            const yearChipContainer = document.getElementById('yearChipContainer');
+            const yearInput = document.getElementById('yearInput');
+            if (yearChipContainer) {
+                yearChipContainer.innerHTML = '';
+            }
+            if (yearInput) {
+                yearInput.value = '';
+            }
+            const { filterType, letter, decade } = getCurrentExploreFilters();
+            fetchExploreMovies(1, filterType, letter, decade, null);
+        }
+        
+        function clearAllZoneFilters() {
+            clearLetterFilter();
+            clearDecadeFilter();
+            clearYearFilter();
         }
         
         function goToExplorePage(page) {
-            const { filterType, letter } = getCurrentExploreFilters();
-            fetchExploreMovies(page, filterType, letter);
+            const { filterType, letter, decade, year } = getCurrentExploreFilters();
+            fetchExploreMovies(page, filterType, letter, decade, year);
         }
         
         // Initial load - reads UI state
         function loadExploreMovies() {
-            const { filterType, letter } = getCurrentExploreFilters();
-            fetchExploreMovies(currentExplorePage || 1, filterType, letter);
+            const { filterType, letter, decade, year } = getCurrentExploreFilters();
+            fetchExploreMovies(currentExplorePage || 1, filterType, letter, decade, year);
         }
         
         function renderLetterNav(letterCounts, activeLetter) {
@@ -2419,11 +2775,219 @@
                     
                     if (btn.dataset.action === 'clear') {
                         clearLetterFilter();
+                        clearDecadeFilter();
+                        clearYearFilter();
+                        const { filterType } = getCurrentExploreFilters();
+                        fetchExploreMovies(1, filterType, null, null, null);
                     } else if (btn.dataset.letter) {
                         jumpToLetter(btn.dataset.letter);
                     }
                 });
             });
+        }
+        
+        function renderDecadeNav(decadeCounts, activeDecade) {
+            const decadeNav = document.getElementById('decadeNav');
+            if (!decadeNav) return;
+            
+            // Get all decades that have movies, sorted
+            const decades = Object.keys(decadeCounts).map(d => parseInt(d)).filter(d => d >= 1900 && d <= 2030).sort((a, b) => b - a);
+            
+            let html = '';
+            
+            // Add "All" button
+            const allCount = Object.values(decadeCounts).reduce((sum, count) => sum + count, 0);
+            html += `<button class="decade-btn ${!activeDecade ? 'active' : ''}" data-action="clear">All (${allCount})</button>`;
+            
+            // Add decade buttons
+            for (const decade of decades) {
+                const count = decadeCounts[decade] || 0;
+                const isActive = activeDecade === decade;
+                const decadeLabel = `${decade}s`;
+                html += `<button class="decade-btn ${isActive ? 'active' : ''}" ${count === 0 ? 'disabled' : ''} data-decade="${decade}">${decadeLabel} (${count})</button>`;
+            }
+            
+            decadeNav.innerHTML = html;
+            
+            // Attach event listeners
+            decadeNav.querySelectorAll('.decade-btn').forEach(btn => {
+                if (btn.disabled) {
+                    return;
+                }
+                
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    if (btn.dataset.action === 'clear') {
+                        clearDecadeFilter();
+                        clearLetterFilter();
+                        clearYearFilter();
+                        const { filterType } = getCurrentExploreFilters();
+                        fetchExploreMovies(1, filterType, null, null, null);
+                    } else if (btn.dataset.decade) {
+                        jumpToDecade(parseInt(btn.dataset.decade));
+                    }
+                });
+            });
+        }
+        
+        // Store available years for autocomplete
+        let availableYears = [];
+        // Store year counts for autocomplete
+        let currentYearCounts = {};
+        
+        function renderYearFilter(yearCounts, activeYear) {
+            const yearInput = document.getElementById('yearInput');
+            const yearChipContainer = document.getElementById('yearChipContainer');
+            if (!yearInput || !yearChipContainer) return;
+            
+            // Get all years that have movies, sorted descending
+            availableYears = Object.keys(yearCounts).map(y => parseInt(y)).filter(y => y >= 1900 && y <= 2035).sort((a, b) => b - a);
+            
+            // Render chip if year is active
+            if (activeYear) {
+                const count = yearCounts[activeYear] || 0;
+                
+                // Find adjacent years in available years (sorted descending)
+                const currentIndex = availableYears.indexOf(activeYear);
+                const laterYear = currentIndex > 0 ? availableYears[currentIndex - 1] : null; // Later year (left button, +1, smaller index = larger year)
+                const earlierYear = currentIndex < availableYears.length - 1 ? availableYears[currentIndex + 1] : null; // Earlier year (right button, -1, larger index = smaller year)
+                
+                yearChipContainer.innerHTML = `
+                    <button class="year-nav-btn" ${!laterYear ? 'disabled' : ''} onclick="navigateToAdjacentYear(${laterYear || 'null'}, 'later')" title="Later year (${laterYear || 'N/A'})">◀</button>
+                    <div class="year-chip" data-year="${activeYear}">
+                        <span>${activeYear}</span>
+                        <span class="year-chip-close" onclick="clearYearFilter()" title="Clear year filter">×</span>
+                    </div>
+                    <button class="year-nav-btn" ${!earlierYear ? 'disabled' : ''} onclick="navigateToAdjacentYear(${earlierYear || 'null'}, 'earlier')" title="Earlier year (${earlierYear || 'N/A'})">▶</button>
+                `;
+                yearInput.value = '';
+            } else {
+                yearChipContainer.innerHTML = '';
+            }
+            
+            // Setup autocomplete if not already set up, or update year counts
+            if (!yearInput.dataset.autocompleteSetup) {
+                setupYearAutocomplete(yearInput, yearCounts);
+                yearInput.dataset.autocompleteSetup = 'true';
+            } else {
+                // Update year counts for existing autocomplete
+                currentYearCounts = yearCounts;
+            }
+        }
+        
+        function setupYearAutocomplete(input, yearCounts) {
+            const autocomplete = document.getElementById('yearAutocomplete');
+            let selectedIndex = -1;
+            
+            // Update stored year counts
+            currentYearCounts = yearCounts;
+            
+            input.addEventListener('input', (e) => {
+                const query = e.target.value.trim();
+                
+                if (!query) {
+                    autocomplete.style.display = 'none';
+                    return;
+                }
+                
+                // Filter years that match the query
+                const queryNum = parseInt(query);
+                const matches = availableYears.filter(year => {
+                    if (!isNaN(queryNum)) {
+                        return year.toString().startsWith(query);
+                    }
+                    return false;
+                }).slice(0, 10); // Limit to 10 results
+                
+                if (matches.length === 0) {
+                    autocomplete.style.display = 'none';
+                    return;
+                }
+                
+                // Render autocomplete items
+                autocomplete.innerHTML = matches.map((year, index) => {
+                    const count = currentYearCounts[year] || 0;
+                    return `<div class="year-autocomplete-item" data-year="${year}" data-index="${index}">${year} (${count})</div>`;
+                }).join('');
+                
+                autocomplete.style.display = 'block';
+                selectedIndex = -1;
+            });
+            
+            input.addEventListener('keydown', (e) => {
+                const items = autocomplete.querySelectorAll('.year-autocomplete-item');
+                
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+                    updateAutocompleteSelection(items, selectedIndex);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    selectedIndex = Math.max(selectedIndex - 1, -1);
+                    updateAutocompleteSelection(items, selectedIndex);
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (selectedIndex >= 0 && items[selectedIndex]) {
+                        const year = parseInt(items[selectedIndex].dataset.year);
+                        selectYear(year);
+                    } else if (items.length === 1) {
+                        const year = parseInt(items[0].dataset.year);
+                        selectYear(year);
+                    } else {
+                        // Try to parse input as year
+                        const year = parseInt(input.value.trim());
+                        if (!isNaN(year) && availableYears.includes(year)) {
+                            selectYear(year);
+                        }
+                    }
+                } else if (e.key === 'Escape') {
+                    autocomplete.style.display = 'none';
+                    input.blur();
+                }
+            });
+            
+            // Click on autocomplete item
+            autocomplete.addEventListener('click', (e) => {
+                const item = e.target.closest('.year-autocomplete-item');
+                if (item) {
+                    const year = parseInt(item.dataset.year);
+                    selectYear(year);
+                }
+            });
+            
+            // Close autocomplete when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!input.contains(e.target) && !autocomplete.contains(e.target)) {
+                    autocomplete.style.display = 'none';
+                }
+            });
+        }
+        
+        function updateAutocompleteSelection(items, index) {
+            items.forEach((item, i) => {
+                if (i === index) {
+                    item.classList.add('active');
+                    item.scrollIntoView({ block: 'nearest' });
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+        
+        function selectYear(year) {
+            const yearInput = document.getElementById('yearInput');
+            const autocomplete = document.getElementById('yearAutocomplete');
+            
+            if (yearInput) {
+                yearInput.value = '';
+            }
+            if (autocomplete) {
+                autocomplete.style.display = 'none';
+            }
+            
+            jumpToYear(year);
         }
         
         function renderMovieGrid(movies) {
@@ -2468,6 +3032,10 @@
                 const externalLinks = generateExternalLinks(movie.name);
                 const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path);
                 
+                // Use watch_status if available, fallback to watched boolean for backward compatibility
+                const watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? true : null);
+                const isWatched = watchStatus === true;
+                
                 // Load subtitles
                 await loadSubtitles(movie.path);
                 const subtitles = currentSubtitles[movie.path] || [];
@@ -2489,15 +3057,15 @@
                         <div class="movie-details-info">
                             <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>
                             <div class="movie-details-meta">
-                                ${movie.year ? `<span>${movie.year}</span>` : ''}
+                                ${movie.year ? `<span class="year-link" onclick="navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
                                 ${movie.length ? `<span>${formatMinutes(movie.length)}</span>` : ''}
                                 ${movie.size ? `<span>${formatSize(movie.size)}</span>` : ''}
                                 ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}
                             </div>
                             <div class="movie-details-actions">
-                                ${renderStarRating(movie.path, movie.watched, movie.rating)}
-                                <button class="watched-btn ${movie.watched ? 'watched' : ''}" onclick="toggleWatched('${escapeJsString(movie.path)}', ${movie.watched})">
-                                    ${movie.watched ? '✓ Watched' : 'Mark Watched'}
+                                ${renderStarRating(movie.path, isWatched, movie.rating)}
+                                <button class="watched-btn ${isWatched ? 'watched' : ''}" onclick="toggleWatched('${escapeJsString(movie.path)}', ${watchStatus === null ? 'null' : watchStatus})">
+                                    ${isWatched ? '✓ Watched' : watchStatus === false ? '✗ Unwatched' : 'Mark Watched'}
                                 </button>
                                 ${subtitleSelect}
                                 <button class="launch-btn" onclick="launchMovie('${escapeJsString(movie.path)}')">Launch</button>
@@ -2507,6 +3075,7 @@
                                 <a href="${externalLinks.wikipedia}" target="_blank" class="external-link">Wikipedia</a>
                                 <a href="${externalLinks.imdb}" target="_blank" class="external-link">IMDb</a>
                                 <a href="${externalLinks.tmdb}" target="_blank" class="external-link">TMDB</a>
+                                <a href="${externalLinks.douban}" target="_blank" class="external-link">Douban</a>
                                 <a href="${externalLinks.google}" target="_blank" class="external-link">Google</a>
                                 <a href="#" onclick="event.preventDefault(); openFolder('${escapeJsString(movie.path)}'); return false;" class="external-link">Open Folder</a>
                             </div>
@@ -2540,6 +3109,10 @@
                 const externalLinks = generateExternalLinks(movie.name);
                 const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path);
 
+                // Use watch_status if available, fallback to watched boolean for backward compatibility
+                const watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? true : null);
+                const isWatched = watchStatus === true;
+
                 // Load subtitles
                 await loadSubtitles(movie.path);
                 const subtitles = currentSubtitles[movie.path] || [];
@@ -2561,15 +3134,15 @@
                         <div class="movie-details-info">
                             <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>
                             <div class="movie-details-meta">
-                                ${movie.year ? `<span>${movie.year}</span>` : ''}
+                                ${movie.year ? `<span class="year-link" onclick="navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
                                 ${movie.length ? `<span>${formatTime(movie.length)}</span>` : ''}
                                 ${movie.size ? `<span>${formatSize(movie.size)}</span>` : ''}
                                 ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}
                             </div>
                             <div class="movie-details-actions">
-                                ${renderStarRating(movie.path, movie.watched, movie.rating)}
-                                <button class="watched-btn ${movie.watched ? 'watched' : ''}" onclick="toggleWatched('${escapeJsString(movie.path)}', ${movie.watched})">
-                                    ${movie.watched ? '✓ Watched' : 'Mark Watched'}
+                                ${renderStarRating(movie.path, isWatched, movie.rating)}
+                                <button class="watched-btn ${isWatched ? 'watched' : ''}" onclick="toggleWatched('${escapeJsString(movie.path)}', ${watchStatus === null ? 'null' : watchStatus})">
+                                    ${isWatched ? '✓ Watched' : watchStatus === false ? '✗ Unwatched' : 'Mark Watched'}
                                 </button>
                                 ${subtitleSelect}
                                 <button class="launch-btn" onclick="launchMovie('${escapeJsString(movie.path)}')">Launch</button>
@@ -2579,6 +3152,7 @@
                                 <a href="${externalLinks.wikipedia}" target="_blank" class="external-link">Wikipedia</a>
                                 <a href="${externalLinks.imdb}" target="_blank" class="external-link">IMDb</a>
                                 <a href="${externalLinks.tmdb}" target="_blank" class="external-link">TMDB</a>
+                                <a href="${externalLinks.douban}" target="_blank" class="external-link">Douban</a>
                                 <a href="${externalLinks.google}" target="_blank" class="external-link">Google</a>
                                 <a href="#" onclick="event.preventDefault(); openFolder('${escapeJsString(movie.path)}'); return false;" class="external-link">Open Folder</a>
                             </div>
@@ -2595,7 +3169,7 @@
             }
         }
         
-        function renderPagination(pagination, filterType, letter) {
+        function renderPagination(pagination, filterType, letter, decade, year) {
             const paginationEl = document.getElementById('explorePagination');
             
             if (pagination.pages <= 1) {
@@ -2654,8 +3228,7 @@
                 const pathCount = Array.isArray(data.indexed_paths) ? data.indexed_paths.length : 0;
                 if (stats) {
                     stats.innerHTML = `
-                        <div>Indexed: ${data.total_movies} movies from ${pathCount} path(s)</div>
-                        <div>Watched: ${data.watched_count || 0} movies</div>
+                        <div>${data.total_movies} movies indexed total</div>
                     `;
                 }
                 return data;
@@ -2691,8 +3264,7 @@
                 const pathCount = Array.isArray(statsData.indexed_paths) ? statsData.indexed_paths.length : 0;
                 setupStatsEl.innerHTML = `
                     <div style="color: #e0e0e0; margin-bottom: 10px;">
-                        <div style="margin-bottom: 5px;">Indexed: <strong>${statsData.total_movies}</strong> movies from <strong>${pathCount}</strong> path(s)</div>
-                        <div>Watched: <strong>${statsData.watched_count || 0}</strong> movies</div>
+                        <div style="margin-bottom: 5px;"><strong>${statsData.total_movies}</strong> movies indexed total</div>
                     </div>
                 `;
             }
@@ -3071,217 +3643,10 @@
             }
         }
         
-        // Name Cleaning Functions
-        let cleaningPatternsData = null;
-        
-        async function loadCleaningPatterns() {
-            const container = document.getElementById('cleaningPatternsContainer');
-            const status = document.getElementById('cleaningStatus');
-            
-            container.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">Analyzing movie names...</div>';
-            status.style.display = 'none';
-            
-            try {
-                const response = await fetch('/api/cleaning-patterns');
-                const data = await response.json();
-                cleaningPatternsData = data;
-                
-                renderCleaningPatterns(data);
-            } catch (error) {
-                console.error('Error loading cleaning patterns:', error);
-                container.innerHTML = `<div style="text-align: center; padding: 40px; color: #f44336;">Error loading patterns: ${error.message}</div>`;
-            }
-        }
-        
-        function renderCleaningPatterns(data) {
-            const container = document.getElementById('cleaningPatternsContainer');
-            const analysis = data.analysis;
-            const current = data.current_patterns;
-            
-            let html = '';
-            
-            // Year patterns section
-            html += `<div class="cleaning-section" style="margin-bottom: 30px;">
-                <h2 style="margin-bottom: 15px;">Year Extraction</h2>
-                <p style="color: #aaa; margin-bottom: 15px;">Years found in movie names (1900-2035). Years will be extracted and stored separately.</p>
-                <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
-                    <input type="checkbox" id="yearPatternsEnabled" ${current.year_patterns ? 'checked' : ''} onchange="updateYearPatterns()">
-                    <span>Extract and remove years from movie names</span>
-                </label>
-                <div style="background: #2a2a2a; padding: 15px; border-radius: 6px; max-height: 200px; overflow-y: auto;">
-                    <div style="color: #999; font-size: 12px; margin-bottom: 10px;">Found ${analysis.years.length} unique years</div>
-                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                        ${analysis.years.slice(0, 50).map(y => `<span style="background: #3a3a3a; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(y.pattern)} (${y.count})</span>`).join('')}
-                    </div>
-                </div>
-            </div>`;
-            
-            // Bracket patterns section
-            html += `<div class="cleaning-section" style="margin-bottom: 30px;">
-                <h2 style="margin-bottom: 15px;">Bracket Patterns [anything]</h2>
-                <p style="color: #aaa; margin-bottom: 15px;">Patterns found in square brackets. Select which ones to remove.</p>
-                <div style="margin-bottom: 15px; padding: 10px; background: #3a3a3a; border-radius: 6px;">
-                    <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                        <input type="checkbox" id="bracketAnything" class="bracket-special" data-pattern="[anything]" ${current.bracket_patterns.includes('[anything]') ? 'checked' : ''}>
-                        <span><strong>Remove ALL bracket patterns</strong> (select this to remove everything in brackets)</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 10px;">
-                        <input type="checkbox" id="bracketAll" onchange="toggleAllBrackets(this.checked)">
-                        <span>Select all individual bracket patterns below</span>
-                    </label>
-                </div>
-                <div style="background: #2a2a2a; padding: 15px; border-radius: 6px; max-height: 400px; overflow-y: auto;">
-                    ${analysis.bracket_patterns.map(p => {
-                        const isApproved = current.bracket_patterns.includes(p.pattern) || current.bracket_patterns.includes('[anything]');
-                        return `<div style="display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid #3a3a3a;">
-                            <input type="checkbox" class="bracket-checkbox" data-pattern="${escapeHtml(p.pattern)}" ${isApproved ? 'checked' : ''}>
-                            <code style="flex: 1; color: #4a9eff;">${escapeHtml(p.pattern)}</code>
-                            <span style="color: #999; font-size: 12px;">${p.count} occurrences</span>
-                        </div>`;
-                    }).join('')}
-                    ${analysis.bracket_patterns.length === 0 ? '<div style="color: #666; text-align: center; padding: 20px;">No bracket patterns found</div>' : ''}
-                </div>
-            </div>`;
-            
-            // Parentheses patterns section
-            html += `<div class="cleaning-section" style="margin-bottom: 30px;">
-                <h2 style="margin-bottom: 15px;">Parentheses Patterns (anything)</h2>
-                <p style="color: #aaa; margin-bottom: 15px;">Patterns found in parentheses. Select which ones to remove.</p>
-                <div style="margin-bottom: 15px; padding: 10px; background: #3a3a3a; border-radius: 6px;">
-                    <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                        <input type="checkbox" id="parenAnything" class="paren-special" data-pattern="(anything)" ${current.parentheses_patterns.includes('(anything)') ? 'checked' : ''}>
-                        <span><strong>Remove ALL parentheses patterns</strong> (select this to remove everything in parentheses)</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 10px;">
-                        <input type="checkbox" id="parenAll" onchange="toggleAllParentheses(this.checked)">
-                        <span>Select all individual parentheses patterns below</span>
-                    </label>
-                </div>
-                <div style="background: #2a2a2a; padding: 15px; border-radius: 6px; max-height: 400px; overflow-y: auto;">
-                    ${analysis.parentheses_patterns.map(p => {
-                        const isApproved = current.parentheses_patterns.includes(p.pattern) || current.parentheses_patterns.includes('(anything)');
-                        return `<div style="display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid #3a3a3a;">
-                            <input type="checkbox" class="paren-checkbox" data-pattern="${escapeHtml(p.pattern)}" ${isApproved ? 'checked' : ''}>
-                            <code style="flex: 1; color: #4a9eff;">${escapeHtml(p.pattern)}</code>
-                            <span style="color: #999; font-size: 12px;">${p.count} occurrences</span>
-                        </div>`;
-                    }).join('')}
-                    ${analysis.parentheses_patterns.length === 0 ? '<div style="color: #666; text-align: center; padding: 20px;">No parentheses patterns found</div>' : ''}
-                </div>
-            </div>`;
-            
-            // Exact strings section
-            html += `<div class="cleaning-section" style="margin-bottom: 30px;">
-                <h2 style="margin-bottom: 15px;">Exact Strings</h2>
-                <p style="color: #aaa; margin-bottom: 15px;">Common clutter strings (resolution, codec, etc.). Select which ones to remove.</p>
-                <div style="margin-bottom: 15px;">
-                    <label style="display: flex; align-items: center; gap: 10px;">
-                        <input type="checkbox" id="exactAll" onchange="toggleAllExact(this.checked)">
-                        <span>Select all exact strings</span>
-                    </label>
-                </div>
-                <div style="background: #2a2a2a; padding: 15px; border-radius: 6px; max-height: 400px; overflow-y: auto;">
-                    ${analysis.exact_strings.map(p => {
-                        const isApproved = current.exact_strings.includes(p.pattern);
-                        return `<div style="display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid #3a3a3a;">
-                            <input type="checkbox" class="exact-checkbox" data-pattern="${escapeHtml(p.pattern)}" ${isApproved ? 'checked' : ''}>
-                            <code style="flex: 1; color: #4a9eff;">${escapeHtml(p.pattern)}</code>
-                            <span style="color: #999; font-size: 12px;">${p.count} occurrences</span>
-                        </div>`;
-                    }).join('')}
-                    ${analysis.exact_strings.length === 0 ? '<div style="color: #666; text-align: center; padding: 20px;">No exact strings found</div>' : ''}
-                </div>
-            </div>`;
-            
-            html += `<div style="margin-top: 30px; padding: 20px; background: #2a2a2a; border-radius: 6px;">
-                <p style="color: #aaa; margin-bottom: 10px;"><strong>Total movies analyzed:</strong> ${analysis.total_movies}</p>
-                <p style="color: #999; font-size: 12px;">After saving patterns, re-index your movies to apply the cleaning rules.</p>
-            </div>`;
-            
-            container.innerHTML = html;
-        }
-        
-        function toggleAllBrackets(checked) {
-            document.querySelectorAll('.bracket-checkbox').forEach(cb => cb.checked = checked);
-        }
-        
-        function toggleAllParentheses(checked) {
-            document.querySelectorAll('.paren-checkbox').forEach(cb => cb.checked = checked);
-        }
-        
-        function toggleAllExact(checked) {
-            document.querySelectorAll('.exact-checkbox').forEach(cb => cb.checked = checked);
-        }
-        
-        function updateYearPatterns() {
-            // This is handled in saveCleaningPatterns
-        }
-        
-        async function saveCleaningPatterns() {
-            if (!cleaningPatternsData) {
-                alert('Please load patterns first');
-                return;
-            }
-            
-            const status = document.getElementById('cleaningStatus');
-            status.style.display = 'block';
-            status.style.background = '#2a2a2a';
-            status.style.color = '#aaa';
-            status.textContent = 'Saving patterns...';
-            
-            try {
-                // Collect approved patterns
-                const bracketAnything = document.getElementById('bracketAnything')?.checked;
-                const bracketPatterns = bracketAnything 
-                    ? ['[anything]']
-                    : Array.from(document.querySelectorAll('.bracket-checkbox:checked')).map(cb => cb.dataset.pattern);
-                
-                const parenAnything = document.getElementById('parenAnything')?.checked;
-                const parenPatterns = parenAnything
-                    ? ['(anything)']
-                    : Array.from(document.querySelectorAll('.paren-checkbox:checked')).map(cb => cb.dataset.pattern);
-                
-                const exactStrings = Array.from(document.querySelectorAll('.exact-checkbox:checked')).map(cb => cb.dataset.pattern);
-                const yearPatterns = document.getElementById('yearPatternsEnabled').checked;
-                
-                const data = {
-                    bracket_patterns: bracketPatterns,
-                    parentheses_patterns: parenPatterns,
-                    exact_strings: exactStrings,
-                    year_patterns: yearPatterns
-                };
-                
-                const response = await fetch('/api/cleaning-patterns', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                
-                if (response.ok) {
-                    status.style.background = '#4caf50';
-                    status.style.color = '#fff';
-                    status.textContent = 'Patterns saved successfully! Re-index your movies to apply the cleaning rules.';
-                    
-                    // Update current patterns in data
-                    cleaningPatternsData.current_patterns = {
-                        bracket_patterns: bracketPatterns,
-                        parentheses_patterns: parenPatterns,
-                        exact_strings: exactStrings,
-                        year_patterns: yearPatterns
-                    };
-                } else {
-                    throw new Error('Failed to save patterns');
-                }
-            } catch (error) {
-                console.error('Error saving patterns:', error);
-                status.style.background = '#f44336';
-                status.style.color = '#fff';
-                status.textContent = `Error saving patterns: ${error.message}`;
-            }
-        }
-
         async function recleanAllNames() {
-            const status = document.getElementById('cleaningStatus');
+            const status = document.getElementById('recleanStatus');
+            if (!status) return;
+            
             status.style.display = 'block';
             status.style.background = '#2a2a2a';
             status.style.color = '#aaa';
@@ -3315,6 +3680,7 @@
         
         // Load stats and folder path on page load
         loadStats();
+        loadLanguageFilters();
         loadCurrentFolder();
         updateCurrentlyPlaying();
     </script>

@@ -278,6 +278,38 @@ def migrate_db_schema():
             set_schema_version(3, "Created screenshots and images tables, removed JSON columns from movies")
             current_version = 3
         
+        if current_version < 4:
+            logger.info("Migrating to schema version 4: add language column to movies table.")
+            
+            existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
+            if "language" not in existing_columns:
+                with engine.begin() as conn:
+                    logger.info("Adding 'language' column to movies table...")
+                    conn.execute(text("ALTER TABLE movies ADD COLUMN language VARCHAR"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_language ON movies (language)"))
+                    logger.info("Migration complete: added 'language' column")
+            
+            set_schema_version(4, "Added language column to movies table")
+            current_version = 4
+        
+        if current_version < 5:
+            logger.info("Migrating to schema version 5: create movie_audio table.")
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS movie_audio (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        movie_id INTEGER NOT NULL,
+                        audio_type VARCHAR NOT NULL,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_audio_movie_id ON movie_audio (movie_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_audio_audio_type ON movie_audio (audio_type)"))
+            set_schema_version(5, "Created movie_audio table")
+            current_version = 5
+        
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "

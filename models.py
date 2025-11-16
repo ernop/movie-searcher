@@ -17,6 +17,7 @@ class Movie(Base):
     length = Column(Float, nullable=True)
     size = Column(Integer, nullable=True)
     hash = Column(String, nullable=True, index=True)
+    language = Column(String, nullable=True, index=True)  # Primary audio language code (e.g., 'en', 'es', 'fr')
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -93,6 +94,16 @@ class Image(Base):
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
+class MovieAudio(Base):
+    """Audio streams/types available for a movie (e.g., language codes like eng, jpn, und)."""
+    __tablename__ = "movie_audio"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
+    audio_type = Column(String, nullable=False, index=True)  # Stores language code or descriptor
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
 class SchemaVersion(Base):
     """Tracks database schema version to avoid unnecessary migration checks"""
     __tablename__ = "schema_version"
@@ -103,5 +114,5 @@ class SchemaVersion(Base):
     applied_at = Column(DateTime, default=func.now(), nullable=False)
 
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 5
 

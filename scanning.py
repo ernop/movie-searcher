@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
 
+# Minimum file size threshold (bytes) for inclusion in index
+# Requirement: Skip including files smaller than 50 MB entirely
+MIN_FILE_SIZE_BYTES = 50 * 1024 * 1024
+
 # Scan progress tracking (in-memory)
 scan_progress = {
     "is_scanning": False,
@@ -202,10 +206,6 @@ def clean_movie_name(name, patterns=None):
     season = None
     episode = None
     
-    # Strip "Path: " prefix if present (from UI display format)
-    if name.startswith("Path: "):
-        name = name[6:].strip()
-    
     # Check if input is a full path (contains path separators)
     is_full_path = '/' in name or '\\' in name
     path_obj = None
@@ -314,31 +314,62 @@ def clean_movie_name(name, patterns=None):
         
         # Extract episode from original filename (before cleaning)
         original_filename = path_obj.stem
-        episode_match = re.search(r'[_-](\d+)(?:\.|$)', original_filename)
-        if not episode_match:
-            episode_match = re.search(r'\bE(\d+)\b', original_filename, re.IGNORECASE)
-        if not episode_match:
-            episode_match = re.search(r'\b(?:ep|episode)\s*(\d+)\b', original_filename, re.IGNORECASE)
-        if episode_match:
-            episode = int(episode_match.group(1))
+        # First try to find SXXEXX pattern (most common) - this also gives us season if not found in parent
+        sxxexx_match = re.search(r'\bS(\d+)E(\d+)\b', original_filename, re.IGNORECASE)
+        if sxxexx_match:
+            # If we didn't find season in parent folder, use the one from filename
+            if season is None:
+                season = int(sxxexx_match.group(1))
+            episode = int(sxxexx_match.group(2))
+        else:
+            # Try to find episode number in various formats
+            episode_match = re.search(r'[_-](\d+)(?:\.|$)', original_filename)
+            if not episode_match:
+                episode_match = re.search(r'\bE(\d+)\b', original_filename, re.IGNORECASE)
+            if not episode_match:
+                episode_match = re.search(r'\b(?:ep|episode)\s*(\d+)\b', original_filename, re.IGNORECASE)
+            # Also check for leading episode number (e.g., "02-A Sound of Dolphins")
+            if not episode_match:
+                leading_ep_match = re.search(r'^\s*(\d+)[._\s-]+', original_filename)
+                if leading_ep_match:
+                    episode = int(leading_ep_match.group(1))
+            elif episode_match:
+                episode = int(episode_match.group(1))
         
         # Extract episode title from filename (text after SXXEXX or episode number)
         # For example: "024 S02E01 Points of Departure" -> "024 Points of Departure"
+        # Or: "BEASTARS.S01E10.A.Wolf.in.Sheeps.Clothing.1080p..." -> "A Wolf in Sheeps Clothing"
+        # Or: "02-A Sound of Dolphins" -> "02 A Sound of Dolphins"
         if season is not None or episode is not None:
-            # Try to find text after SXXEXX pattern
-            sxxexx_match = re.search(r'\bS\d{2}E\d{2}\b\s*(.+)$', original_filename, re.IGNORECASE)
+            # Try to find text after SXXEXX pattern, including leading number if present
+            # Pattern: optional leading number, SXXEXX, then episode title (don't require start of string)
+            sxxexx_match = re.search(r'(\d+\s+)?\bS\d{2}E\d{2}\b[._\s]+(.+)$', original_filename, re.IGNORECASE)
             if sxxexx_match:
-                episode_title = sxxexx_match.group(1).strip()
+                leading_num = sxxexx_match.group(1) or ""
+                title_part = sxxexx_match.group(2).strip()
+                episode_title = (leading_num + title_part).strip()
             else:
-                # Try to find text after episode number
-                ep_match = re.search(r'\bE\d+\b\s*(.+)$', original_filename, re.IGNORECASE)
+                # Try to find text after episode number (E\d+)
+                ep_match = re.search(r'(\d+\s+)?\bE\d+\b[._\s]+(.+)$', original_filename, re.IGNORECASE)
                 if ep_match:
-                    episode_title = ep_match.group(1).strip()
+                    leading_num = ep_match.group(1) or ""
+                    title_part = ep_match.group(2).strip()
+                    episode_title = (leading_num + title_part).strip()
                 else:
-                    # Try to find text after standalone episode number
-                    num_match = re.search(r'^\s*(\d+)\s+(.+)$', original_filename)
+                    # Try to find text after standalone episode number (e.g., "02-A Sound of Dolphins")
+                    num_match = re.search(r'^\s*(\d+)[._\s-]+(.+)$', original_filename)
                     if num_match:
-                        episode_title = original_filename.strip()
+                        episode_title = num_match.group(1) + " " + num_match.group(2).strip()
+        
+        # If we still don't have episode_title but filename starts with a number, extract it
+        if not episode_title and is_full_path and path_obj and re.match(r'^\s*\d+[._\s-]+', original_filename):
+            # Filename starts with a number but we haven't extracted episode yet - treat as episode number
+            num_match = re.search(r'^\s*(\d+)[._\s-]+(.+)$', original_filename)
+            if num_match:
+                if episode is None:
+                    episode = int(num_match.group(1))
+                if not episode_title:
+                    episode_title = num_match.group(1) + " " + num_match.group(2).strip()
         
         # Extract year from parent folder if not found in filename yet
         if year is None and parent_str:
@@ -346,19 +377,43 @@ def clean_movie_name(name, patterns=None):
             if parent_year:
                 year = parent_year
         
-        # If we found season/episode, try to get show name from parent or grandparent folder
-        if season is not None or episode is not None:
+        # Try to get show name from parent or grandparent folder
+        # Check if we have episode info OR if filename starts with a number (likely episode number)
+        has_episode_info = (season is not None or episode is not None)
+        filename_starts_with_number = re.match(r'^\s*\d+[._\s-]+', original_filename) if is_full_path and path_obj else False
+        
+        if has_episode_info or filename_starts_with_number:
             # First try parent folder (for cases like "Babylon 5 (1993)")
             parent_name = parent_str
             if parent_name and parent_name.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', 'season 1', 'season 2', 's1', 's2']:
                 # Check if parent folder looks like a show name (not a season folder)
                 if not re.search(r'(?:Season|season)\s*\d+|^\s*S\d+\s*$', parent_name, re.IGNORECASE):
-                    # Use parent folder as show name, but clean it first
+                    # Use parent folder as show name, but clean it thoroughly
                     show_name = parent_name
+                    # Remove quality/resolution/source/codec/audio tags BEFORE normalizing (to catch patterns like "DDP2.0")
+                    for p in quality_source_patterns:
+                        show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
+                    for p in edition_patterns:
+                        show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
+                    # Remove specific patterns that might have dots (BEFORE normalizing)
+                    show_name = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP\d+\.?\d*|x264|x265|1080p|720p|480p|4k|uhd)\b', ' ', show_name, flags=re.IGNORECASE)
+                    # Remove standalone decimal numbers that are likely quality tags (like "2.0" from "DDP2.0")
+                    show_name = re.sub(r'\b\d+\.\d+\b', ' ', show_name)
+                    # Now normalize dots/underscores to spaces
+                    show_name = re.sub(r'[._]+', ' ', show_name)
                     # Remove year in parentheses
                     show_name = re.sub(r'\([^)]*\)', '', show_name)
-                    # Remove common folder patterns
+                    # Remove common folder patterns (brackets)
                     show_name = re.sub(r'\[.*?\]', '', show_name)
+                    # Remove season/episode patterns (S01, S02, etc.)
+                    show_name = re.sub(r'\bS\d+\b', ' ', show_name, flags=re.IGNORECASE)
+                    show_name = re.sub(r'\bSeason\s*\d+\b', ' ', show_name, flags=re.IGNORECASE)
+                    # Remove language tags
+                    show_name = re.sub(r'\b(?:japanese|english|french|german|spanish|italian|russian|korean|hindi)\b', ' ', show_name, flags=re.IGNORECASE)
+                    # Remove release group suffixes
+                    show_name = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', show_name)
+                    # Don't remove single digits - they might be part of the show name (e.g., "Babylon 5")
+                    # Clean up spaces
                     show_name = re.sub(r'\s+', ' ', show_name).strip()
                     if show_name:
                         name = show_name
@@ -369,26 +424,45 @@ def clean_movie_name(name, patterns=None):
                 if grandparent and grandparent.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos']:
                     # Use grandparent folder as show name, but clean it first
                     show_name = grandparent
+                    # Normalize dots/underscores to spaces first
+                    show_name = re.sub(r'[._]+', ' ', show_name)
                     # Remove common folder patterns
                     show_name = re.sub(r'\[.*?\]', '', show_name)
                     show_name = re.sub(r'\(.*?\)', '', show_name)
+                    # Remove quality tags
+                    for p in quality_source_patterns:
+                        show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
+                    for p in edition_patterns:
+                        show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
+                    # Clean up spaces
                     show_name = re.sub(r'\s+', ' ', show_name).strip()
                     if show_name:
                         name = show_name
     
     # Remove season/episode tags from name (they're already extracted)
-    # But preserve episode titles that come after SXXEXX (e.g., "S02E01 Points of Departure")
-    # Only remove the SXXEXX pattern itself, not text after it
-    name = re.sub(r'\bS\d{2}E\d{2}\b\s*', ' ', name, flags=re.IGNORECASE)
-    name = re.sub(r'\bSeason\s*\d+\b', ' ', name, flags=re.IGNORECASE)
-    # Only remove standalone E\d+ that's not part of SXXEXX (already removed above)
-    # Don't remove E\d+ if it's followed by text (episode title)
-    name = re.sub(r'\bE\d+\b(?=\s|$)', ' ', name, flags=re.IGNORECASE)
-    name = re.sub(r'\b(?:ep|episode)\s*\d+\b', ' ', name, flags=re.IGNORECASE)
-    # Remove leading episode numbers (e.g., "024 S02E01" -> remove "024")
-    name = re.sub(r'^\s*\d+\s+', ' ', name)
-    # Remove episode numbers that are standalone or after dashes/underscores at the start
-    name = re.sub(r'^[_-]\d+(?:\.|$)', ' ', name)
+    # But only if name still contains the original filename (not if we've already set it to show name)
+    # Check if name looks like it still has episode info (has SXXEXX or starts with a number)
+    if is_full_path and path_obj and (season is not None or episode is not None):
+        # Only clean the name if it still looks like the filename (has SXXEXX or starts with number)
+        # If we've already set it to the show name, skip this cleaning
+        if re.search(r'\bS\d{2}E\d{2}\b', name, re.IGNORECASE) or re.match(r'^\s*\d+', name):
+            # This is still the filename, clean it
+            name = re.sub(r'\bS\d{2}E\d{2}\b\s*', ' ', name, flags=re.IGNORECASE)
+            name = re.sub(r'\bSeason\s*\d+\b', ' ', name, flags=re.IGNORECASE)
+            name = re.sub(r'\bE\d+\b(?=\s|$)', ' ', name, flags=re.IGNORECASE)
+            name = re.sub(r'\b(?:ep|episode)\s*\d+\b', ' ', name, flags=re.IGNORECASE)
+            # Remove leading episode numbers (e.g., "024 S02E01" -> remove "024")
+            name = re.sub(r'^\s*\d+\s+', ' ', name)
+            # Remove episode numbers that are standalone or after dashes/underscores at the start
+            name = re.sub(r'^[_-]\d+(?:\.|$)', ' ', name)
+    else:
+        # Not a TV series path, clean normally
+        name = re.sub(r'\bS\d{2}E\d{2}\b\s*', ' ', name, flags=re.IGNORECASE)
+        name = re.sub(r'\bSeason\s*\d+\b', ' ', name, flags=re.IGNORECASE)
+        name = re.sub(r'\bE\d+\b(?=\s|$)', ' ', name, flags=re.IGNORECASE)
+        name = re.sub(r'\b(?:ep|episode)\s*\d+\b', ' ', name, flags=re.IGNORECASE)
+        name = re.sub(r'^\s*\d+\s+', ' ', name)
+        name = re.sub(r'^[_-]\d+(?:\.|$)', ' ', name)
 
     # STEP 10: Remove release group suffixes like "-RARBG", "-YTS", "-EVO" at end
     # Only match if preceded by dash (not space) to avoid removing legitimate title words
@@ -435,12 +509,70 @@ def clean_movie_name(name, patterns=None):
     if season is not None or episode is not None:
         season_str = f"S{season:02d}" if season is not None else ""
         episode_str = f"E{episode:02d}" if episode is not None else ""
-        if season_str and episode_str:
-            name = f"{name} {season_str}{episode_str}"
-        elif season_str:
-            name = f"{name} {season_str}"
-        elif episode_str:
-            name = f"{name} {episode_str}"
+        
+        # If we have an episode title, include it
+        if episode_title:
+            # Clean the episode title (remove quality tags, etc. but keep the text)
+            episode_title_cleaned = episode_title
+            # Check for leading number BEFORE any cleaning (e.g., "024 Points of Departure")
+            # But only if it's a multi-digit number (to avoid matching single digits from quality tags)
+            leading_num_match = re.match(r'^(\d{2,})\s+(.+)$', episode_title_cleaned)
+            leading_num = None
+            if leading_num_match:
+                leading_num = leading_num_match.group(1)
+                episode_title_cleaned = leading_num_match.group(2).strip()
+            
+            # Remove quality tag patterns BEFORE normalizing (to catch patterns like "H.264", "DDP2.0")
+            # Remove common quality/resolution/source/codec/audio tags
+            for p in quality_source_patterns:
+                episode_title_cleaned = re.sub(p, ' ', episode_title_cleaned, flags=re.IGNORECASE)
+            for p in edition_patterns:
+                episode_title_cleaned = re.sub(p, ' ', episode_title_cleaned, flags=re.IGNORECASE)
+            # Remove specific patterns that might have dots
+            episode_title_cleaned = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP\d+\.?\d*|x264|x265|H\.?264|1080p|720p|480p|4k|uhd)\b', ' ', episode_title_cleaned, flags=re.IGNORECASE)
+            # Remove release group suffixes
+            episode_title_cleaned = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', episode_title_cleaned)
+            
+            # Now normalize dots/underscores to spaces (for cases like "A.Wolf.in.Sheeps.Clothing")
+            episode_title_cleaned = re.sub(r'[._]+', ' ', episode_title_cleaned)
+            
+            # Remove standalone decimal numbers (like "2.0" from "DDP2.0")
+            episode_title_cleaned = re.sub(r'\b\d+\.\d+\b', ' ', episode_title_cleaned)
+            # Remove standalone single digits (likely fragments from quality tags like "0" from "DDP2.0")
+            episode_title_cleaned = re.sub(r'\b\d\b', ' ', episode_title_cleaned)
+            # Don't remove 2-3 digit numbers if we already extracted them as leading_num
+            # Only remove if they're clearly fragments (not if they're the leading number we want to keep)
+            if not leading_num:
+                # Remove standalone 2-3 digit numbers that are likely fragments (but preserve multi-digit episode numbers)
+                episode_title_cleaned = re.sub(r'\b\d{2,3}\b(?=\s|$)', ' ', episode_title_cleaned)
+            # Clean up spaces
+            episode_title_cleaned = re.sub(r'\s+', ' ', episode_title_cleaned).strip()
+            
+            # Format with leading number if we found one
+            if leading_num:
+                if season_str and episode_str:
+                    name = f"{name} {leading_num} {season_str}{episode_str} {episode_title_cleaned}"
+                elif season_str:
+                    name = f"{name} {leading_num} {season_str} {episode_title_cleaned}"
+                elif episode_str:
+                    # For cases like "02 A Sound of Dolphins", just use leading_num + title (no E02)
+                    name = f"{name} {leading_num} {episode_title_cleaned}"
+            else:
+                # No leading number, just add title after SXXEXX
+                if season_str and episode_str:
+                    name = f"{name} {season_str}{episode_str} {episode_title_cleaned}"
+                elif season_str:
+                    name = f"{name} {season_str} {episode_title_cleaned}"
+                elif episode_str:
+                    name = f"{name} {episode_str} {episode_title_cleaned}"
+        else:
+            # No episode title, just add season/episode
+            if season_str and episode_str:
+                name = f"{name} {season_str}{episode_str}"
+            elif season_str:
+                name = f"{name} {season_str}"
+            elif episode_str:
+                name = f"{name} {episode_str}"
     
     return name, year
 
@@ -523,6 +655,22 @@ def index_movie(file_path, db: Session = None):
         stat = os.stat(normalized_path)
         created = datetime.fromtimestamp(stat.st_ctime)
         size = stat.st_size
+        
+        # Exclude files smaller than minimum threshold
+        if size < MIN_FILE_SIZE_BYTES:
+            add_scan_log("warning", f"  Skipping (too small: {size / (1024*1024):.1f}MB; requires >= 50MB)")
+            # If it exists in DB already, remove it to enforce exclusion
+            if existing:
+                try:
+                    # Delete related screenshots and images first
+                    db.query(Screenshot).filter(Screenshot.movie_id == existing.id).delete()
+                    db.query(Image).filter(Image.movie_id == existing.id).delete()
+                    db.delete(existing)
+                    db.commit()
+                    add_scan_log("info", f"  Removed existing DB entry for small file")
+                except Exception:
+                    db.rollback()
+            return False
         
         # Try to get video length
         length = get_video_length(normalized_path)
@@ -653,7 +801,10 @@ def scan_directory(root_path, state=None, progress_callback=None):
         
         total_files = 0
         for ext in VIDEO_EXTENSIONS:
-            files = [f for f in root.rglob(f"*{ext}") if not is_sample_file(f)]
+            files = [
+                f for f in root.rglob(f"*{ext}")
+                if not is_sample_file(f) and os.path.getsize(f) >= MIN_FILE_SIZE_BYTES
+            ]
             count = len(files)
             total_files += count
             if count > 0:

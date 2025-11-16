@@ -39,13 +39,48 @@ function renderStarRating(path, isWatched, rating = null) {
 
 function handleStarClick(event, path, leftRating, rightRating) {
     event.stopPropagation();
-    const star = event.currentTarget;
+    event.preventDefault();
+    // For inline onclick handlers, event.currentTarget might not work correctly
+    // Find the star element (could be event.target or its parent if clicking on text node)
+    let star = event.target;
+    while (star && !star.classList.contains('star')) {
+        star = star.parentElement;
+    }
+    if (!star) {
+        // Fallback: use the element that has the onclick handler
+        star = event.target.closest('.star');
+    }
+    if (!star) {
+        console.error('Could not find star element');
+        return;
+    }
+    
+    // Use data attributes from the actual clicked star element to ensure we get the correct rating values
+    // This is more reliable than using the function parameters, which might be from a different star
+    const actualLeftRating = parseFloat(star.getAttribute('data-rating-left'));
+    const actualRightRating = parseFloat(star.getAttribute('data-rating-right'));
+    
+    // Validate that we got valid ratings
+    if (isNaN(actualLeftRating) || isNaN(actualRightRating)) {
+        console.error('Invalid rating values from star element', {actualLeftRating, actualRightRating});
+        return;
+    }
+    
     const rect = star.getBoundingClientRect();
     const clickX = event.clientX - rect.left;
     const width = rect.width;
     
-    // Determine if click was on left or right half
-    const rating = clickX < width / 2 ? leftRating : rightRating;
-    setRating(path, rating);
+    // Determine if click was on left or right half using the actual star's rating values
+    const rating = clickX < width / 2 ? actualLeftRating : actualRightRating;
+    
+    // Ensure rating is a number, not a string
+    const ratingValue = parseFloat(rating);
+    if (isNaN(ratingValue)) {
+        console.error('Invalid rating calculated', {rating, clickX, width, actualLeftRating, actualRightRating});
+        return;
+    }
+    
+    console.log('Star clicked:', {path, rating: ratingValue, clickX, width, leftHalf: clickX < width / 2});
+    setRating(path, ratingValue);
 }
 

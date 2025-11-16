@@ -239,7 +239,7 @@ class LaunchRequest(BaseModel):
 
 class WatchedRequest(BaseModel):
     path: str
-    watched: bool
+    watch_status: Optional[bool] = None  # None = unset, True = watched, False = unwatched
     rating: Optional[float] = None
 
 class ConfigRequest(BaseModel):
@@ -467,7 +467,8 @@ async def admin_reindex(root_path: str = Query(None)):
 @app.get("/api/search")
 async def search_movies(
     q: str,
-    filter_type: str = Query("all", pattern="^(all|watched|unwatched)$")
+    filter_type: str = Query("all", pattern="^(all|watched|unwatched)$"),
+    language: Optional[str] = Query("all")
 ):
     """Search movies. Always returns full fields (limited to 50)."""
     if not q or len(q) < 2:
@@ -501,6 +502,10 @@ async def search_movies(
         elif filter_type == "unwatched":
             if watched_movie_ids:
                 movie_query = movie_query.filter(~Movie.id.in_(watched_movie_ids))
+        
+        # Apply language filter
+        if language and language != "all":
+            movie_query = movie_query.filter(Movie.language == language)
 
         # Get movies and calculate scores
         movies = movie_query.all()
@@ -520,28 +525,31 @@ async def search_movies(
         result_ids = [movie.id for _, movie in scored_movies]
         results = []
 
-        # Preload watched info (latest watched date) for these ids
-        watched_dict = {}
+        # Preload watch status info (latest watch_status for each movie)
+        watch_status_dict = {}
         if result_ids:
+            # Get latest watch entry for each movie (regardless of status)
             watch_entries = db.query(WatchHistory).filter(
-                WatchHistory.watch_status == True,
                 WatchHistory.movie_id.in_(result_ids)
             ).order_by(WatchHistory.updated.desc()).all()
             for entry in watch_entries:
-                if entry.movie_id not in watched_dict:
-                    watched_dict[entry.movie_id] = {
+                if entry.movie_id not in watch_status_dict:
+                    watch_status_dict[entry.movie_id] = {
+                        "watch_status": entry.watch_status,
                         "watched_date": entry.updated.isoformat() if entry.updated else None,
                         "rating": None
                     }
 
             # Preload ratings
             for rating in db.query(Rating).filter(Rating.movie_id.in_(result_ids)).all():
-                if rating.movie_id in watched_dict:
-                    watched_dict[rating.movie_id]["rating"] = rating.rating
+                if rating.movie_id in watch_status_dict:
+                    watch_status_dict[rating.movie_id]["rating"] = rating.rating
 
         # Build results
         for score, movie in scored_movies:
-            is_watched = movie.id in watched_movie_ids
+            watch_info = watch_status_dict.get(movie.id, {})
+            watch_status = watch_info.get("watch_status")
+            is_watched = watch_status is True  # For backward compatibility
             
             images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
             screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
@@ -562,9 +570,10 @@ async def search_movies(
                 "length": movie.length,
                 "created": movie.created,
                 "size": movie.size,
-                "watched": is_watched,
-                "watched_date": watched_dict.get(movie.id, {}).get("watched_date") if is_watched else None,
-                "rating": watched_dict.get(movie.id, {}).get("rating") if is_watched else None,
+                "watch_status": watch_status,
+                "watched": is_watched,  # Keep for backward compatibility
+                "watched_date": watch_info.get("watched_date"),
+                "rating": watch_info.get("rating"),
                 "score": score,
                 "images": images,
                 "screenshots": screenshots,
@@ -618,12 +627,11 @@ async def get_movie_details(path: str = Query(...)):
         if not movie:
             raise HTTPException(status_code=404, detail="Movie not found")
         
-        # Check if watched (has "watched" status in watch_history)
+        # Get latest watch status (None/True/False)
         watch_entry = db.query(WatchHistory).filter(
-            WatchHistory.movie_id == movie.id,
-            WatchHistory.watch_status == True
+            WatchHistory.movie_id == movie.id
         ).order_by(WatchHistory.updated.desc()).first()
-        is_watched = watch_entry is not None
+        watch_status = watch_entry.watch_status if watch_entry else None
         
         # Get rating
         rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
@@ -684,12 +692,14 @@ async def get_movie_details(path: str = Query(...)):
         has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
         
         return {
+            "id": movie.id,
             "path": movie.path,
             "name": movie.name,
             "length": movie.length,
             "created": movie.created,
             "size": movie.size,
-            "watched": is_watched,
+            "watch_status": watch_status,
+            "watched": watch_status is True,  # Keep for backward compatibility
             "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
             "rating": rating_entry.rating if rating_entry else None,
             "images": images,
@@ -711,12 +721,11 @@ async def get_movie_details_by_id(movie_id: int):
         if not movie:
             raise HTTPException(status_code=404, detail="Movie not found")
 
-        # Check if watched (has "watched" status in watch_history)
+        # Get latest watch status (None/True/False)
         watch_entry = db.query(WatchHistory).filter(
-            WatchHistory.movie_id == movie.id,
-            WatchHistory.watch_status == True
+            WatchHistory.movie_id == movie.id
         ).order_by(WatchHistory.updated.desc()).first()
-        is_watched = watch_entry is not None
+        watch_status = watch_entry.watch_status if watch_entry else None
 
         # Get rating
         rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
@@ -770,12 +779,14 @@ async def get_movie_details_by_id(movie_id: int):
         has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
 
         return {
+            "id": movie.id,
             "path": movie.path,
             "name": movie.name,
             "length": movie.length,
             "created": movie.created,
             "size": movie.size,
-            "watched": is_watched,
+            "watch_status": watch_status,
+            "watched": watch_status is True,  # Keep for backward compatibility
             "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
             "rating": rating_entry.rating if rating_entry else None,
             "images": images,
@@ -1032,6 +1043,9 @@ async def mark_watched(request: WatchedRequest):
     """Mark movie as watched or unwatched, optionally with rating"""
     db = SessionLocal()
     try:
+        # Log the incoming request for debugging
+        logger.debug(f"mark_watched called with path={request.path}, watch_status={request.watch_status}, rating={request.rating} (type: {type(request.rating)})")
+        
         # Resolve movie by path, with path normalization to be robust to slash variants on Windows
         movie = None
         if request.path:
@@ -1059,32 +1073,38 @@ async def mark_watched(request: WatchedRequest):
         if not movie:
             raise HTTPException(status_code=404, detail=f"Movie not found: {request.path}")
         
-        if request.watched:
-            # Create watch history entry
+        # Delete all existing watch history entries for this movie
+        db.query(WatchHistory).filter(
+            WatchHistory.movie_id == movie.id
+        ).delete()
+        
+        # If watch_status is not None, create a new entry with that status
+        if request.watch_status is not None:
             watch_entry = WatchHistory(
                 movie_id=movie.id,
-                watch_status=True
+                watch_status=request.watch_status
             )
             db.add(watch_entry)
             
-            # Update rating if provided
-            if request.rating is not None:
+            # Update rating if provided (only when setting to watched)
+            if request.rating is not None and request.watch_status is True:
+                # Ensure rating is a float
+                rating_value = float(request.rating) if request.rating is not None else None
+                logger.debug(f"Saving rating {rating_value} for movie {movie.id}")
                 rating_entry = Rating(
                     movie_id=movie.id,
-                    rating=request.rating
+                    rating=rating_value
                 )
                 db.merge(rating_entry)
-        else:
-            # Remove watch status (delete "watched" entries)
-            db.query(WatchHistory).filter(
-                WatchHistory.movie_id == movie.id,
-                WatchHistory.watch_status == True
-            ).delete()
-            # Note: We keep the rating even when unwatched, but you can delete it if desired
-            # db.query(Rating).filter(Rating.movie_id == movie.id).delete()
         
         db.commit()
-        return {"status": "updated"}
+        
+        # Return the new watch_status
+        return {"status": "updated", "watch_status": request.watch_status}
+    except Exception as e:
+        logger.error(f"Error in mark_watched endpoint: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
@@ -1107,43 +1127,58 @@ async def get_watched():
                 
                 movie = db.query(Movie).filter(Movie.id == watch_entry.movie_id).first()
                 if movie:
-                    # Get rating
-                    rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
-                    
-                    # Get images and screenshots from tables
-                    images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
-                    screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
-                    
-                    # Get screenshot path
-                    screenshot_path = get_movie_screenshot_path(db, movie.id)
-                    
-                    info = {
-                        "images": images,
-                        "screenshots": screenshots,
-                        "frame": screenshot_path
-                    }
-                    
-                    movie_info = {
-                        "path": movie.path,
-                        "name": movie.name,
-                        "length": movie.length,
-                        "created": movie.created,
-                        "size": movie.size,
-                        "watched_date": watch_entry.updated.isoformat() if watch_entry.updated else None,
-                        "rating": rating_entry.rating if rating_entry else None,
-                        "images": images,
-                        "screenshots": screenshots,
-                        "frame": screenshot_path,
-                        "image": get_largest_image(info),
-                        "year": movie.year,
-                        "has_launched": db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
-                    }
-                    watched_movies_list.append(movie_info)
+                    try:
+                        # Get rating
+                        rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
+                        
+                        # Get images and screenshots from tables
+                        images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
+                        screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
+                        
+                        # Get screenshot path
+                        screenshot_path = get_movie_screenshot_path(db, movie.id)
+                        
+                        info = {
+                            "images": images,
+                            "screenshots": screenshots,
+                            "frame": screenshot_path
+                        }
+                        
+                        # Safely get largest image with error handling
+                        largest_image = None
+                        try:
+                            largest_image = get_largest_image(info)
+                        except Exception as e:
+                            logger.warning(f"Error getting largest image for movie {movie.id}: {e}")
+                        
+                        movie_info = {
+                            "path": movie.path,
+                            "name": movie.name,
+                            "length": movie.length,
+                            "created": movie.created,
+                            "size": movie.size,
+                            "watched_date": watch_entry.updated.isoformat() if watch_entry.updated else None,
+                            "rating": rating_entry.rating if rating_entry else None,
+                            "images": images,
+                            "screenshots": screenshots,
+                            "frame": screenshot_path,
+                            "image": largest_image,
+                            "year": movie.year,
+                            "has_launched": db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
+                        }
+                        watched_movies_list.append(movie_info)
+                    except Exception as e:
+                        logger.error(f"Error processing movie {watch_entry.movie_id} in watched list: {e}", exc_info=True)
+                        continue
         
         # Sort by watched date (most recent first)
-        watched_movies_list.sort(key=lambda x: x.get("watched_date", ""), reverse=True)
+        # Handle None values by converting them to empty string for sorting
+        watched_movies_list.sort(key=lambda x: x.get("watched_date") or "", reverse=True)
         
         return {"watched": watched_movies_list}
+    except Exception as e:
+        logger.error(f"Error in get_watched endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
@@ -1414,6 +1449,35 @@ async def get_stats():
     finally:
         db.close()
 
+@app.get("/api/language-counts")
+async def get_language_counts():
+    """Get counts of movies by language"""
+    db = SessionLocal()
+    try:
+        # Get all movies with language set, filter to valid movies (length >= 60 or null)
+        from sqlalchemy import or_
+        language_counts = db.query(
+            Movie.language,
+            func.count(Movie.id).label('count')
+        ).filter(
+            Movie.language.isnot(None),
+            Movie.language != '',
+            or_(Movie.length == None, Movie.length >= 60)
+        ).group_by(Movie.language).order_by(func.count(Movie.id).desc()).all()
+        
+        # Convert to dictionary
+        counts_dict = {lang: count for lang, count in language_counts if lang}
+        
+        # Also get count for "all" (total movies)
+        total_count = db.query(Movie).filter(
+            or_(Movie.length == None, Movie.length >= 60)
+        ).count()
+        counts_dict['all'] = total_count
+        
+        return {"counts": counts_dict}
+    finally:
+        db.close()
+
 @app.get("/api/cleaning-patterns")
 async def get_cleaning_patterns():
     """Get all suspicious patterns found in movie names"""
@@ -1565,9 +1629,11 @@ def get_first_letter(name):
 async def explore_movies(
     request: Request,
     page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
+    per_page: int = Query(15, ge=1, le=100),
     filter_type: str = Query("all", pattern="^(all|watched|unwatched)$"),
-    letter: Optional[str] = Query(None, pattern="^[A-Z#]$")
+    letter: Optional[str] = Query(None, pattern="^[A-Z#]$"),
+    year: Optional[int] = Query(None, ge=1900, le=2035),
+    decade: Optional[int] = Query(None, ge=1900, le=2030)
 ):
     """Get all movies for exploration view with pagination and filters"""
     # Normalize letter to uppercase if provided
@@ -1604,6 +1670,17 @@ async def explore_movies(
             prefix = f"{letter}%"
             movie_q = movie_q.filter(func.substr(Movie.name, 1, 1) == letter)
 
+        # Year filter (exact year match)
+        if year is not None:
+            movie_q = movie_q.filter(Movie.year == year)
+        
+        # Decade filter (e.g., 1980 filters for years 1980-1989)
+        if decade is not None:
+            # Ensure decade is a multiple of 10
+            decade_start = (decade // 10) * 10
+            decade_end = decade_start + 9
+            movie_q = movie_q.filter(Movie.year >= decade_start, Movie.year <= decade_end)
+
         # Total count after filters
         total = movie_q.count()
 
@@ -1611,13 +1688,12 @@ async def explore_movies(
         rows = movie_q.order_by(Movie.name.asc()).offset((page - 1) * per_page).limit(per_page).all()
         movie_ids = [m.id for m in rows]
 
-        # Batched fetch for watched info (latest watched entry) limited to page ids
-        watched_info = {}
+        # Batched fetch for watch status info (latest watch entry regardless of status) limited to page ids
+        watch_status_info = {}
         if movie_ids:
             subq = db.query(
                 WatchHistory.movie_id, func.max(WatchHistory.updated).label("max_updated")
             ).filter(
-                WatchHistory.watch_status == True,
                 WatchHistory.movie_id.in_(movie_ids)
             ).group_by(WatchHistory.movie_id).subquery()
 
@@ -1627,8 +1703,9 @@ async def explore_movies(
                 (wh_alias.movie_id == subq.c.movie_id) & (wh_alias.updated == subq.c.max_updated)
             ).all()
             for w in latest_watches:
-                watched_info[w.movie_id] = {
-                    "watched": True,
+                watch_status_info[w.movie_id] = {
+                    "watch_status": w.watch_status,
+                    "watched": w.watch_status is True,  # Keep for backward compatibility
                     "watched_date": w.updated.isoformat() if w.updated else None
                 }
 
@@ -1636,8 +1713,8 @@ async def explore_movies(
             ratings = db.query(Rating).filter(Rating.movie_id.in_(movie_ids)).all()
             rating_map = {r.movie_id: r.rating for r in ratings}
             for mid in movie_ids:
-                if mid in watched_info and mid in rating_map:
-                    watched_info[mid]["rating"] = rating_map[mid]
+                if mid in watch_status_info and mid in rating_map:
+                    watch_status_info[mid]["rating"] = rating_map[mid]
 
         # One screenshot id per movie (prefer smallest id as representative)
         screenshot_map = {}
@@ -1658,7 +1735,8 @@ async def explore_movies(
         # Build response items without heavy filesystem ops
         result_movies = []
         for m in rows:
-            info = watched_info.get(m.id, {})
+            info = watch_status_info.get(m.id, {})
+            watch_status = info.get("watch_status")
             result_movies.append({
                 "id": m.id,
                 "path": m.path,
@@ -1666,7 +1744,8 @@ async def explore_movies(
                 "length": m.length,
                 "created": m.created,
                 "size": m.size,
-                "watched": bool(info.get("watched", False)),
+                "watch_status": watch_status,
+                "watched": bool(info.get("watched", False)),  # Keep for backward compatibility
                 "watched_date": info.get("watched_date"),
                 "rating": info.get("rating"),
                 "year": m.year,
@@ -1674,9 +1753,9 @@ async def explore_movies(
                 "screenshot_id": screenshot_map.get(m.id)  # frontend will call /api/screenshot/{id}
             })
 
-        # Letter counts across all movies respecting watched filter (but not letter filter)
+        # Letter counts across all movies respecting watched filter (but not letter/year/decade filters)
         # Fetch only needed columns for speed
-        counts_q = db.query(Movie.id, Movie.name)
+        counts_q = db.query(Movie.id, Movie.name, Movie.year)
         if filter_type == "watched":
             exists_watch = db.query(WatchHistory.id).filter(
                 (WatchHistory.movie_id == Movie.id) & (WatchHistory.watch_status == True)
@@ -1688,9 +1767,16 @@ async def explore_movies(
             ).exists()
             counts_q = counts_q.filter(~exists_watch)
         letter_counts = {}
-        for _, nm in counts_q.all():
+        year_counts = {}
+        decade_counts = {}
+        for _, nm, yr in counts_q.all():
             lt = get_first_letter(nm)
             letter_counts[lt] = letter_counts.get(lt, 0) + 1
+            if yr is not None:
+                year_counts[yr] = year_counts.get(yr, 0) + 1
+                # Calculate decade (e.g., 1987 -> 1980s)
+                decade_start = (yr // 10) * 10
+                decade_counts[decade_start] = decade_counts.get(decade_start, 0) + 1
 
         return {
             "movies": result_movies,
@@ -1700,7 +1786,9 @@ async def explore_movies(
                 "total": total,
                 "pages": (total + per_page - 1) // per_page if total > 0 else 0
             },
-            "letter_counts": letter_counts
+            "letter_counts": letter_counts,
+            "year_counts": year_counts,
+            "decade_counts": decade_counts
         }
     except Exception as e:
         logger.error(f"Error in explore endpoint: {e}", exc_info=True)

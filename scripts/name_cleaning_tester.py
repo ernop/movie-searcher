@@ -51,6 +51,16 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_name": "Babylon 5 024 S02E01 Points of Departure",
         "expected_year": 1993,
     },
+    {
+        "input":"D:\movies\BEASTARS.S01.JAPANESE.1080p.NF.WEBRip.DDP2.0.x264-AGLET[rartv]\BEASTARS.S01E10.A.Wolf.in.Sheeps.Clothing.1080p.NF.WEB-DL.DDP2.0.H.264-AGLET.mkv",
+        "expected_name": "BEASTARS S01E10 A Wolf in Sheeps Clothing",
+        "expected_year": None,
+    },
+    {
+        "input": r"D:\movies\The Undersea World of Jacques Cousteau [1971-5]\02-A Sound of Dolphins.mp4",
+        "expected_name": "The Undersea World of Jacques Cousteau 02 A Sound of Dolphins",
+        "expected_year": None, #because a removed item in the prior folder name doesn't mean that we lose the actaul filename
+    },
     # Add more cases below. Examples:
     # {
     #     "input": "The.Matrix.1999.1080p.BluRay.x264.AC3.mkv",

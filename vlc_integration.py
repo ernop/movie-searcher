@@ -499,6 +499,7 @@ def get_currently_playing_movies():
             movie = db.query(Movie).filter(Movie.path == normalized_path).first()
             if movie:
                 playing.append({
+                    "id": movie.id,
                     "path": normalized_path,
                     "name": movie.name,
                     "pid": proc_info["pid"]
@@ -509,6 +510,7 @@ def get_currently_playing_movies():
                 movie = db.query(Movie).filter(sql_func.lower(Movie.path) == normalized_path.lower()).first()
                 if movie:
                     playing.append({
+                        "id": movie.id,
                         "path": movie.path,
                         "name": movie.name,
                         "pid": proc_info["pid"]
