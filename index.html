@@ -748,59 +748,6 @@
             background: rgba(0, 0, 0, 0.8);
         }
         
-        .star-rating {
-            display: inline-flex;
-            gap: 1px;
-            align-items: center;
-            cursor: pointer;
-            user-select: none;
-            margin-right: 8px;
-        }
-        
-        .star {
-            font-size: 18px;
-            color: #666;
-            transition: color 0s, transform 0s;
-            position: relative;
-            width: 18px;
-            height: 18px;
-            display: inline-block;
-        }
-        
-        .star:hover {
-            /* No transform - only highlight via parent rule */
-        }
-        
-        .star.active {
-            color: #ffd700;
-        }
-        
-        .star.half {
-            position: relative;
-        }
-        
-        .star.half::before {
-            content: '★';
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 50%;
-            overflow: hidden;
-            color: #ffd700;
-        }
-        
-        .star-rating:hover .star {
-            color: #ffd700;
-        }
-        
-        .star-rating .star.active ~ .star {
-            color: #666;
-        }
-        
-        .star-rating .star.half ~ .star {
-            color: #666;
-        }
-        
         .explore-section {
             margin-top: 30px;
             display: none;
@@ -1087,6 +1034,7 @@
             line-height: 1.4;
             display: -webkit-box;
             -webkit-line-clamp: 2;
+            line-clamp: 2;
             -webkit-box-orient: vertical;
             overflow: hidden;
         }
@@ -1195,6 +1143,34 @@
             align-items: center;
         }
         
+        .star-rating {
+            display: inline-flex;
+            gap: 2px;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .star-rating .star {
+            font-size: 16px;
+            color: #666;
+            transition: color 0s;
+            line-height: 1;
+        }
+        
+        .star-rating .star.filled {
+            color: #ffd700;
+        }
+        
+        .movie-card .star-rating {
+            font-size: 14px;
+        }
+        
+        .movie-details .star-rating {
+            font-size: 20px;
+            margin-top: 5px;
+        }
+        
         .launch-status-checkbox {
             width: 18px;
             height: 18px;
@@ -1273,23 +1249,6 @@
             font-weight: bold;
         }
         
-        .movie-card-btn.rating {
-            background: #ffd700;
-            color: #000;
-        }
-        
-        .movie-card-buttons .star-rating {
-            flex: 1;
-            margin-right: 0;
-            justify-content: center;
-            padding: 4px 0;
-        }
-        
-        .movie-card-buttons .star-rating .star {
-            font-size: 14px;
-            width: 14px;
-            height: 14px;
-        }
         
         .movie-details-container {
             max-width: 1800px;
@@ -1520,7 +1479,6 @@
             width: 100%;
         }
     </style>
-    <script src="star-rating.js"></script>
 </head>
 <body>
     <div id="app">
@@ -1540,7 +1498,10 @@
         
         <!-- Home Page -->
         <div class="page active" id="pageHome">
-            <h1>Movie Searcher</h1>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h1 style="margin: 0;">Movie Searcher</h1>
+                <button type="button" class="btn" onclick="showRandomMovies()" style="margin-left: 16px;">Show 10 Random Movies</button>
+            </div>
             
             <div class="search-container">
                 <input type="text" id="searchInput" placeholder="Search movies..." autocomplete="off">
@@ -1570,7 +1531,10 @@
         
         <!-- Explore Page -->
         <div class="page" id="pageExplore">
-            <h1>Explore Movies</h1>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h1 style="margin: 0;">Explore Movies</h1>
+                <button type="button" class="btn" onclick="goToRandomMovie()" style="margin-left: 16px;">Random Movie</button>
+            </div>
             
             <div class="explore-filters">
                 <div class="btn-group btn-group-toggle" role="group">
@@ -1830,6 +1794,83 @@
         window.addEventListener('load', startCurrentlyPlayingPolling);
         window.addEventListener('load', updateScreenshotProcessorStatus);
 
+        // Star Rating Component
+        function createStarRating(movieId, currentRating, containerClass = '') {
+            const rating = currentRating || 0;
+            let html = `<div class="star-rating ${containerClass}" data-movie-id="${movieId}" data-rating="${rating}" onclick="event.stopPropagation();">`;
+            for (let i = 1; i <= 5; i++) {
+                const filled = i <= rating ? 'filled' : '';
+                html += `<span class="star ${filled}" data-value="${i}">★</span>`;
+            }
+            html += '</div>';
+            return html;
+        }
+        
+        // Initialize star rating interactions
+        function initStarRating(element) {
+            const movieId = parseInt(element.getAttribute('data-movie-id'), 10);
+            const stars = element.querySelectorAll('.star');
+            let currentRating = parseInt(element.getAttribute('data-rating') || '0', 10);
+            
+            function updateDisplay(rating) {
+                stars.forEach((star, index) => {
+                    if (index + 1 <= rating) {
+                        star.classList.add('filled');
+                    } else {
+                        star.classList.remove('filled');
+                    }
+                });
+            }
+            
+            function setRating(rating) {
+                if (rating < 1 || rating > 5) return;
+                
+                fetch('/api/rating', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        movie_id: movieId,
+                        rating: rating
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'updated') {
+                        currentRating = rating;
+                        element.setAttribute('data-rating', rating);
+                        updateDisplay(rating);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error setting rating:', error);
+                });
+            }
+            
+            stars.forEach((star, index) => {
+                const value = index + 1;
+                
+                star.addEventListener('mouseenter', () => {
+                    updateDisplay(value);
+                });
+                
+                star.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    setRating(value);
+                });
+            });
+            
+            element.addEventListener('mouseleave', () => {
+                updateDisplay(currentRating);
+            });
+        }
+        
+        // Initialize all star ratings on the page
+        function initAllStarRatings() {
+            document.querySelectorAll('.star-rating').forEach(initStarRating);
+        }
+
         // Movie Card Component
         function createMovieCard(movie) {
             const imageUrl = movie.screenshot_id
@@ -1871,11 +1912,11 @@
                             ${fileSize ? `<span>${fileSize}</span>` : ''}
                             ${hasLaunched ? '<div class="launch-status-checkbox launched" onclick="event.stopPropagation();"></div>' : ''}
                         </div>
+                        ${createStarRating(movie.id || 0, movie.rating || null, 'movie-card-rating')}
                         <div class="movie-card-buttons">
                             <button class="movie-card-btn" onclick="event.stopPropagation(); toggleWatched('${escapeJsString(movie.path)}', ${watchStatus === null ? 'null' : watchStatus})">
                                 <span class="watched-checkbox ${checkboxClass}"></span>watched
                             </button>
-                            ${renderStarRating(movie.path, watchStatus === true, movie.rating || null)}
                             <button class="movie-card-launch" onclick="event.stopPropagation(); launchMovie('${escapeJsString(movie.path)}')">▶</button>
                         </div>
                     </div>
@@ -1896,6 +1937,78 @@
                 if (list) savedHistoryScroll = list.scrollTop;
             }
             navigateTo(`/movie/${id}/${safeSlug}`);
+        }
+        
+        async function goToRandomMovie() {
+            try {
+                const response = await fetch('/api/random-movie');
+                if (!response.ok) {
+                    let errorMessage = 'Unknown error';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.detail || errorMessage;
+                    } catch (e) {
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    showStatus('Failed to load random movie: ' + errorMessage, 'error');
+                    return;
+                }
+                
+                const data = await response.json();
+                const movieId = data.id;
+                
+                if (!movieId) {
+                    showStatus('Invalid response from server', 'error');
+                    return;
+                }
+                
+                navigateTo(`/movie/${movieId}`);
+            } catch (error) {
+                showStatus('Error fetching random movie: ' + error.message, 'error');
+            }
+        }
+        
+        async function showRandomMovies() {
+            try {
+                const results = document.getElementById('results');
+                if (!results) {
+                    showStatus('Results container not found', 'error');
+                    return;
+                }
+                
+                results.innerHTML = '<div class="loading">Loading random movies...</div>';
+                
+                const response = await fetch('/api/random-movies?count=10');
+                if (!response.ok) {
+                    let errorMessage = 'Unknown error';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.detail || errorMessage;
+                    } catch (e) {
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    results.innerHTML = '<div class="empty-state">Failed to load random movies: ' + errorMessage + '</div>';
+                    showStatus('Failed to load random movies: ' + errorMessage, 'error');
+                    return;
+                }
+                
+                const data = await response.json();
+                const movies = data.results || [];
+                
+                if (movies.length === 0) {
+                    results.innerHTML = '<div class="empty-state">No movies found</div>';
+                    return;
+                }
+                
+                displayResults(movies);
+                showStatus(`Showing ${movies.length} random movies`, 'success');
+            } catch (error) {
+                const results = document.getElementById('results');
+                if (results) {
+                    results.innerHTML = '<div class="empty-state">Error loading random movies: ' + error.message + '</div>';
+                }
+                showStatus('Error fetching random movies: ' + error.message, 'error');
+            }
         }
         
         let selectedIndex = -1;
@@ -2767,6 +2880,7 @@
                 return;
             }
             results.innerHTML = '<div class="movie-grid">' + items.map(item => createMovieCard(item)).join('') + '</div>';
+            initAllStarRatings();
         }
 
         // Append results helper removed in single-fetch mode
@@ -2946,93 +3060,6 @@
             }
         }
         
-        // Star rating functions are now in star-rating.js
-        
-        function updateStarRatingUI(path, rating) {
-            // Find all star-rating divs and update the ones that match this path
-            const starRatings = document.querySelectorAll('.star-rating');
-            
-            // Normalize path for comparison (handle both forward and backslashes)
-            const normalizePath = (p) => p.replace(/\\/g, '/').toLowerCase();
-            const normalizedPath = normalizePath(path);
-            
-            starRatings.forEach(starRatingDiv => {
-                // Check if this star-rating belongs to the movie with this path
-                // The onclick handler contains the path (may be escaped)
-                const onclickAttr = starRatingDiv.getAttribute('onclick');
-                if (onclickAttr) {
-                    // Extract path from onclick - it's in the toggleWatched or handleStarClick call
-                    // Try to find the path by looking for the function call with path parameter
-                    let matches = onclickAttr.match(/toggleWatched\(['"]([^'"]+)['"]/);
-                    if (!matches) {
-                        matches = onclickAttr.match(/handleStarClick\([^,]+,\s*['"]([^'"]+)['"]/);
-                    }
-                    
-                    if (matches && matches[1]) {
-                        // Unescape the path and normalize for comparison
-                        const divPath = matches[1].replace(/\\\\/g, '\\').replace(/\\'/g, "'").replace(/\\"/g, '"');
-                        if (normalizePath(divPath) === normalizedPath) {
-                            // This star-rating belongs to our movie - update it
-                            const isWatched = true; // Setting a rating means watched
-                            const newStarRatingHTML = renderStarRating(path, isWatched, rating);
-                            
-                            // Create a temporary div to parse the HTML
-                            const temp = document.createElement('div');
-                            temp.innerHTML = newStarRatingHTML;
-                            const newStarRatingDiv = temp.querySelector('.star-rating');
-                            
-                            if (newStarRatingDiv) {
-                                // Replace the innerHTML (the stars) but keep the outer div structure
-                                starRatingDiv.innerHTML = newStarRatingDiv.innerHTML;
-                                // Update the onclick handler to match the new rating state
-                                starRatingDiv.setAttribute('onclick', newStarRatingDiv.getAttribute('onclick'));
-                                starRatingDiv.setAttribute('title', newStarRatingDiv.getAttribute('title'));
-                            }
-                        }
-                    }
-                }
-            });
-        }
-        
-        async function setRating(path, rating) {
-            // Setting a rating automatically marks as watched
-            console.log('setRating called:', {path, rating, ratingType: typeof rating});
-            try {
-                const requestBody = {path: path, watch_status: true, rating: rating};
-                console.log('Sending rating request:', requestBody);
-                const response = await fetch('/api/watched', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(requestBody)
-                });
-                
-                if (response.ok) {
-                    const result = await response.json();
-                    console.log('Rating saved successfully:', result);
-                    
-                    // Update the star rating UI immediately
-                    updateStarRatingUI(path, rating);
-                    
-                    // Also refresh views if needed
-                    if (watchedViewActive) {
-                        loadWatchedMovies();
-                    } else if (exploreViewActive) {
-                        loadExploreMovies();
-                    } else if (searchInput.value.length > 0) {
-                        search(searchInput.value);
-                    }
-                    loadStats();
-                } else {
-                    const errorText = await response.text();
-                    console.error('Failed to save rating:', response.status, errorText);
-                    showStatus('Failed to update rating: ' + errorText, 'error');
-                }
-            } catch (error) {
-                console.error('Error in setRating:', error);
-                showStatus('Failed to update rating: ' + error.message, 'error');
-            }
-        }
-        
         async function loadWatchedMovies() {
             try {
                 const response = await fetch('/api/watched');
@@ -3045,6 +3072,7 @@
                 }
                 
                 watchedList.innerHTML = '<div class="movie-grid">' + watched.map(item => createMovieCard(item)).join('') + '</div>';
+                initAllStarRatings();
             } catch (error) {
                 console.error('Watched movies error:', error);
                 watchedList.innerHTML = '<div class="empty-state">Error loading watched movies</div>';
@@ -3084,12 +3112,9 @@
             // Wait for explore page to be active
             await new Promise(resolve => setTimeout(resolve, 100));
             
-            // Clear all zone filters first
-            clearAllZoneFilters();
-            
-            // Set the year filter
-            const { filterType } = getCurrentExploreFilters();
-            await fetchExploreMovies(1, filterType, null, null, year);
+            // Set the year filter, preserving other filters
+            const { filterType, letter, decade, language, noYear } = getCurrentExploreFilters();
+            await fetchExploreMovies(1, filterType, letter, decade, year);
             
             // Year chip will be rendered by renderYearFilter
             
@@ -3132,7 +3157,11 @@
             const langBtn = document.querySelector('#exploreLanguageFilterGroup .btn.active[data-language]');
             const language = langBtn ? (langBtn.getAttribute('data-language') || 'all') : 'all';
             
-            return { filterType, letter, decade, year, language };
+            // Read no year filter state from decade nav
+            const noYearBtn = document.querySelector('.decade-btn[data-action="no_year"]');
+            const noYear = noYearBtn && noYearBtn.classList.contains('active');
+            
+            return { filterType, letter, decade, year, language, noYear };
         }
         
         async function fetchExploreMovies(page, filterType, letter, decade, year) {
@@ -3156,8 +3185,12 @@
                 }
                 
                 // Always include language from current explore state (even 'all' for clarity)
-                const { language } = getCurrentExploreFilters();
+                const { language, noYear } = getCurrentExploreFilters();
                 params.append('language', language || 'all');
+                
+                if (noYear) {
+                    params.append('no_year', 'true');
+                }
                 
                 const url = `/api/explore?${params}`;
                 const response = await fetch(url);
@@ -3181,7 +3214,7 @@
                 
                 // Render navigation with current filter state
                 renderLetterNav(data.letter_counts || {}, letter);
-                renderDecadeNav(data.decade_counts || {}, decade);
+                renderDecadeNav(data.decade_counts || {}, decade, data.no_year_count || 0, noYear);
                 renderYearFilter(data.year_counts || {}, year);
                 
                 // Render movie grid
@@ -3204,11 +3237,8 @@
         }
         
         function jumpToLetter(letter) {
-            const { filterType } = getCurrentExploreFilters();
-            // Clear decade and year when selecting letter
-            clearDecadeFilter();
-            clearYearFilter();
-            fetchExploreMovies(1, filterType, letter, null, null);
+            const { filterType, decade, year, language, noYear } = getCurrentExploreFilters();
+            fetchExploreMovies(1, filterType, letter, decade, year);
         }
         
         function clearLetterFilter() {
@@ -3216,11 +3246,19 @@
         }
         
         function jumpToDecade(decade) {
-            const { filterType } = getCurrentExploreFilters();
-            // Clear letter and year when selecting decade
-            clearLetterFilter();
-            clearYearFilter();
-            fetchExploreMovies(1, filterType, null, decade, null);
+            const { filterType, letter, language } = getCurrentExploreFilters();
+            // Clear year and no_year UI (mutually exclusive with decade), but preserve letter and language
+            clearYearFilterUI();
+            clearDecadeFilter();
+            fetchExploreMovies(1, filterType, letter, decade, null);
+        }
+        
+        function jumpToNoYear() {
+            const { filterType, letter, language } = getCurrentExploreFilters();
+            // Clear year and decade UI (mutually exclusive with no_year), but preserve letter and language
+            clearYearFilterUI();
+            clearDecadeFilter();
+            fetchExploreMovies(1, filterType, letter, null, null);
         }
         
         function clearDecadeFilter() {
@@ -3228,11 +3266,10 @@
         }
         
         function jumpToYear(year) {
-            const { filterType } = getCurrentExploreFilters();
-            // Clear letter and decade when selecting year
-            clearLetterFilter();
+            const { filterType, letter, language } = getCurrentExploreFilters();
+            // Clear decade and no_year UI (mutually exclusive with year), but preserve letter and language
             clearDecadeFilter();
-            fetchExploreMovies(1, filterType, null, null, year);
+            fetchExploreMovies(1, filterType, letter, null, year);
         }
         
         function navigateToAdjacentYear(year, direction) {
@@ -3240,7 +3277,7 @@
             jumpToYear(year);
         }
         
-        function clearYearFilter() {
+        function clearYearFilterUI() {
             const yearChipContainer = document.getElementById('yearChipContainer');
             const yearInput = document.getElementById('yearInput');
             if (yearChipContainer) {
@@ -3249,7 +3286,12 @@
             if (yearInput) {
                 yearInput.value = '';
             }
-            const { filterType, letter, decade } = getCurrentExploreFilters();
+        }
+        
+        function clearYearFilter() {
+            clearYearFilterUI();
+            // Preserve all other filters when clearing year
+            const { filterType, letter, decade, language, noYear } = getCurrentExploreFilters();
             fetchExploreMovies(1, filterType, letter, decade, null);
         }
         
@@ -3346,11 +3388,10 @@
                     e.stopPropagation();
                     
                     if (btn.dataset.action === 'clear') {
+                        // Only clear letter filter, preserve decade, year, and noYear
                         clearLetterFilter();
-                        clearDecadeFilter();
-                        clearYearFilter();
-                        const { filterType } = getCurrentExploreFilters();
-                        fetchExploreMovies(1, filterType, null, null, null);
+                        const { filterType, decade, year, language, noYear } = getCurrentExploreFilters();
+                        fetchExploreMovies(1, filterType, null, decade, year);
                     } else if (btn.dataset.letter) {
                         jumpToLetter(btn.dataset.letter);
                     }
@@ -3358,7 +3399,7 @@
             });
         }
         
-        function renderDecadeNav(decadeCounts, activeDecade) {
+        function renderDecadeNav(decadeCounts, activeDecade, noYearCount, activeNoYear) {
             const decadeNav = document.getElementById('decadeNav');
             if (!decadeNav) return;
             
@@ -3367,9 +3408,14 @@
             
             let html = '';
             
-            // Add "All" button
-            const allCount = Object.values(decadeCounts).reduce((sum, count) => sum + count, 0);
-            html += `<button class="decade-btn ${!activeDecade ? 'active' : ''}" data-action="clear">All (${allCount})</button>`;
+            // Add "All" button (only active if no decade and no "no year" is selected)
+            const allCount = Object.values(decadeCounts).reduce((sum, count) => sum + count, 0) + noYearCount;
+            const { year } = getCurrentExploreFilters();
+            const allActive = !activeDecade && !activeNoYear && !year;
+            html += `<button class="decade-btn ${allActive ? 'active' : ''}" data-action="clear">All (${allCount})</button>`;
+            
+            // Add "No year" button
+            html += `<button class="decade-btn ${activeNoYear ? 'active' : ''}" ${noYearCount === 0 ? 'disabled' : ''} data-action="no_year">No year (${noYearCount})</button>`;
             
             // Add decade buttons
             for (const decade of decades) {
@@ -3392,11 +3438,12 @@
                     e.stopPropagation();
                     
                     if (btn.dataset.action === 'clear') {
+                        // Only clear decade/noYear filters, preserve letter and year
                         clearDecadeFilter();
-                        clearLetterFilter();
-                        clearYearFilter();
-                        const { filterType } = getCurrentExploreFilters();
-                        fetchExploreMovies(1, filterType, null, null, null);
+                        const { filterType, letter, year, language, noYear } = getCurrentExploreFilters();
+                        fetchExploreMovies(1, filterType, letter, null, year);
+                    } else if (btn.dataset.action === 'no_year') {
+                        jumpToNoYear();
                     } else if (btn.dataset.decade) {
                         jumpToDecade(parseInt(btn.dataset.decade));
                     }
@@ -3581,8 +3628,7 @@
             
             
             movieGrid.innerHTML = movies.map(movie => createMovieCard(movie)).join('');
-            
-            
+            initAllStarRatings();
         }
         
         async function loadMovieDetailsById(id) {
@@ -3640,8 +3686,8 @@
                                 ${movie.size ? `<span>${formatSize(movie.size)}</span>` : ''}
                                 ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}
                             </div>
+                            ${createStarRating(movie.id || 0, movie.rating || null, 'movie-details-rating')}
                             <div class="movie-details-actions">
-                                ${renderStarRating(movie.path, isWatched, movie.rating)}
                                 <button class="watched-btn ${isWatched ? 'watched' : ''}" onclick="toggleWatched('${escapeJsString(movie.path)}', ${watchStatus === null ? 'null' : watchStatus})">
                                     ${isWatched ? '✓ Watched' : watchStatus === false ? '✗ Unwatched' : 'Mark Watched'}
                                 </button>
@@ -3663,6 +3709,7 @@
                     </div>
                     ${mediaGallery}
                 `;
+                initAllStarRatings();
             } catch (error) {
                 container.innerHTML = `<div class="empty-state">Error loading movie: ${error.message}</div>`;
             }
@@ -4180,6 +4227,7 @@
                 }
                 
                 historyList.innerHTML = html;
+                initAllStarRatings();
 
                 // Restore prior scroll position, if any
                 if (savedHistoryScroll !== null) {

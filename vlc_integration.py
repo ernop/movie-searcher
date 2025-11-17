@@ -676,11 +676,14 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         if not movie:
             raise HTTPException(status_code=404, detail=f"Movie not found in database: {movie_path}")
         
-        launch_entry = LaunchHistory(
-            movie_id=movie.id,
-            subtitle=subtitle_path
-        )
-        db.add(launch_entry)
+        # Only add if the last entry is different (prevent duplicate consecutive entries)
+        last_launch = db.query(LaunchHistory).order_by(LaunchHistory.created.desc()).first()
+        if not last_launch or last_launch.movie_id != movie.id:
+            launch_entry = LaunchHistory(
+                movie_id=movie.id,
+                subtitle=subtitle_path
+            )
+            db.add(launch_entry)
         
         # Create watch history entry for launch (watch session started)
         watch_entry = WatchHistory(

@@ -88,6 +88,11 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_name": "2 or 3 Things I Know about her",
         "expected_year": 1967,
     },
+    {
+        "input": r"D:\movies\The Twilight Zone (1959) Season 1-5 S01-05 (1080p BluRay x265 HEVC 10bit AAC 2.0 ImE)\Season 2\The Twilight Zone (1959) - S02E24 - The Rip Van Winkle Caper (1080p BluRay x265 ImE).mkv",
+        "expected_name": "The Twilight Zone S02E24 - The Rip Van Winkle Caper",
+        "expected_year": 1959,
+    },
     # {
     #     "input":""
     # }

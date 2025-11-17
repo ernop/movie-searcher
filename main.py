@@ -241,7 +241,10 @@ class LaunchRequest(BaseModel):
 class WatchedRequest(BaseModel):
     path: str
     watch_status: Optional[bool] = None  # None = unset, True = watched, False = unwatched
-    rating: Optional[float] = None
+
+class RatingRequest(BaseModel):
+    movie_id: int
+    rating: int  # 1-5 only
 
 class ConfigRequest(BaseModel):
     movies_folder: Optional[str] = None
@@ -401,15 +404,6 @@ async def serve_movie_detail_spa(movie_id: int, slug: str = ""):
     with open(html_path, "r", encoding="utf-8") as f:
         return f.read()
 
-@app.get("/star-rating.js")
-async def get_star_rating_js():
-    """Serve the star rating JavaScript file"""
-    js_path = SCRIPT_DIR / "star-rating.js"
-    if js_path.exists():
-        with open(js_path, "r", encoding="utf-8") as f:
-            from fastapi.responses import Response
-            return Response(content=f.read(), media_type="application/javascript")
-    raise HTTPException(status_code=404, detail="star-rating.js not found")
 
 @app.get("/favicon.ico")
 async def get_favicon():
@@ -604,13 +598,8 @@ async def search_movies(
                     watch_status_dict[entry.movie_id] = {
                         "watch_status": entry.watch_status,
                         "watched_date": entry.updated.isoformat() if entry.updated else None,
-                        "rating": None
                     }
 
-            # Preload ratings
-            for rating in db.query(Rating).filter(Rating.movie_id.in_(result_ids)).all():
-                if rating.movie_id in watch_status_dict:
-                    watch_status_dict[rating.movie_id]["rating"] = rating.rating
 
         # Build results
         for score, movie in page_slice:
@@ -629,6 +618,10 @@ async def search_movies(
             }
             largest_image = get_largest_image(info)
             has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
+            
+            # Get rating
+            rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
+            rating = int(rating_entry.rating) if rating_entry else None
 
             results.append({
                 "id": movie.id,
@@ -640,22 +633,25 @@ async def search_movies(
                 "watch_status": watch_status,
                 "watched": is_watched,  # Keep for backward compatibility
                 "watched_date": watch_info.get("watched_date"),
-                "rating": watch_info.get("rating"),
                 "score": score,
                 "images": images,
                 "screenshots": screenshots,
                 "frame": screenshot_path,
                 "image": largest_image,
                 "year": movie.year,
-                "has_launched": has_launched
+                "has_launched": has_launched,
+                "rating": rating
             })
 
         # Save to history (count what we actually return)
-        search_entry = SearchHistory(
-            query=q,
-            results_count=len(results)
-        )
-        db.add(search_entry)
+        # Only add if the last entry is different (prevent duplicate consecutive entries)
+        last_search = db.query(SearchHistory).order_by(SearchHistory.created.desc()).first()
+        if not last_search or last_search.query != q:
+            search_entry = SearchHistory(
+                query=q,
+                results_count=len(results)
+            )
+            db.add(search_entry)
 
         # Keep last 100 searches
         search_count = db.query(SearchHistory).count()
@@ -699,9 +695,6 @@ async def get_movie_details(path: str = Query(...)):
             WatchHistory.movie_id == movie.id
         ).order_by(WatchHistory.updated.desc()).first()
         watch_status = watch_entry.watch_status if watch_entry else None
-        
-        # Get rating
-        rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
         
         # Get images and screenshots from tables
         images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
@@ -758,6 +751,10 @@ async def get_movie_details(path: str = Query(...)):
         
         has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
         
+        # Get rating
+        rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
+        rating = int(rating_entry.rating) if rating_entry else None
+        
         return {
             "id": movie.id,
             "path": movie.path,
@@ -768,13 +765,13 @@ async def get_movie_details(path: str = Query(...)):
             "watch_status": watch_status,
             "watched": watch_status is True,  # Keep for backward compatibility
             "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
-            "rating": rating_entry.rating if rating_entry else None,
             "images": images,
             "screenshots": screenshots,
             "frame": screenshot_path,
             "image": largest_image,
             "year": year,
-            "has_launched": has_launched
+            "has_launched": has_launched,
+            "rating": rating
         }
     finally:
         db.close()
@@ -793,9 +790,6 @@ async def get_movie_details_by_id(movie_id: int):
             WatchHistory.movie_id == movie.id
         ).order_by(WatchHistory.updated.desc()).first()
         watch_status = watch_entry.watch_status if watch_entry else None
-
-        # Get rating
-        rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
 
         # Get images and screenshots from tables
         images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
@@ -844,7 +838,11 @@ async def get_movie_details_by_id(movie_id: int):
 
         year = movie.year
         has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
-
+        
+        # Get rating
+        rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
+        rating = int(rating_entry.rating) if rating_entry else None
+        
         return {
             "id": movie.id,
             "path": movie.path,
@@ -855,13 +853,13 @@ async def get_movie_details_by_id(movie_id: int):
             "watch_status": watch_status,
             "watched": watch_status is True,  # Keep for backward compatibility
             "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
-            "rating": rating_entry.rating if rating_entry else None,
             "images": images,
             "screenshots": screenshots,
             "frame": screenshot_path,
             "image": largest_image,
             "year": year,
-            "has_launched": has_launched
+            "has_launched": has_launched,
+            "rating": rating
         }
     finally:
         db.close()
@@ -1177,7 +1175,6 @@ async def get_launch_history():
             LaunchHistory,
             Movie,
             watch_alias,
-            Rating,
             Screenshot
         ).join(
             Movie, LaunchHistory.movie_id == Movie.id
@@ -1188,15 +1185,13 @@ async def get_launch_history():
             (watch_alias.movie_id == watch_subq.c.movie_id) & 
             (watch_alias.updated == watch_subq.c.max_updated)
         ).outerjoin(
-            Rating, Movie.id == Rating.movie_id
-        ).outerjoin(
             Screenshot, Movie.id == Screenshot.movie_id
         ).order_by(
             LaunchHistory.created.desc()
         ).limit(100).all()
         
         launches_with_info = []
-        for launch, movie, watch_entry, rating_entry, screenshot in results:
+        for launch, movie, watch_entry, screenshot in results:
             if not movie:
                 continue
             
@@ -1227,7 +1222,6 @@ async def get_launch_history():
                 "size": movie.size,
                 "watched": watch_entry is not None,
                 "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
-                "rating": rating_entry.rating if rating_entry else None,
                 "images": images,
                 "screenshots": screenshots,
                 "frame": screenshot_path,
@@ -1247,11 +1241,11 @@ async def get_launch_history():
 
 @app.post("/api/watched")
 async def mark_watched(request: WatchedRequest):
-    """Mark movie as watched or unwatched, optionally with rating"""
+    """Mark movie as watched or unwatched"""
     db = SessionLocal()
     try:
         # Log the incoming request for debugging
-        logger.debug(f"mark_watched called with path={request.path}, watch_status={request.watch_status}, rating={request.rating} (type: {type(request.rating)})")
+        logger.debug(f"mark_watched called with path={request.path}, watch_status={request.watch_status}")
         
         # Resolve movie by path, with path normalization to be robust to slash variants on Windows
         movie = None
@@ -1292,19 +1286,6 @@ async def mark_watched(request: WatchedRequest):
                 watch_status=request.watch_status
             )
             db.add(watch_entry)
-            
-            # Update rating if provided (only when setting to watched)
-            if request.rating is not None and request.watch_status is True:
-                # Ensure rating is a float
-                rating_value = float(request.rating) if request.rating is not None else None
-                logger.debug(f"Saving rating {rating_value} for movie {movie.id}")
-                # Replace existing rating (one rating per movie). Do not rely on merge because
-                # the unique key is movie_id, not the primary key.
-                existing_rating = db.query(Rating).filter(Rating.movie_id == movie.id).one_or_none()
-                if existing_rating:
-                    existing_rating.rating = rating_value
-                else:
-                    db.add(Rating(movie_id=movie.id, rating=rating_value))
         
         db.commit()
         
@@ -1337,9 +1318,6 @@ async def get_watched():
                 movie = db.query(Movie).filter(Movie.id == watch_entry.movie_id).first()
                 if movie:
                     try:
-                        # Get rating
-                        rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
-                        
                         # Get images and screenshots from tables
                         images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
                         screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
@@ -1367,7 +1345,6 @@ async def get_watched():
                             "created": movie.created,
                             "size": movie.size,
                             "watched_date": watch_entry.updated.isoformat() if watch_entry.updated else None,
-                            "rating": rating_entry.rating if rating_entry else None,
                             "images": images,
                             "screenshots": screenshots,
                             "frame": screenshot_path,
@@ -1435,6 +1412,72 @@ async def get_subtitles(video_path: str):
             logger.warning(f"Error scanning {location} directory for subtitles: {e}")
     
     return {"subtitles": subtitles}
+
+@app.get("/api/rating/{movie_id}")
+async def get_rating(movie_id: int):
+    """Get rating for a specific movie by ID"""
+    db = SessionLocal()
+    try:
+        rating_entry = db.query(Rating).filter(Rating.movie_id == movie_id).first()
+        if rating_entry:
+            return {"rating": int(rating_entry.rating), "movie_id": movie_id}
+        return {"rating": None, "movie_id": movie_id}
+    finally:
+        db.close()
+
+@app.post("/api/rating")
+async def set_rating(request: RatingRequest):
+    """Set rating for a movie (1-5 only)"""
+    db = SessionLocal()
+    try:
+        # Validate rating is 1-5
+        if request.rating < 1 or request.rating > 5:
+            raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+        
+        # Verify movie exists
+        movie = db.query(Movie).filter(Movie.id == request.movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail=f"Movie not found: {request.movie_id}")
+        
+        # Get or create rating entry
+        rating_entry = db.query(Rating).filter(Rating.movie_id == request.movie_id).first()
+        if rating_entry:
+            rating_entry.rating = float(request.rating)
+        else:
+            rating_entry = Rating(
+                movie_id=request.movie_id,
+                rating=float(request.rating)
+            )
+            db.add(rating_entry)
+        
+        db.commit()
+        return {"status": "updated", "rating": request.rating, "movie_id": request.movie_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in set_rating endpoint: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.delete("/api/rating/{movie_id}")
+async def delete_rating(movie_id: int):
+    """Delete rating for a movie"""
+    db = SessionLocal()
+    try:
+        rating_entry = db.query(Rating).filter(Rating.movie_id == movie_id).first()
+        if rating_entry:
+            db.delete(rating_entry)
+            db.commit()
+            return {"status": "deleted", "movie_id": movie_id}
+        return {"status": "not_found", "movie_id": movie_id}
+    except Exception as e:
+        logger.error(f"Error in delete_rating endpoint: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
 
 @app.get("/api/watch-history")
 async def get_watch_history(movie_id: Optional[str] = Query(None), limit: int = Query(100, ge=1, le=1000)):
@@ -1867,7 +1910,8 @@ async def explore_movies(
     letter: Optional[str] = Query(None, pattern="^[A-Z#]$"),
     year: Optional[int] = Query(None, ge=1900, le=2035),
     decade: Optional[int] = Query(None, ge=1900, le=2030),
-    language: Optional[str] = Query("all")
+    language: Optional[str] = Query("all"),
+    no_year: Optional[bool] = Query(None)
 ):
     """Get all movies for exploration view with pagination and filters"""
     # Normalize letter to uppercase if provided
@@ -1940,16 +1984,19 @@ async def explore_movies(
                 )
             )
 
-        # Year filter (exact year match)
+        # Year filters are mutually exclusive: year > decade > no_year
+        # If year is specified, use it (highest priority)
         if year is not None:
             movie_q = movie_q.filter(Movie.year == year)
-        
-        # Decade filter (e.g., 1980 filters for years 1980-1989)
-        if decade is not None:
+        # If decade is specified (and year is not), use decade
+        elif decade is not None:
             # Ensure decade is a multiple of 10
             decade_start = (decade // 10) * 10
             decade_end = decade_start + 9
             movie_q = movie_q.filter(Movie.year >= decade_start, Movie.year <= decade_end)
+        # If no_year is specified (and neither year nor decade), use no_year
+        elif no_year:
+            movie_q = movie_q.filter(Movie.year == None)
 
         # Use normal pagination
         total = movie_q.count()
@@ -1978,12 +2025,6 @@ async def explore_movies(
                     "watched_date": w.updated.isoformat() if w.updated else None
                 }
 
-            # Ratings for page ids
-            ratings = db.query(Rating).filter(Rating.movie_id.in_(movie_ids)).all()
-            rating_map = {r.movie_id: r.rating for r in ratings}
-            for mid in movie_ids:
-                if mid in watch_status_info and mid in rating_map:
-                    watch_status_info[mid]["rating"] = rating_map[mid]
 
         # One screenshot id per movie (prefer smallest id as representative)
         screenshot_map = {}
@@ -2001,6 +2042,14 @@ async def explore_movies(
             ).distinct().all()
             launched_set = {r.movie_id for r in launched_rows}
 
+        # Get ratings for page ids
+        rating_map = {}
+        if movie_ids:
+            rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
+                Rating.movie_id.in_(movie_ids)
+            ).all()
+            rating_map = {movie_id: int(rating) for movie_id, rating in rating_rows}
+
         # Build response items without heavy filesystem ops
         result_movies = []
         for m in rows:
@@ -2016,10 +2065,10 @@ async def explore_movies(
                 "watch_status": watch_status,
                 "watched": bool(info.get("watched", False)),  # Keep for backward compatibility
                 "watched_date": info.get("watched_date"),
-                "rating": info.get("rating"),
                 "year": m.year,
                 "has_launched": (m.id in launched_set),
-                "screenshot_id": screenshot_map.get(m.id)  # frontend will call /api/screenshot/{id}
+                "screenshot_id": screenshot_map.get(m.id),  # frontend will call /api/screenshot/{id}
+                "rating": rating_map.get(m.id)
             })
 
         # Letter counts across all movies respecting watched filter (but not letter/year/decade filters)
@@ -2038,6 +2087,7 @@ async def explore_movies(
         letter_counts = {}
         year_counts = {}
         decade_counts = {}
+        no_year_count = 0
         for _, nm, yr in counts_q.all():
             lt = get_first_letter(nm)
             letter_counts[lt] = letter_counts.get(lt, 0) + 1
@@ -2046,6 +2096,8 @@ async def explore_movies(
                 # Calculate decade (e.g., 1987 -> 1980s)
                 decade_start = (yr // 10) * 10
                 decade_counts[decade_start] = decade_counts.get(decade_start, 0) + 1
+            else:
+                no_year_count += 1
 
         return {
             "movies": result_movies,
@@ -2057,10 +2109,145 @@ async def explore_movies(
             },
             "letter_counts": letter_counts,
             "year_counts": year_counts,
-            "decade_counts": decade_counts
+            "decade_counts": decade_counts,
+            "no_year_count": no_year_count
         }
     except Exception as e:
         logger.error(f"Error in explore endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.get("/api/random-movie")
+async def get_random_movie():
+    """Get a random movie ID"""
+    db = SessionLocal()
+    try:
+        from sqlalchemy import or_
+        # Query movies with length >= 60 or null length
+        movie_q = db.query(Movie.id).filter(or_(Movie.length == None, Movie.length >= 60))
+        total = movie_q.count()
+        
+        if total == 0:
+            raise HTTPException(status_code=404, detail="No movies found")
+        
+        import random
+        offset = random.randint(0, total - 1)
+        random_movie = movie_q.offset(offset).limit(1).first()
+        
+        if not random_movie:
+            raise HTTPException(status_code=404, detail="No movie found")
+        
+        return {"id": random_movie.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in random-movie endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.get("/api/random-movies")
+async def get_random_movies(count: int = Query(10, ge=1, le=50)):
+    """Get random movie cards with full metadata"""
+    db = SessionLocal()
+    try:
+        from sqlalchemy import or_
+        # Query movies with length >= 60 or null length
+        movie_q = db.query(Movie).filter(or_(Movie.length == None, Movie.length >= 60))
+        total = movie_q.count()
+        
+        if total == 0:
+            return {"results": []}
+        
+        # Get random movies by selecting random offsets
+        import random
+        actual_count = min(count, total)
+        random_offsets = random.sample(range(total), actual_count)
+        
+        # Fetch movies at random offsets
+        random_movies = []
+        for offset in random_offsets:
+            movie = movie_q.offset(offset).limit(1).first()
+            if movie:
+                random_movies.append(movie)
+        
+        if not random_movies:
+            return {"results": []}
+        
+        movie_ids = [m.id for m in random_movies]
+        
+        # Batched fetch for watch status info (latest watch entry regardless of status)
+        watch_status_info = {}
+        if movie_ids:
+            subq = db.query(
+                WatchHistory.movie_id, func.max(WatchHistory.updated).label("max_updated")
+            ).filter(
+                WatchHistory.movie_id.in_(movie_ids)
+            ).group_by(WatchHistory.movie_id).subquery()
+            
+            wh_alias = aliased(WatchHistory)
+            latest_watches = db.query(wh_alias).join(
+                subq,
+                (wh_alias.movie_id == subq.c.movie_id) & (wh_alias.updated == subq.c.max_updated)
+            ).all()
+            for w in latest_watches:
+                watch_status_info[w.movie_id] = {
+                    "watch_status": w.watch_status,
+                    "watched": w.watch_status is True,
+                    "watched_date": w.updated.isoformat() if w.updated else None
+                }
+        
+        # One screenshot id per movie (prefer smallest id as representative)
+        screenshot_map = {}
+        if movie_ids:
+            shots = db.query(Screenshot.movie_id, func.min(Screenshot.id)).filter(
+                Screenshot.movie_id.in_(movie_ids)
+            ).group_by(Screenshot.movie_id).all()
+            screenshot_map = {movie_id: shot_id for movie_id, shot_id in shots}
+        
+        # Has launched flags
+        launched_set = set()
+        if movie_ids:
+            launched_rows = db.query(LaunchHistory.movie_id).filter(
+                LaunchHistory.movie_id.in_(movie_ids)
+            ).distinct().all()
+            launched_set = {r.movie_id for r in launched_rows}
+        
+        # Get ratings
+        rating_map = {}
+        if movie_ids:
+            rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
+                Rating.movie_id.in_(movie_ids)
+            ).all()
+            rating_map = {movie_id: int(rating) for movie_id, rating in rating_rows}
+        
+        # Build response items
+        result_movies = []
+        for m in random_movies:
+            info = watch_status_info.get(m.id, {})
+            watch_status = info.get("watch_status")
+            result_movies.append({
+                "id": m.id,
+                "path": m.path,
+                "name": m.name,
+                "length": m.length,
+                "created": m.created,
+                "size": m.size,
+                "watch_status": watch_status,
+                "watched": bool(info.get("watched", False)),
+                "watched_date": info.get("watched_date"),
+                "year": m.year,
+                "has_launched": (m.id in launched_set),
+                "screenshot_id": screenshot_map.get(m.id),
+                "rating": rating_map.get(m.id)
+            })
+        
+        return {"results": result_movies}
+    except Exception as e:
+        logger.error(f"Error in random-movies endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
