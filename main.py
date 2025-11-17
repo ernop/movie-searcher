@@ -1920,9 +1920,6 @@ async def explore_movies(
     
     # Log the actual request URL and query params to debug letter filtering
     query_params = dict(request.query_params)
-    logger.info(f"Explore endpoint called: URL={request.url}")
-    logger.info(f"Query params: {query_params}")
-    logger.info(f"Parsed letter parameter: {letter!r} (type: {type(letter)})")
     
     db = SessionLocal()
     try:
