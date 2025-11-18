@@ -1,11 +1,18 @@
 """
 SQLAlchemy database models (table definitions) for Movie Searcher.
 """
+from enum import Enum
 from sqlalchemy import Column, String, Float, Integer, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 
 Base = declarative_base()
+
+class MovieStatusEnum(str, Enum):
+    """Enum for movie status values"""
+    WATCHED = "watched"
+    UNWATCHED = "unwatched"
+    WANT_TO_WATCH = "want_to_watch"
 
 class Movie(Base):
     __tablename__ = "movies"
@@ -30,12 +37,12 @@ class Rating(Base):
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
-class WatchHistory(Base):
-    __tablename__ = "watch_history"
+class MovieStatus(Base):
+    __tablename__ = "movie_status"
     
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
-    watch_status = Column(Boolean, nullable=True)  # NULL = unknown, True = watched, False = not watched
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
+    movieStatus = Column(String, nullable=True)  # NULL = unknown, "watched", "unwatched", "want_to_watch"
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -115,5 +122,5 @@ class SchemaVersion(Base):
     applied_at = Column(DateTime, default=func.now(), nullable=False)
 
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 8
 

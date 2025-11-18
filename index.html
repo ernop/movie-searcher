@@ -357,6 +357,9 @@
             cursor: pointer;
             font-size: 14px;
             transition: background 0s;
+            min-width: 140px;
+            text-align: center;
+            line-height: 1.2;
         }
         
         .watched-btn:hover {
@@ -369,6 +372,22 @@
         
         .watched-btn.watched:hover {
             background: #5cbf60;
+        }
+        
+        .watched-btn.unwatched {
+            background: #f44336;
+        }
+        
+        .watched-btn.unwatched:hover {
+            background: #ff5252;
+        }
+        
+        .watched-btn.want-to-watch {
+            background: #ff9800;
+        }
+        
+        .watched-btn.want-to-watch:hover {
+            background: #ffa726;
         }
         
         .subtitle-select {
@@ -1232,14 +1251,22 @@
         
         .movie-card-btn .watched-checkbox.unset {
             background: #2196f3;
+            border: 1px solid #2196f3;
         }
         
         .movie-card-btn .watched-checkbox.watched {
             background: #4caf50;
+            border: 1px solid #4caf50;
         }
         
         .movie-card-btn .watched-checkbox.unwatched {
             background: #f44336;
+            border: 1px solid #f44336;
+        }
+        
+        .movie-card-btn .watched-checkbox.want-to-watch {
+            background: #ff9800;
+            border: 1px solid #ff9800;
         }
         
         .movie-card-btn .watched-checkbox::after {
@@ -1247,6 +1274,18 @@
             color: #fff;
             font-size: 9px;
             font-weight: bold;
+        }
+        
+        .movie-card-btn .watched-checkbox.want-to-watch::after {
+            content: '★';
+        }
+        
+        .movie-card-btn .watched-checkbox.unwatched::after {
+            content: '✗';
+        }
+        
+        .movie-card-btn .watched-checkbox.unset::after {
+            content: '';
         }
         
         
@@ -1623,6 +1662,15 @@
                         When enabled, all existing VLC windows will be closed before launching a new movie. When disabled, new movies will open in addition to any existing VLC windows.
                     </div>
                 </div>
+                <div class="setup-option" style="margin-top: 15px;">
+                    <label>
+                        <input type="checkbox" id="setupLaunchWithSubtitlesOn" checked>
+                        Launch with subtitles on
+                    </label>
+                    <div class="setup-option-description">
+                        When enabled, automatically enable subtitles if a subtitle file is found in the same folder as the movie. When disabled, movies will launch without subtitles unless manually selected.
+                    </div>
+                </div>
             </div>
             
             <div class="setup-section">
@@ -1873,12 +1921,16 @@
 
         // Movie Card Component
         function createMovieCard(movie) {
-            const imageUrl = movie.screenshot_id
-                ? `/api/screenshot/${movie.screenshot_id}`
-                : (movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '');
-            // Use watch_status if available, fallback to watched boolean for backward compatibility
-            const watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? true : null);
-            const watchedClass = watchStatus === true ? 'watched' : '';
+            const imageUrl = movie.screenshot_path
+                ? movie.screenshot_path
+                : (movie.image_path ? movie.image_path : '');
+            // Use watch_status if available (can be string enum or boolean for backward compat), fallback to watched boolean
+            let watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? 'watched' : null);
+            // Normalize: convert boolean to string enum for backward compatibility
+            if (watchStatus === true) watchStatus = 'watched';
+            if (watchStatus === false) watchStatus = 'unwatched';
+            
+            const watchedClass = watchStatus === 'watched' ? 'watched' : '';
             const fileSize = movie.size ? formatSize(movie.size) : '';
             const year = movie.year ? movie.year : '';
             const length = movie.length ? formatMinutes(movie.length) : '';
@@ -1886,10 +1938,12 @@
             
             // Determine checkbox class based on watch_status
             let checkboxClass = 'unset';
-            if (watchStatus === true) {
+            if (watchStatus === 'watched') {
                 checkboxClass = 'watched';
-            } else if (watchStatus === false) {
+            } else if (watchStatus === 'unwatched') {
                 checkboxClass = 'unwatched';
+            } else if (watchStatus === 'want_to_watch') {
+                checkboxClass = 'want-to-watch';  // Add CSS class for want_to_watch if needed
             }
             
             // Prefer hash-based ID route if we have an id
@@ -1914,10 +1968,10 @@
                         </div>
                         ${createStarRating(movie.id || 0, movie.rating || null, 'movie-card-rating')}
                         <div class="movie-card-buttons">
-                            <button class="movie-card-btn" onclick="event.stopPropagation(); toggleWatched('${escapeJsString(movie.path)}', ${watchStatus === null ? 'null' : watchStatus})">
-                                <span class="watched-checkbox ${checkboxClass}"></span>watched
+                            <button class="movie-card-btn" onclick="event.stopPropagation(); toggleWatched(${movie.id}, ${watchStatus === null ? 'null' : `'${watchStatus}'`})">
+                                <span class="watched-checkbox ${checkboxClass}"></span>${watchStatus === 'watched' ? 'watched' : watchStatus === 'unwatched' ? 'not watched' : watchStatus === 'want_to_watch' ? 'want to see' : '-'}
                             </button>
-                            <button class="movie-card-launch" onclick="event.stopPropagation(); launchMovie('${escapeJsString(movie.path)}')">▶</button>
+                            <button class="movie-card-launch" onclick="event.stopPropagation(); launchMovie(${movie.id})">▶</button>
                         </div>
                     </div>
                 </div>
@@ -2436,6 +2490,12 @@
                 const filterType = getWatchFilter();
                 const url = `/api/search?q=${encodeURIComponent(query)}&filter_type=${filterType}&language=all`;
                 const response = await fetch(url, { signal: searchAbortController.signal });
+                
+                if (!response.ok) {
+                    console.error(`Search API error: HTTP ${response.status}`);
+                    return;
+                }
+                
                 const data = await response.json();
                 
                 // Only display results if this response is from the latest request or newer than what's displayed
@@ -2511,18 +2571,25 @@
 
         // Pagination helpers removed for single-fetch mode
         
-        async function loadSubtitles(videoPath) {
-            if (currentSubtitles[videoPath]) {
-                return currentSubtitles[videoPath];
+        async function loadSubtitles(movieId) {
+            if (currentSubtitles[movieId]) {
+                return currentSubtitles[movieId];
             }
             
             try {
-                const response = await fetch(`/api/subtitles?video_path=${encodeURIComponent(videoPath)}`);
+                const response = await fetch(`/api/subtitles?movie_id=${movieId}`);
+                if (!response.ok) {
+                    console.error(`Subtitles API error: HTTP ${response.status}`);
+                    currentSubtitles[movieId] = [];
+                    return [];
+                }
+                
                 const data = await response.json();
-                currentSubtitles[videoPath] = data.subtitles || [];
-                return currentSubtitles[videoPath];
+                currentSubtitles[movieId] = data.subtitles || [];
+                return currentSubtitles[movieId];
             } catch (error) {
                 console.error('Subtitle error:', error);
+                currentSubtitles[movieId] = [];
                 return [];
             }
         }
@@ -2530,15 +2597,18 @@
         let currentMediaArray = [];
         let currentMediaIndex = -1;
         let currentVideoPath = null;
+        let currentMovieId = null;
         
         function renderMediaGallery(images, screenshots, itemPath, movieId) {
             const allMedia = [];
             
-            // Add folder images first
+            // Add folder images first - images are now objects with {id, path}
             if (images && images.length > 0) {
                 images.forEach((img, idx) => {
+                    const imgObj = typeof img === 'object' ? img : {id: null, path: img}; // Handle both old (path string) and new (object) formats
                     allMedia.push({
-                        path: img,
+                        id: imgObj.id,
+                        path: imgObj.path,
                         type: 'image',
                         label: idx === 0 ? 'Poster' : `Image ${idx + 1}`,
                         timestamp: null
@@ -2546,16 +2616,16 @@
                 });
             }
             
-            // Add screenshots - handle both old format (strings) and new format (objects)
+            // Add screenshots - screenshots are now objects with {id, path, timestamp_seconds}
             if (screenshots && screenshots.length > 0) {
                 screenshots.forEach((screenshot, idx) => {
-                    const path = typeof screenshot === 'string' ? screenshot : screenshot.path;
-                    const timestamp = typeof screenshot === 'object' ? screenshot.timestamp_seconds : null;
+                    const screenshotObj = typeof screenshot === 'object' ? screenshot : {id: null, path: screenshot, timestamp_seconds: null}; // Handle both old (path string) and new (object) formats
                     allMedia.push({
-                        path: path,
+                        id: screenshotObj.id,
+                        path: screenshotObj.path,
                         type: 'screenshot',
                         label: `Screenshot ${idx + 1}`,
-                        timestamp: timestamp
+                        timestamp: screenshotObj.timestamp_seconds
                     });
                 });
             }
@@ -2568,6 +2638,7 @@
             // Store media array globally for navigation
             currentMediaArray = allMedia;
             currentVideoPath = itemPath;
+            currentMovieId = movieId;
             
             let galleryHtml = '<div class="media-gallery">';
             
@@ -2581,15 +2652,17 @@
                 if (idx === 0) {
                     // First item gets the "Get more" button
                     let launchBtnHtml = '';
-                    if (isScreenshot && itemPath) {
+                    if (isScreenshot && movieId) {
                         if (timestamp !== null && timestamp !== undefined) {
-                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo('${escapeJsString(itemPath)}', ${timestamp});">Launch</button>`;
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo(${movieId}, ${timestamp});">Launch</button>`;
                         } else {
-                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie('${escapeJsString(itemPath)}');">Launch</button>`;
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie(${movieId});">Launch</button>`;
                         }
                     }
+                    const imageUrl = isScreenshot ? `/api/screenshot/${media.id}` : `/api/image/${media.id}`;
+                    const imageSrc = media.path || imageUrl; // Use path directly if available, fallback to ID-based URL
                     galleryHtml += `
-                        <div class="media-item" onclick="showMediaOverlay('${escapeJsString(media.path)}', ${timestamp !== null ? timestamp : 'null'}, '${escapeJsString(itemPath)}', ${idx})" style="position: relative;">
+                        <div class="media-item" onclick="showMediaOverlay(${media.id || 'null'}, ${isScreenshot ? 'true' : 'false'}, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${idx})" style="position: relative;">
                             <button 
                                 class="get-more-btn" 
                                 title="Get more screenshots" 
@@ -2599,32 +2672,34 @@
                             </button>
                             ${launchBtnHtml}
                             ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
-                            <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
+                            <img src="${imageSrc}" 
                                  alt="" 
                                  loading="lazy"
-                                 onerror="console.error('Failed to load image:', '${escapeJsString(media.path)}'); this.style.display='none'"
-                                 onload="console.log('Loaded image:', '${escapeJsString(media.path)}')">
+                                 onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'"
+                                 onload="console.log('Loaded image:', '${escapeJsString(imageSrc)}')">
                         </div>
                     `;
                 } else {
                     // All other items
                     let launchBtnHtml = '';
-                    if (isScreenshot && itemPath) {
+                    if (isScreenshot && movieId) {
                         if (timestamp !== null && timestamp !== undefined) {
-                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo('${escapeJsString(itemPath)}', ${timestamp});">Launch</button>`;
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo(${movieId}, ${timestamp});">Launch</button>`;
                         } else {
-                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie('${escapeJsString(itemPath)}');">Launch</button>`;
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie(${movieId});">Launch</button>`;
                         }
                     }
+                    const imageUrl = isScreenshot ? `/api/screenshot/${media.id}` : `/api/image/${media.id}`;
+                    const imageSrc = media.path || imageUrl; // Use path directly if available, fallback to ID-based URL
                     galleryHtml += `
-                        <div class="media-item" onclick="showMediaOverlay('${escapeJsString(media.path)}', ${timestamp !== null ? timestamp : 'null'}, '${escapeJsString(itemPath)}', ${idx})" style="position: relative;">
+                        <div class="media-item" onclick="showMediaOverlay(${media.id || 'null'}, ${isScreenshot ? 'true' : 'false'}, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${idx})" style="position: relative;">
                             ${launchBtnHtml}
                             ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
-                            <img src="/api/image?image_path=${encodeURIComponent(media.path)}" 
+                            <img src="${imageSrc}" 
                                  alt="" 
                                  loading="lazy"
-                                 onerror="console.error('Failed to load image:', '${escapeJsString(media.path)}'); this.style.display='none'"
-                                 onload="console.log('Loaded image:', '${escapeJsString(media.path)}')">
+                                 onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'"
+                                 onload="console.log('Loaded image:', '${escapeJsString(imageSrc)}')">
                         </div>
                     `;
                 }
@@ -2645,7 +2720,7 @@
             return `${minutes}:${String(secs).padStart(2, '0')}`;
         }
         
-        function showMediaOverlay(imagePath, timestampSeconds, videoPath, index) {
+        function showMediaOverlay(mediaId, isScreenshot, timestampSeconds, movieId, index) {
             const overlay = document.getElementById('mediaOverlay');
             const img = document.getElementById('mediaOverlayImage');
             let controls = document.getElementById('mediaOverlayControls');
@@ -2659,14 +2734,16 @@
             // Store current index for navigation
             currentMediaIndex = index !== undefined ? index : -1;
             
-            img.src = `/api/image?image_path=${encodeURIComponent(imagePath)}`;
+            // Use ID-based endpoint (paths are for reference only, not direct URLs)
+            const imageUrl = mediaId ? (isScreenshot ? `/api/screenshot/${mediaId}` : `/api/image/${mediaId}`) : '';
+            img.src = imageUrl;
             
             // Show controls for screenshots with timestamps
-            if (timestampSeconds !== null && timestampSeconds !== undefined && videoPath) {
+            if (timestampSeconds !== null && timestampSeconds !== undefined && movieId) {
                 controls.innerHTML = `
                     <div style="display: flex; gap: 10px; align-items: center;">
                         <span style="color: #fff; font-size: 14px; background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 4px;">${formatTimestamp(timestampSeconds)}</span>
-                        <button onclick="event.stopPropagation(); jumpToVideo('${escapeJsString(videoPath)}', ${timestampSeconds});" 
+                        <button onclick="event.stopPropagation(); jumpToVideo(${movieId}, ${timestampSeconds});" 
                                 style="background: #4a9eff; color: #fff; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px;">
                             Jump to Video
                         </button>
@@ -2720,7 +2797,7 @@
             }
             
             const media = currentMediaArray[newIndex];
-            showMediaOverlay(media.path, media.timestamp, currentVideoPath, newIndex);
+            showMediaOverlay(media.id, media.type === 'screenshot', media.timestamp, currentMovieId, newIndex);
         }
         
         function closeMediaOverlay() {
@@ -2729,9 +2806,9 @@
             currentMediaIndex = -1;
         }
         
-        async function jumpToVideo(videoPath, timestampSeconds) {
+        async function jumpToVideo(movieId, timestampSeconds) {
             try {
-                const subtitleSelect = document.getElementById(`subtitle-${escapeHtml(videoPath)}`);
+                const subtitleSelect = document.getElementById(`subtitle-${movieId}`);
                 const subtitlePath = subtitleSelect ? subtitleSelect.value : null;
                 const closeExistingVlc = document.getElementById('setupCloseExistingVlc').checked;
                 
@@ -2739,7 +2816,7 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        path: videoPath,
+                        movie_id: movieId,
                         subtitle_path: subtitlePath || null,
                         close_existing_vlc: closeExistingVlc,
                         start_time: timestampSeconds
@@ -2767,28 +2844,21 @@
             const movieIdInput = document.getElementById('screenshotConfigMovieId');
             movieIdInput.value = movieId;
             
-            // Load movie details to get path for subtitle lookup
+            // Load available subtitles
             try {
-                const movieResp = await fetch(`/api/movie/${movieId}`);
-                if (movieResp.ok) {
-                    const movieData = await movieResp.json();
-                    const videoPath = movieData.path;
-                    
-                    // Load available subtitles
-                    const subtitles = await loadSubtitles(videoPath);
-                    const subtitleSelect = document.getElementById('screenshotConfigSubtitle');
-                    
-                    // Clear existing options except "No subtitle"
-                    subtitleSelect.innerHTML = '<option value="">No subtitle</option>';
-                    
-                    // Add subtitle options
-                    subtitles.forEach(sub => {
-                        const option = document.createElement('option');
-                        option.value = sub.path;
-                        option.textContent = sub.name;
-                        subtitleSelect.appendChild(option);
-                    });
-                }
+                const subtitles = await loadSubtitles(movieId);
+                const subtitleSelect = document.getElementById('screenshotConfigSubtitle');
+                
+                // Clear existing options except "No subtitle"
+                subtitleSelect.innerHTML = '<option value="">No subtitle</option>';
+                
+                // Add subtitle options
+                subtitles.forEach(sub => {
+                    const option = document.createElement('option');
+                    option.value = sub.path;
+                    option.textContent = sub.name;
+                    subtitleSelect.appendChild(option);
+                });
             } catch (error) {
                 console.error('Error loading subtitles:', error);
                 // Still show dialog even if subtitle loading fails
@@ -2819,7 +2889,6 @@
                     body: JSON.stringify({ 
                         movie_id: movieId, 
                         every_minutes: interval, 
-                        async_mode: true,
                         subtitle_path: subtitlePath
                     })
                 });
@@ -2885,16 +2954,16 @@
 
         // Append results helper removed in single-fetch mode
         
-        async function updateSubtitle(videoPath, subtitlePath) {
-            // Store subtitle selection for this video
-            if (!currentSubtitles[videoPath]) {
-                currentSubtitles[videoPath] = [];
+        async function updateSubtitle(movieId, subtitlePath) {
+            // Store subtitle selection for this movie
+            if (!currentSubtitles[movieId]) {
+                currentSubtitles[movieId] = [];
             }
         }
         
-        async function launchMovie(path) {
+        async function launchMovie(movieId) {
             try {
-                const subtitleSelect = document.getElementById(`subtitle-${escapeHtml(path)}`);
+                const subtitleSelect = document.getElementById(`subtitle-${movieId}`);
                 const subtitlePath = subtitleSelect ? subtitleSelect.value : null;
                 const closeExistingVlc = document.getElementById('setupCloseExistingVlc').checked;
                 
@@ -2902,7 +2971,7 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        path: path, 
+                        movie_id: movieId, 
                         subtitle_path: subtitlePath || null,
                         close_existing_vlc: closeExistingVlc
                     })
@@ -2978,91 +3047,212 @@
             }
         }
         
-        async function toggleWatched(path, currentWatchStatus = null) {
+        async function toggleWatched(movieId, currentWatchStatus = null) {
             try {
                 // If currentWatchStatus is null, determine from current results or fetch
                 if (currentWatchStatus === null) {
                     // Try to find in current results first
-                    const currentItem = currentResults.find(r => r.path === path);
+                    const currentItem = currentResults.find(r => r.id === movieId);
                     if (currentItem) {
-                        // Prefer watch_status if available, fallback to watched boolean
-                        currentWatchStatus = currentItem.watch_status !== undefined ? currentItem.watch_status : (currentItem.watched ? true : null);
+                        // Prefer watch_status if available (can be string enum or boolean for backward compat), fallback to watched boolean
+                        currentWatchStatus = currentItem.watch_status !== undefined ? currentItem.watch_status : (currentItem.watched ? 'watched' : null);
                     } else {
-                        // Fallback: try to get ID from route first, then fetch by path if needed
-                        let movieData = null;
+                        // Fetch movie details by ID
                         try {
-                            const route = getRoute();
-                            if (route.startsWith('/movie/')) {
-                                const parts = route.split('/').filter(Boolean);
-                                if (parts.length >= 2) {
-                                    const movieId = parseInt(parts[1], 10);
-                                    if (!Number.isNaN(movieId)) {
-                                        const movieResponse = await fetch(`/api/movie/${movieId}`);
-                                        if (movieResponse.ok) {
-                                            movieData = await movieResponse.json();
-                                        }
-                                    }
-                                }
+                            const movieResponse = await fetch(`/api/movie/${movieId}`);
+                            if (movieResponse.ok) {
+                                const movieData = await movieResponse.json();
+                                currentWatchStatus = movieData.watch_status !== undefined ? movieData.watch_status : (movieData.watched ? 'watched' : null);
+                            } else {
+                                currentWatchStatus = null; // Default to unset
                             }
                         } catch (e) {
-                            // Ignore route-based fetch errors
-                        }
-                        
-                        // If still no data, fallback to path-based fetch
-                        if (!movieData) {
-                            try {
-                                const movieResponse = await fetch(`/api/movie?path=${encodeURIComponent(path)}`);
-                                if (movieResponse.ok) {
-                                    movieData = await movieResponse.json();
-                                }
-                            } catch (e) {
-                                // Ignore fetch errors
-                            }
-                        }
-                        
-                        if (movieData) {
-                            currentWatchStatus = movieData.watch_status !== undefined ? movieData.watch_status : (movieData.watched ? true : null);
-                        } else {
-                            currentWatchStatus = null; // Default to unset
+                            currentWatchStatus = null; // Default to unset on error
                         }
                     }
                 }
                 
-                // Cycle through three states: None → True → False → None
-                let newWatchStatus;
-                if (currentWatchStatus === null || currentWatchStatus === undefined) {
-                    newWatchStatus = true;  // unset → watched
-                } else if (currentWatchStatus === true) {
-                    newWatchStatus = false;  // watched → unwatched
-                } else {
-                    newWatchStatus = null;  // unwatched → unset
+                // Normalize currentWatchStatus: convert boolean to string enum for backward compatibility
+                if (currentWatchStatus === true) {
+                    currentWatchStatus = 'watched';
+                } else if (currentWatchStatus === false) {
+                    currentWatchStatus = 'unwatched';
                 }
                 
-                const response = await fetch('/api/watched', {
+                // Cycle through four states: null → "watched" → "unwatched" → "want_to_watch" → null
+                let newMovieStatus;
+                if (currentWatchStatus === null || currentWatchStatus === undefined) {
+                    newMovieStatus = 'watched';  // unset → watched
+                } else if (currentWatchStatus === 'watched') {
+                    newMovieStatus = 'unwatched';  // watched → unwatched
+                } else if (currentWatchStatus === 'unwatched') {
+                    newMovieStatus = 'want_to_watch';  // unwatched → want_to_watch
+                } else {
+                    newMovieStatus = null;  // want_to_watch → unset
+                }
+                
+                // Store original status for potential revert
+                const originalStatus = currentWatchStatus;
+                
+                // OPTIMISTIC UI UPDATE: Update the visual state immediately
+                updateMovieCardStatus(movieId, newMovieStatus);
+                
+                // Also update the data model for consistency
+                const currentItem = currentResults.find(r => r.id === movieId);
+                if (currentItem) {
+                    currentItem.watch_status = newMovieStatus;
+                    currentItem.watched = (newMovieStatus === 'watched');
+                }
+                
+                // Send request to backend
+                const response = await fetch('/api/change-status', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({path: path, watch_status: newWatchStatus})
+                    body: JSON.stringify({movie_id: movieId, movieStatus: newMovieStatus})
                 });
                 
-                if (response.ok) {
-                    // Refresh current view
-                    if (watchedViewActive) {
-                        loadWatchedMovies();
-                    } else if (exploreViewActive) {
-                        loadExploreMovies();
-                    } else if (searchInput.value.length > 0) {
-                        search(searchInput.value);
+                if (!response.ok) {
+                    // REVERT on failure: restore previous state
+                    updateMovieCardStatus(movieId, originalStatus);
+                    if (currentItem) {
+                        currentItem.watch_status = originalStatus;
+                        currentItem.watched = (originalStatus === 'watched');
                     }
-                    loadStats();
+                    
+                    let errorMessage = 'Unknown error';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.detail || errorMessage;
+                    } catch (e) {
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    showStatus('Failed to update status: ' + errorMessage, 'error');
+                    return;
                 }
+                
+                // Success - refresh stats (but UI already updated optimistically)
+                loadStats();
             } catch (error) {
+                // REVERT on exception: try to restore previous state
+                const currentItem = currentResults.find(r => r.id === movieId);
+                if (currentItem) {
+                    const previousStatus = currentItem.watch_status;
+                    updateMovieCardStatus(movieId, previousStatus);
+                }
                 showStatus('Failed to update watched status: ' + error.message, 'error');
+            }
+        }
+        
+        function updateMovieCardStatus(movieId, watchStatus) {
+            // Find all movie cards with this ID (could be in search results, watched list, or explore view)
+            const movieCards = document.querySelectorAll(`[data-movie-id="${movieId}"]`);
+            
+            movieCards.forEach(card => {
+                // Update the checkbox class
+                const checkbox = card.querySelector('.watched-checkbox');
+                if (checkbox) {
+                    // Remove all status classes
+                    checkbox.classList.remove('watched', 'unwatched', 'want-to-watch', 'unset');
+                    
+                    // Add the appropriate class
+                    if (watchStatus === 'watched') {
+                        checkbox.classList.add('watched');
+                        card.classList.add('watched');
+                    } else if (watchStatus === 'unwatched') {
+                        checkbox.classList.add('unwatched');
+                        card.classList.remove('watched');
+                    } else if (watchStatus === 'want_to_watch') {
+                        checkbox.classList.add('want-to-watch');
+                        card.classList.remove('watched');
+                    } else {
+                        checkbox.classList.add('unset');
+                        card.classList.remove('watched');
+                    }
+                }
+                
+                // Update the onclick handler and text on the button to use the new status
+                const watchedBtn = card.querySelector('.movie-card-btn');
+                if (watchedBtn) {
+                    const statusForHandler = watchStatus === null ? 'null' : `'${watchStatus}'`;
+                    watchedBtn.setAttribute('onclick', `event.stopPropagation(); toggleWatched(${movieId}, ${statusForHandler})`);
+                    
+                    // Update the text after the checkbox
+                    const checkbox = watchedBtn.querySelector('.watched-checkbox');
+                    if (checkbox) {
+                        // Remove all text nodes after the checkbox
+                        let nextSibling = checkbox.nextSibling;
+                        while (nextSibling) {
+                            const toRemove = nextSibling;
+                            nextSibling = nextSibling.nextSibling;
+                            if (toRemove.nodeType === Node.TEXT_NODE) {
+                                toRemove.remove();
+                            }
+                        }
+                        // Add new text node based on status
+                        let textContent = '-';
+                        if (watchStatus === 'watched') {
+                            textContent = 'watched';
+                        } else if (watchStatus === 'unwatched') {
+                            textContent = 'not watched';
+                        } else if (watchStatus === 'want_to_watch') {
+                            textContent = 'want to see';
+                        }
+                        watchedBtn.appendChild(document.createTextNode(textContent));
+                    }
+                }
+            });
+            
+            // Also update in movie details view if open
+            const detailsContainer = document.getElementById('movieDetailsContainer');
+            if (detailsContainer) {
+                // Check if details container is actually visible (more reliable check)
+                const isVisible = detailsContainer.offsetParent !== null && 
+                                 detailsContainer.style.display !== 'none' &&
+                                 detailsContainer.innerHTML.trim() !== '';
+                
+                if (isVisible) {
+                    const watchedBtn = detailsContainer.querySelector('.watched-btn');
+                    if (watchedBtn) {
+                        // Update button text and class (remove all status classes first)
+                        watchedBtn.classList.remove('watched', 'unwatched', 'want-to-watch');
+                        
+                        if (watchStatus === 'watched') {
+                            watchedBtn.innerHTML = 'watched';
+                            watchedBtn.classList.add('watched');
+                        } else if (watchStatus === 'unwatched') {
+                            watchedBtn.innerHTML = 'not watched';
+                            watchedBtn.classList.add('unwatched');
+                        } else if (watchStatus === 'want_to_watch') {
+                            watchedBtn.innerHTML = 'want to see';
+                            watchedBtn.classList.add('want-to-watch');
+                        } else {
+                            watchedBtn.innerHTML = '-';
+                            // No class added - uses default gray background
+                        }
+                        
+                        // Update the onclick handler to use the new status
+                        const statusForHandler = watchStatus === null ? 'null' : `'${watchStatus}'`;
+                        watchedBtn.setAttribute('onclick', `toggleWatched(${movieId}, ${statusForHandler})`);
+                    }
+                }
             }
         }
         
         async function loadWatchedMovies() {
             try {
                 const response = await fetch('/api/watched');
+                if (!response.ok) {
+                    let errorMessage = 'Unknown error';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.detail || errorMessage;
+                    } catch (e) {
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    watchedList.innerHTML = '<div class="empty-state">Error loading watched movies: ' + errorMessage + '</div>';
+                    return;
+                }
+                
                 const data = await response.json();
                 const watched = data.watched || [];
                 
@@ -3644,21 +3834,24 @@
                     return;
                 }
 
-                const imageUrl = movie.image ? `/api/image?image_path=${encodeURIComponent(movie.image)}` : '';
+                const imageUrl = movie.image_id ? `/api/image/${movie.image_id}` : '';
                 const externalLinks = generateExternalLinks(movie.name);
                 const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path, movie.id);
 
-                // Use watch_status if available, fallback to watched boolean for backward compatibility
-                const watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? true : null);
-                const isWatched = watchStatus === true;
+                // Use watch_status if available (can be string enum or boolean for backward compat), fallback to watched boolean
+                let watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? 'watched' : null);
+                // Normalize: convert boolean to string enum for backward compatibility
+                if (watchStatus === true) watchStatus = 'watched';
+                if (watchStatus === false) watchStatus = 'unwatched';
+                const isWatched = watchStatus === 'watched';
 
                 // Load subtitles
-                await loadSubtitles(movie.path);
-                const subtitles = currentSubtitles[movie.path] || [];
+                await loadSubtitles(movie.id);
+                const subtitles = currentSubtitles[movie.id] || [];
                 let subtitleSelect = '';
                 if (subtitles.length > 0) {
                     subtitleSelect = `
-                        <select class="subtitle-select" id="subtitle-${escapeHtml(movie.path)}" onchange="updateSubtitle('${escapeJsString(movie.path)}', this.value)">
+                        <select class="subtitle-select" id="subtitle-${movie.id}" onchange="updateSubtitle(${movie.id}, this.value)">
                             <option value="">No subtitle</option>
                             ${subtitles.map(sub => `<option value="${escapeJsString(sub.path)}">${escapeHtml(sub.name)}</option>`).join('')}
                         </select>
@@ -3688,11 +3881,11 @@
                             </div>
                             ${createStarRating(movie.id || 0, movie.rating || null, 'movie-details-rating')}
                             <div class="movie-details-actions">
-                                <button class="watched-btn ${isWatched ? 'watched' : ''}" onclick="toggleWatched('${escapeJsString(movie.path)}', ${watchStatus === null ? 'null' : watchStatus})">
-                                    ${isWatched ? '✓ Watched' : watchStatus === false ? '✗ Unwatched' : 'Mark Watched'}
+                                <button class="watched-btn ${watchStatus === 'watched' ? 'watched' : watchStatus === 'unwatched' ? 'unwatched' : watchStatus === 'want_to_watch' ? 'want-to-watch' : ''}" onclick="toggleWatched(${movie.id}, ${watchStatus === null ? 'null' : `'${watchStatus}'`})">
+                                    ${watchStatus === 'watched' ? 'watched' : watchStatus === 'unwatched' ? 'not watched' : watchStatus === 'want_to_watch' ? 'want to see' : '-'}
                                 </button>
                                 ${subtitleSelect}
-                                <button class="launch-btn" onclick="launchMovie('${escapeJsString(movie.path)}')">Launch</button>
+                                <button class="launch-btn" onclick="launchMovie(${movie.id})">Launch</button>
                             </div>
                             <div class="external-links" style="margin-top: 20px;">
                                 <a href="${externalLinks.letterboxd}" target="_blank" class="external-link">Letterboxd</a>
@@ -3813,6 +4006,28 @@
                         <div style="margin-bottom: 5px;"><strong>${statsData.total_movies}</strong> movies indexed total</div>
                     </div>
                 `;
+            }
+            
+            // Load VLC settings
+            try {
+                const response = await fetch('/api/config');
+                const data = await response.json();
+                const settings = data.settings || {};
+                
+                // Load close existing VLC setting (default to true if not set)
+                const closeExistingVlcEl = document.getElementById('setupCloseExistingVlc');
+                if (closeExistingVlcEl) {
+                    // This setting is not saved to config currently, keep default checked state
+                    // In future, can be saved like: closeExistingVlcEl.checked = settings.close_existing_vlc !== false;
+                }
+                
+                // Load launch with subtitles setting (default to true if not set)
+                const launchWithSubtitlesOnEl = document.getElementById('setupLaunchWithSubtitlesOn');
+                if (launchWithSubtitlesOnEl) {
+                    launchWithSubtitlesOnEl.checked = settings.launch_with_subtitles_on !== false;
+                }
+            } catch (error) {
+                console.error('Error loading VLC settings:', error);
             }
         }
         
@@ -4280,6 +4495,34 @@
         loadLanguageFilters();
         loadCurrentFolder();
         updateCurrentlyPlaying();
+        
+        // Save launch with subtitles setting when checkbox changes
+        document.addEventListener('DOMContentLoaded', () => {
+            const launchWithSubtitlesOnEl = document.getElementById('setupLaunchWithSubtitlesOn');
+            if (launchWithSubtitlesOnEl) {
+                launchWithSubtitlesOnEl.addEventListener('change', async () => {
+                    try {
+                        const response = await fetch('/api/config', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                settings: {
+                                    launch_with_subtitles_on: launchWithSubtitlesOnEl.checked
+                                }
+                            })
+                        });
+                        if (response.ok) {
+                            showStatus('Setting saved successfully', 'success');
+                        } else {
+                            const data = await response.json();
+                            showStatus('Failed to save setting: ' + (data.detail || 'Unknown error'), 'error');
+                        }
+                    } catch (error) {
+                        showStatus('Failed to save setting: ' + error.message, 'error');
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>

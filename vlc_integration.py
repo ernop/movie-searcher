@@ -9,6 +9,7 @@ import subprocess
 import shlex
 import re
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime
 from fastapi import HTTPException
@@ -35,9 +36,50 @@ if os.name == 'nt':
 					("dwFlags", ctypes.c_ulong)]
 
 # Import database models and session
-from database import SessionLocal, Movie, LaunchHistory, WatchHistory
+from database import SessionLocal, Movie, LaunchHistory, MovieStatus
 
 logger = logging.getLogger(__name__)
+
+# Decision tracking for fallback analysis (shared with video_processing)
+_DECISION_LOG_FILE = None
+_DECISION_LOG_LOCK = threading.Lock()
+
+def _log_decision(decision_name: str, path_taken: str, context: dict = None):
+    """Log a decision point for later analysis to determine which paths are actually used"""
+    global _DECISION_LOG_FILE
+    if _DECISION_LOG_FILE is None:
+        # Try to get script dir from database module
+        try:
+            from database import SCRIPT_DIR
+            if SCRIPT_DIR:
+                _DECISION_LOG_FILE = SCRIPT_DIR / "decision_log.jsonl"
+        except:
+            pass
+    
+    if not _DECISION_LOG_FILE:
+        return
+    
+    try:
+        import json
+        from datetime import datetime
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "decision": decision_name,
+            "path": path_taken,
+        }
+        if context:
+            entry["context"] = context
+        
+        if _DECISION_LOG_LOCK:
+            with _DECISION_LOG_LOCK:
+                with open(_DECISION_LOG_FILE, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(entry) + '\n')
+        else:
+            with open(_DECISION_LOG_FILE, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(entry) + '\n')
+    except Exception as e:
+        # Don't let decision logging break the app
+        logger.debug(f"Failed to log decision: {e}")
 
 # Video and subtitle extensions (matching main.py)
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
@@ -220,10 +262,10 @@ def get_vlc_command_lines():
     
     CRITICAL QUOTE-STRIPPING REQUIREMENT:
     PowerShell's Win32_Process.CommandLine returns paths with quotes preserved
-    (e.g., '"C:\Program Files\VLC\vlc.exe" "D:\movies\file.mkv"'). When we parse
+    (e.g., '"C:\\Program Files\\VLC\\vlc.exe" "D:\\movies\\file.mkv"'). When we parse
     this with shlex.split(), it correctly splits the arguments but may leave
     quotes in the resulting strings. Since os.path.exists() will fail on a path
-    like '"D:\movies\file.mkv"' (with quotes), we MUST strip quotes from all
+    like '"D:\\movies\\file.mkv"' (with quotes), we MUST strip quotes from all
     arguments after parsing. This is why both the primary shlex.split() path
     and the fallback regex path strip quotes - it's essential for correct
     path detection.
@@ -556,6 +598,20 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     steps = []
     results = []
     
+    # Load config to check launch_with_subtitles_on setting
+    config_load_path = None
+    try:
+        from main import load_config
+        config = load_config()
+        launch_with_subtitles_on = config.get("launch_with_subtitles_on", True)
+        config_load_path = "config_loaded"
+        _log_decision("vlc_config_loading", "config_loaded")
+    except Exception as e:
+        logger.warning(f"Failed to load config for launch_with_subtitles_on: {e}. Defaulting to True.")
+        launch_with_subtitles_on = True
+        config_load_path = "default_true_on_error"
+        _log_decision("vlc_config_loading", "default_true_on_error", {"error": str(e)[:100]})
+    
     # Step 1: Verify file exists
     steps.append("Step 1: Verifying movie file exists")
     if not os.path.exists(movie_path):
@@ -612,12 +668,16 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     # Step 4: Handle subtitles
     steps.append("Step 4: Checking for subtitles")
     if not subtitle_path:
-        steps.append("  No subtitle provided, attempting auto-detection")
-        subtitle_path = find_subtitle_file(movie_path)
-        if subtitle_path:
-            steps.append(f"  Auto-detected subtitle: {subtitle_path}")
+        if launch_with_subtitles_on:
+            steps.append("  No subtitle provided, attempting auto-detection (launch with subtitles enabled)")
+            subtitle_path = find_subtitle_file(movie_path)
+            if subtitle_path:
+                steps.append(f"  Auto-detected subtitle: {subtitle_path}")
+            else:
+                steps.append("  No subtitle file found")
         else:
-            steps.append("  No subtitle file found")
+            steps.append("  No subtitle provided and launch with subtitles disabled")
+            subtitle_path = None
     else:
         steps.append(f"  Subtitle provided: {subtitle_path}")
     
@@ -685,12 +745,8 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
             )
             db.add(launch_entry)
         
-        # Create watch history entry for launch (watch session started)
-        watch_entry = WatchHistory(
-            movie_id=movie.id,
-            watch_status=None  # NULL = unknown (started watching but not finished)
-        )
-        db.add(watch_entry)
+        # Note: Movie status is only set when user explicitly marks as watched/unwatched
+        # Launching a movie does not automatically create a status entry
         
         db.commit()
         steps.append("  History saved successfully")

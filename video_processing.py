@@ -35,6 +35,45 @@ SCREENSHOT_DIR = None
 # Cache for resolved tool paths
 _CACHED_FFMPEG_PATH = None
 
+# Decision tracking for fallback analysis
+_DECISION_LOG_FILE = None
+_DECISION_LOG_LOCK = threading.Lock()
+
+def _log_decision(decision_name: str, path_taken: str, context: dict = None):
+    """Log a decision point for later analysis to determine which paths are actually used
+    
+    Args:
+        decision_name: Unique name for this decision point (e.g., "srt_encoding", "font_loading")
+        path_taken: Which path was taken (e.g., "utf8", "latin1", "arial_font", "default_font")
+        context: Optional context dict with additional info
+    """
+    global _DECISION_LOG_FILE
+    if _DECISION_LOG_FILE is None:
+        # Initialize log file path when SCRIPT_DIR is available
+        if SCRIPT_DIR:
+            _DECISION_LOG_FILE = SCRIPT_DIR / "decision_log.jsonl"
+    
+    if not _DECISION_LOG_FILE:
+        return
+    
+    try:
+        import json
+        from datetime import datetime
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "decision": decision_name,
+            "path": path_taken,
+        }
+        if context:
+            entry["context"] = context
+        
+        with _DECISION_LOG_LOCK:
+            with open(_DECISION_LOG_FILE, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(entry) + '\n')
+    except Exception as e:
+        # Don't let decision logging break the app
+        logger.debug(f"Failed to log decision: {e}")
+
 def _parse_srt_at_timestamp(srt_path, timestamp_seconds):
     """Parse SRT file and return subtitle text at given timestamp
     
@@ -45,11 +84,14 @@ def _parse_srt_at_timestamp(srt_path, timestamp_seconds):
         # Try different encodings to read the SRT file
         content = None
         encodings = ['utf-8', 'latin-1', 'windows-1252', 'iso-8859-1', 'cp1252']
+        encoding_used = None
         
         for encoding in encodings:
             try:
                 with open(srt_path, 'r', encoding=encoding) as f:
                     content = f.read()
+                encoding_used = encoding
+                _log_decision("srt_encoding", encoding, {"srt_path": str(srt_path)})
                 break  # Successfully read with this encoding
             except (UnicodeDecodeError, LookupError):
                 continue
@@ -58,6 +100,8 @@ def _parse_srt_at_timestamp(srt_path, timestamp_seconds):
             # If all encodings fail, try with errors='ignore'
             with open(srt_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
+            encoding_used = "utf8_with_errors_ignore"
+            _log_decision("srt_encoding", "utf8_with_errors_ignore", {"srt_path": str(srt_path)})
         
         # Parse SRT format: 
         # Number
@@ -134,10 +178,13 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
         ]
         
         # Load font
+        font_path_used = None
         for font_path in font_paths:
             if os.path.exists(font_path):
                 try:
                     font = ImageFont.truetype(font_path, font_size)
+                    font_path_used = Path(font_path).name
+                    _log_decision("subtitle_font_loading", font_path_used, {"font_size": font_size})
                     break
                 except Exception as e:
                     logger.debug(f"Failed to load font {font_path}: {e}")
@@ -146,6 +193,8 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
         # Fallback to default font if no TrueType font found
         if not font:
             font = ImageFont.load_default()
+            font_path_used = "default_font"
+            _log_decision("subtitle_font_loading", "default_font", {"font_size": font_size})
         
         # Handle multiline text - split by newlines
         lines = subtitle_text.split('\n')
@@ -158,10 +207,13 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
         # Get text dimensions for each line
         line_heights = []
         line_widths = []
+        textsize_method_used = None
         for line in lines:
             try:
                 # Use textsize for compatibility (works in older PIL)
                 w, h = draw.textsize(line, font=font)
+                if textsize_method_used is None:
+                    textsize_method_used = "textsize"
                 line_widths.append(w)
                 line_heights.append(h)
             except AttributeError:
@@ -170,11 +222,16 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
                     bbox = draw.textbbox((0, 0), line, font=font)
                     w = bbox[2] - bbox[0]
                     h = bbox[3] - bbox[1]
+                    if textsize_method_used is None:
+                        textsize_method_used = "textbbox"
                     line_widths.append(w)
                     line_heights.append(h)
                 except Exception as e:
                     logger.error(f"Failed to measure text size: {e}")
                     return False
+        
+        if textsize_method_used:
+            _log_decision("pil_textsize_method", textsize_method_used)
         
         # Calculate total height and max width
         # Line spacing also scales with resolution (proportional to font size)
@@ -292,9 +349,10 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
 
 def initialize_video_processing(script_dir):
     """Initialize video processing with script directory"""
-    global SCRIPT_DIR, SCREENSHOT_DIR
+    global SCRIPT_DIR, SCREENSHOT_DIR, _DECISION_LOG_FILE
     SCRIPT_DIR = Path(script_dir)
     SCREENSHOT_DIR = SCRIPT_DIR / "screenshots"
+    _DECISION_LOG_FILE = SCRIPT_DIR / "decision_log.jsonl"
 
 # Shutdown and process tracking
 shutdown_flag = threading.Event()
@@ -427,14 +485,38 @@ def _get_ffprobe_path_from_config() -> str:
         if not row or not row.value:
             logger.error("ffmpeg_path not configured in database; cannot determine ffprobe path for duration extraction.")
             return None
+        ffmpeg_path_parsing_method = None
         try:
             import json as _json
             cfg = _json.loads(row.value) if isinstance(row.value, str) else row.value
-            ffmpeg_path = cfg if isinstance(cfg, str) else cfg.get("path") or cfg.get("ffmpeg_path") or cfg.get("value")
+            if isinstance(cfg, str):
+                ffmpeg_path = cfg
+                ffmpeg_path_parsing_method = "direct_string"
+            else:
+                # Try multiple field names
+                if cfg.get("path"):
+                    ffmpeg_path = cfg.get("path")
+                    ffmpeg_path_parsing_method = "json_path_field"
+                elif cfg.get("ffmpeg_path"):
+                    ffmpeg_path = cfg.get("ffmpeg_path")
+                    ffmpeg_path_parsing_method = "json_ffmpeg_path_field"
+                elif cfg.get("value"):
+                    ffmpeg_path = cfg.get("value")
+                    ffmpeg_path_parsing_method = "json_value_field"
+                else:
+                    ffmpeg_path = None
+            
             if not ffmpeg_path:
                 ffmpeg_path = row.value if isinstance(row.value, str) else None
+                if ffmpeg_path:
+                    ffmpeg_path_parsing_method = "raw_row_value"
         except Exception:
             ffmpeg_path = row.value if isinstance(row.value, str) else None
+            if ffmpeg_path:
+                ffmpeg_path_parsing_method = "exception_fallback_raw_value"
+        
+        if ffmpeg_path_parsing_method:
+            _log_decision("ffmpeg_path_parsing", ffmpeg_path_parsing_method)
         if not ffmpeg_path:
             logger.error("ffmpeg_path config present but empty/unusable.")
             return None
@@ -535,31 +617,37 @@ def find_ffmpeg(load_config_func):
         logger.error("Please fix the ffmpeg_path configuration. Frame extraction will not work until this is corrected.")
         return None
 
-def generate_screenshot_filename(video_path, timestamp_seconds, suffix=""):
+def generate_screenshot_filename(video_path, timestamp_seconds, suffix="", movie_id=None):
     """Generate a sensible screenshot filename based on movie name and timestamp
     
     Args:
         video_path: Path to video file
         timestamp_seconds: Timestamp in seconds
         suffix: Optional suffix to add before .jpg (e.g., "_subs" for subtitles)
+        movie_id: Movie ID to look up cleaned name (required - should always be available)
     """
     video_path_obj = Path(video_path)
     
-    # Try to get cleaned movie name from database
+    # Get cleaned movie name from database using movie_id
     movie_name = None
-    try:
+    if movie_id:
         db = SessionLocal()
         try:
-            movie = db.query(Movie).filter(Movie.path == str(video_path_obj.resolve())).first()
+            movie = db.query(Movie).filter(Movie.id == movie_id).first()
             if movie and movie.name:
                 movie_name = movie.name
+            else:
+                logger.error(f"Movie ID {movie_id} not found in database when generating screenshot filename. This is a programming error.")
+        except Exception as e:
+            logger.error(f"Database error when looking up movie_id={movie_id} for screenshot filename: {e}", exc_info=True)
         finally:
             db.close()
-    except Exception:
-        pass  # Fall back to raw filename if DB lookup fails
     
-    # Fall back to raw filename if no cleaned name found
+    # If movie_id not provided or lookup failed, use sanitized video filename
+    # This should never happen in normal operation - indicates programming error
     if not movie_name:
+        if not movie_id:
+            logger.error(f"generate_screenshot_filename called without movie_id for {video_path}. This is a programming error.")
         movie_name = video_path_obj.stem  # Get filename without extension
     
     # Sanitize filename: remove invalid characters for Windows/Linux
@@ -575,110 +663,12 @@ def generate_screenshot_filename(video_path, timestamp_seconds, suffix=""):
     screenshot_filename = f"{sanitized_name}_screenshot{int(timestamp_seconds)}s{suffix}.jpg"
     return SCREENSHOT_DIR / screenshot_filename
 
-def extract_movie_screenshot_sync(video_path, timestamp_seconds, find_ffmpeg_func, subtitle_path=None):
-    """Extract a single screenshot from video synchronously (blocking)
-    
-    Args:
-        video_path: Path to video file
-        timestamp_seconds: Timestamp in seconds to extract screenshot
-        find_ffmpeg_func: Function to find ffmpeg executable
-        subtitle_path: Optional path to subtitle file to burn in
-    """
-    video_path_obj = Path(video_path)
-    
-    # Create screenshots directory if it doesn't exist
-    SCREENSHOT_DIR.mkdir(exist_ok=True)
-    
-    # Generate screenshot filename based on movie name and timestamp
-    # Include subtitle indicator in filename if burning subtitles
-    suffix = "_subs" if subtitle_path else ""
-    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix)
-    
-    # Check if screenshot already exists
-    if screenshot_path.exists():
-        return str(screenshot_path)
-    
-    # Find ffmpeg
-    ffmpeg_exe = find_ffmpeg_func()
-    if not ffmpeg_exe:
-        logger.warning(f"ffmpeg not found, skipping screenshot extraction for {video_path}")
-        return None
-    
-    # Try to get video length to validate timestamp
-    length = get_video_length(video_path)
-    if length and timestamp_seconds > length:
-        # If requested timestamp is beyond video length, use 30 seconds or 10% into the video, whichever is smaller
-        timestamp_seconds = min(30, max(10, length * 0.1))
-        logger.info(f"Timestamp exceeds video length {length}s, using {timestamp_seconds}s instead")
-    
-    # Extract screenshot
-    try:
-        # Resolve paths
-        video_path_normalized = Path(video_path).resolve()
-        
-        # Build ffmpeg command to extract frame WITHOUT subtitles
-        # We'll add subtitles using PIL after extraction
-        cmd = [
-            ffmpeg_exe,
-            "-hide_banner",
-            "-loglevel", "error",
-            "-ss", str(timestamp_seconds),
-            "-i", str(video_path_normalized),
-            "-vf", "scale=iw:ih",  # Preserve aspect ratio
-            "-vframes", "1",
-            "-q:v", "2",  # High quality
-            "-y",  # Overwrite
-            str(screenshot_path.resolve())
-        ]
-        
-        logger.debug(f"Running ffmpeg command: {' '.join(cmd)}")
-        start_time = time.time()
-        result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
-        elapsed = time.time() - start_time
-        if elapsed > 1:
-            logger.warning(f"ffmpeg took {elapsed:.2f}s for screenshot extraction from {video_path}")
-        
-        if result and result.returncode == 0 and screenshot_path.exists():
-            logger.info(f"Extracted screenshot from {video_path} at {timestamp_seconds}s")
-            
-            # If subtitle path provided, burn subtitle text onto the image using PIL
-            if subtitle_path and os.path.exists(subtitle_path):
-                subtitle_text = _parse_srt_at_timestamp(subtitle_path, timestamp_seconds)
-                if subtitle_text:
-                    logger.info(f"Found subtitle text at {timestamp_seconds}s: {subtitle_text[:50]}...")
-                    success = _burn_subtitle_text_onto_image(str(screenshot_path), subtitle_text)
-                    if not success:
-                        logger.warning(f"Failed to burn subtitle text onto {screenshot_path}")
-                else:
-                    logger.debug(f"No subtitle text found at timestamp {timestamp_seconds}s")
-            
-            return str(screenshot_path)
-        elif result:
-            stderr_msg = result.stderr.decode('utf-8', errors='ignore') if result.stderr else ''
-            stdout_msg = result.stdout.decode('utf-8', errors='ignore') if result.stdout else ''
-            stderr_preview = (stderr_msg[:200] + "...") if len(stderr_msg) > 200 else stderr_msg
-            stdout_preview = (stdout_msg[:200] + "...") if len(stdout_msg) > 200 else stdout_msg
-            error_detail = f"exit={result.returncode}"
-            if stderr_preview:
-                error_detail += f", stderr={stderr_preview}"
-            if stdout_preview:
-                error_detail += f", stdout={stdout_preview}"
-            logger.warning(f"Failed to extract screenshot from {video_path}: {error_detail}")
-            return None
-        else:
-            return None
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Screenshot extraction timed out for {video_path}")
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting screenshot from {video_path}: {e}")
-        return None
-
-def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func, priority: str = "normal", subtitle_path=None):
-    """Extract a single screenshot from video - can be synchronous or queued for async processing
+def extract_movie_screenshot(video_path, timestamp_seconds, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func, priority: str = "normal", subtitle_path=None, movie_id=None):
+    """Queue a screenshot extraction for async processing
     
     Args:
         subtitle_path: Optional path to subtitle file to burn in
+        movie_id: Optional movie ID to use for database operations (avoids path lookup)
     """
     video_path_obj = Path(video_path)
     
@@ -687,7 +677,7 @@ def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_con
     
     # Generate screenshot filename based on movie name and timestamp
     suffix = "_subs" if subtitle_path else ""
-    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix)
+    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix, movie_id=movie_id)
     
     # Check if screenshot already exists
     if screenshot_path.exists():
@@ -704,40 +694,37 @@ def extract_movie_screenshot(video_path, timestamp_seconds, async_mode, load_con
         logger.warning(f"ffmpeg not found, skipping screenshot extraction for {video_path}")
         return None
     
-    # If async mode, queue it for background processing
-    if async_mode:
-        global frame_extraction_queue
-        # Map priority label to numeric (lower number = higher priority)
-        prio_map = {"user_high": 0, "high": 1, "normal": 5, "low": 9}
-        prio_value = prio_map.get(priority or "normal", 5)
-        frame_extraction_queue.put((
-            prio_value,
-            time.time(),  # tie-breaker for FIFO within same priority
-            {
-                "video_path": video_path,
-                "timestamp_seconds": timestamp_seconds,
-                "subtitle_path": subtitle_path,
-                "ffmpeg_exe": ffmpeg_exe,
-                "load_config_func": load_config_func,
-                "find_ffmpeg_func": find_ffmpeg_func,
-                "scan_progress_dict": scan_progress_dict,
-                "add_scan_log_func": add_scan_log_func
-            }
-        ))
-        queue_size = frame_extraction_queue.qsize()
-        scan_progress_dict["frame_queue_size"] = queue_size
-        scan_progress_dict["frames_total"] = scan_progress_dict.get("frames_total", 0) + 1
-        logger.info(f"Queued screenshot extraction: video={Path(video_path).name}, timestamp={timestamp_seconds}s, subtitle_path={subtitle_path}, queue_size={queue_size}")
-        add_scan_log_func("info", f"Queued screenshot extraction (queue: {queue_size})")
-        # Ensure worker is running to process the queue
-        try:
-            process_frame_queue(3, scan_progress_dict, add_scan_log_func)
-        except Exception as e:
-            logger.error(f"Failed to start process_frame_queue: {e}", exc_info=True)
-        return None  # Return None to indicate it's queued, will be processed later
-    else:
-        # Synchronous mode
-        return extract_movie_screenshot_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_func(load_config_func), subtitle_path=subtitle_path)
+    # Queue it for background processing
+    global frame_extraction_queue
+    # Map priority label to numeric (lower number = higher priority)
+    prio_map = {"user_high": 0, "high": 1, "normal": 5, "low": 9}
+    prio_value = prio_map.get(priority or "normal", 5)
+    frame_extraction_queue.put((
+        prio_value,
+        time.time(),  # tie-breaker for FIFO within same priority
+        {
+            "video_path": video_path,
+            "timestamp_seconds": timestamp_seconds,
+            "subtitle_path": subtitle_path,
+            "ffmpeg_exe": ffmpeg_exe,
+            "load_config_func": load_config_func,
+            "find_ffmpeg_func": find_ffmpeg_func,
+            "scan_progress_dict": scan_progress_dict,
+            "add_scan_log_func": add_scan_log_func,
+            "movie_id": movie_id  # Pass movie_id to avoid path lookup issues
+        }
+    ))
+    queue_size = frame_extraction_queue.qsize()
+    scan_progress_dict["frame_queue_size"] = queue_size
+    scan_progress_dict["frames_total"] = scan_progress_dict.get("frames_total", 0) + 1
+    logger.info(f"Queued screenshot extraction: video={Path(video_path).name}, timestamp={timestamp_seconds}s, subtitle_path={subtitle_path}, queue_size={queue_size}")
+    add_scan_log_func("info", f"Queued screenshot extraction (queue: {queue_size})")
+    # Ensure worker is running to process the queue
+    try:
+        process_frame_queue(3, scan_progress_dict, add_scan_log_func)
+    except Exception as e:
+        logger.error(f"Failed to start process_frame_queue: {e}", exc_info=True)
+    return None  # Return None to indicate it's queued, will be processed later
 
 def process_screenshot_extraction_worker(screenshot_info):
     """Worker function to extract a screenshot - runs in thread pool"""
@@ -759,7 +746,8 @@ def process_screenshot_extraction_worker(screenshot_info):
             if length and timestamp_seconds > length:
                 timestamp_seconds = min(30, max(10, length * 0.1))
             suffix = "_subs" if subtitle_path else ""
-            screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix)
+            movie_id_from_info = screenshot_info.get("movie_id")
+            screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix, movie_id=movie_id_from_info)
 
         # Early-out if already exists (quick DB sync only, no ffmpeg)
         if screenshot_path.exists():
@@ -767,15 +755,36 @@ def process_screenshot_extraction_worker(screenshot_info):
             add_scan_log_func("info", f"Screenshot already exists: {screenshot_path.name}")
             db = SessionLocal()
             try:
-                movie = db.query(Movie).filter(Movie.path == video_path).first()
+                # movie_id must be provided - we own this code path and should always have it
+                movie_id_to_use = screenshot_info.get("movie_id")
+                if not movie_id_to_use:
+                    logger.error(f"movie_id not provided when syncing existing screenshot {screenshot_path.name}. This is a programming error - movie_id must be passed.")
+                    add_scan_log_func("error", f"Programming error: movie_id missing when syncing screenshot")
+                    return True
+                
+                movie = db.query(Movie).filter(Movie.id == movie_id_to_use).first()
+                if not movie:
+                    logger.error(f"Movie ID {movie_id_to_use} not found in database when syncing existing screenshot {screenshot_path.name}. Movie may have been deleted.")
+                    add_scan_log_func("error", f"Movie ID {movie_id_to_use} not found in database")
+                    return True
+                
                 if movie:
                     existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
                     if not existing:
-                        logger.info(f"Adding screenshot to database: {screenshot_path.name}")
+                        logger.info(f"Adding existing screenshot to database: movie_id={movie.id}, path={screenshot_path.name}, timestamp={timestamp_seconds}s")
                         db.add(Screenshot(movie_id=movie.id, shot_path=str(screenshot_path), timestamp_seconds=timestamp_seconds))
-                        db.commit()
+                        try:
+                            db.commit()
+                            logger.info(f"Successfully added existing screenshot to database: movie_id={movie.id}, path={screenshot_path.name}")
+                        except Exception as commit_err:
+                            logger.error(f"Failed to commit existing screenshot to database: movie_id={movie.id}, path={screenshot_path.name}, error={commit_err}", exc_info=True)
+                            db.rollback()
                     else:
-                        logger.debug(f"Screenshot already in database: {screenshot_path.name}")
+                        logger.debug(f"Screenshot already in database: movie_id={movie.id}, path={screenshot_path.name}")
+                else:
+                    logger.warning(f"Existing screenshot file found but movie not in database: {screenshot_path.name}")
+            except Exception as db_err:
+                logger.error(f"Database error when syncing existing screenshot: path={screenshot_path.name}, error={db_err}", exc_info=True)
             finally:
                 db.close()
             return True
@@ -800,18 +809,46 @@ def process_screenshot_extraction_worker(screenshot_info):
             if rc == 0 and out_path.exists():
                 db = SessionLocal()
                 try:
-                    movie = db.query(Movie).filter(Movie.path == vid_path).first()
+                    # movie_id must be provided - we own this code path and should always have it
+                    movie_id_to_use = screenshot_info.get("movie_id")
+                    if not movie_id_to_use:
+                        logger.error(f"movie_id not provided when saving screenshot {out_path.name}. This is a programming error - movie_id must be passed.")
+                        add_scan_log_func("error", f"Programming error: movie_id missing when saving screenshot")
+                        return
+                    
+                    movie = db.query(Movie).filter(Movie.id == movie_id_to_use).first()
+                    if not movie:
+                        logger.error(f"Movie ID {movie_id_to_use} not found in database when saving screenshot {out_path.name}. Movie may have been deleted.")
+                        add_scan_log_func("error", f"Movie ID {movie_id_to_use} not found in database")
+                        return
+                    
                     if movie:
                         existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(out_path)).first()
                         if not existing:
+                            logger.info(f"Saving screenshot to database: movie_id={movie.id}, path={out_path.name}, timestamp={timestamp_seconds}s")
                             db.add(Screenshot(movie_id=movie.id, shot_path=str(out_path), timestamp_seconds=timestamp_seconds))
-                            db.commit()
-                            # Track completion time
-                            with screenshot_completion_lock:
-                                screenshot_completion_times.append(time.time())
-                                # Keep only last 1000 timestamps to avoid memory growth
-                                if len(screenshot_completion_times) > 1000:
-                                    screenshot_completion_times.pop(0)
+                            try:
+                                db.commit()
+                                # Get the screenshot ID we just created
+                                saved_screenshot = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(out_path)).first()
+                                screenshot_id = saved_screenshot.id if saved_screenshot else 'unknown'
+                                logger.info(f"Successfully saved screenshot to database: movie_id={movie.id}, screenshot_id={screenshot_id}, path={out_path.name}, timestamp={timestamp_seconds}s")
+                                # Track completion time
+                                with screenshot_completion_lock:
+                                    screenshot_completion_times.append(time.time())
+                                    # Keep only last 1000 timestamps to avoid memory growth
+                                    if len(screenshot_completion_times) > 1000:
+                                        screenshot_completion_times.pop(0)
+                            except Exception as commit_err:
+                                logger.error(f"Failed to commit screenshot to database: movie_id={movie.id}, path={out_path.name}, error={commit_err}", exc_info=True)
+                                db.rollback()
+                                add_scan_log_func("error", f"Database commit failed for screenshot: {str(commit_err)[:100]}")
+                        else:
+                            logger.debug(f"Screenshot already exists in database: movie_id={movie.id}, path={out_path.name}")
+                    else:
+                        logger.error(f"Cannot save screenshot to database: movie not found. Screenshot file exists at {out_path} but will not be displayed.")
+                        add_scan_log_func("error", f"Screenshot extracted but not saved to database (movie not found)")
+                    
                     scan_progress_dict["frames_processed"] = scan_progress_dict.get("frames_processed", 0) + 1
                     scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
                     si = screenshot_info.get("screenshot_index", None)
@@ -820,6 +857,9 @@ def process_screenshot_extraction_worker(screenshot_info):
                         add_scan_log_func("success", f"Screenshot {si}/{ts} extracted: {Path(vid_path).name}")
                     else:
                         add_scan_log_func("success", f"Screenshot extracted: {Path(vid_path).name}")
+                except Exception as db_err:
+                    logger.error(f"Database error when saving screenshot: path={out_path.name}, error={db_err}", exc_info=True)
+                    add_scan_log_func("error", f"Database error: {str(db_err)[:100]}")
                 finally:
                     db.close()
             else:
@@ -847,13 +887,16 @@ def process_screenshot_extraction_worker(screenshot_info):
 
         # Submit job; if the executor was previously shut down, recreate and retry once
         logger.info(f"Submitting ffmpeg job: video={Path(video_path).name}, timestamp={timestamp_seconds}s, subtitle_path={subtitle_path}, output={screenshot_path.name}")
+        submission_path = None
         try:
             future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path), subtitle_path)
+            submission_path = "first_attempt"
+            _log_decision("process_executor_submit", "first_attempt")
         except Exception as submit_err:
             logger.error(f"Failed to submit ffmpeg job, will retry: {submit_err}", exc_info=True)
             # Handle 'cannot schedule new futures after shutdown' and similar states
             try:
-                # Best-effort: shutdown in case it's a half-closed pool, then recreate
+                # Shutdown in case it's a half-closed pool, then recreate
                 process_executor.shutdown(wait=False, cancel_futures=False)
             except Exception:
                 pass
@@ -862,6 +905,8 @@ def process_screenshot_extraction_worker(screenshot_info):
             process_executor = ProcessPoolExecutor(max_workers=workers)
             logger.info(f"Retrying ffmpeg job submission with subtitle_path={subtitle_path}")
             future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path), subtitle_path)
+            submission_path = "retry_after_recreate"
+            _log_decision("process_executor_submit", "retry_after_recreate", {"error": str(submit_err)[:100]})
         future.add_done_callback(_on_done)
         # Do not block here; success indicates submission happened
         return True
@@ -975,8 +1020,8 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
     worker_thread = threading.Thread(target=worker, daemon=True)
     worker_thread.start()
 
-def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmpeg_func, add_scan_log_func=None, async_mode=True, scan_progress_dict=None):
-    """Extract screenshots from video using ffmpeg - can be synchronous or queued for async processing"""
+def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmpeg_func, add_scan_log_func=None, scan_progress_dict=None):
+    """Queue screenshot extractions for async processing"""
     video_path_obj = Path(video_path)
     video_name = video_path_obj.name
     
@@ -1026,121 +1071,48 @@ def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmp
     if add_scan_log_func:
         add_scan_log_func("info", f"  Using ffmpeg: {Path(ffmpeg_exe).name}")
     
-    # If async mode, queue it for background processing
-    if async_mode and scan_progress_dict is not None and add_scan_log_func is not None:
-        global frame_extraction_queue
-        # Queue each screenshot extraction individually
-        for i in range(num_screenshots):
-            screenshot_path = screenshot_base.parent / f"{screenshot_base.name}_{i+1}.jpg"
-            if screenshot_path.exists():
-                continue  # Skip existing screenshots
-            
-            # Calculate timestamp (distribute evenly across video)
-            timestamp = (length / (num_screenshots + 1)) * (i + 1)
-            
-            # Normal priority for background/batch work
-            frame_extraction_queue.put((
-                5,  # normal priority
-                time.time(),
-                {
-                    "video_path": video_path,
-                    "timestamp_seconds": timestamp,
-                    "ffmpeg_exe": ffmpeg_exe,
-                    "load_config_func": load_config_func,
-                    "find_ffmpeg_func": find_ffmpeg_func,
-                    "scan_progress_dict": scan_progress_dict,
-                    "add_scan_log_func": add_scan_log_func,
-                    "screenshot_index": i + 1,
-                    "total_screenshots": num_screenshots,
-                    "screenshot_path": str(screenshot_path)
-                }
-            ))
+    # Queue it for background processing
+    if scan_progress_dict is None or add_scan_log_func is None:
+        logger.error(f"extract_screenshots called without required scan_progress_dict and add_scan_log_func. Screenshots will not be queued.")
+        return existing_screenshots
+    
+    global frame_extraction_queue
+    # Queue each screenshot extraction individually
+    for i in range(num_screenshots):
+        screenshot_path = screenshot_base.parent / f"{screenshot_base.name}_{i+1}.jpg"
+        if screenshot_path.exists():
+            continue  # Skip existing screenshots
         
-        queue_size = frame_extraction_queue.qsize()
-        scan_progress_dict["frame_queue_size"] = queue_size
-        scan_progress_dict["frames_total"] = scan_progress_dict.get("frames_total", 0) + num_screenshots
-        if add_scan_log_func:
-            add_scan_log_func("info", f"  Queued {num_screenshots} screenshot extractions (queue: {queue_size})")
-        # Ensure worker is running to process the queue
-        try:
-            process_frame_queue(3, scan_progress_dict, add_scan_log_func)
-        except Exception:
-            pass
-        return existing_screenshots  # Return existing screenshots immediately, rest will be processed in background
+        # Calculate timestamp (distribute evenly across video)
+        timestamp = (length / (num_screenshots + 1)) * (i + 1)
+        
+        # Normal priority for background/batch work
+        frame_extraction_queue.put((
+            5,  # normal priority
+            time.time(),
+            {
+                "video_path": video_path,
+                "timestamp_seconds": timestamp,
+                "ffmpeg_exe": ffmpeg_exe,
+                "load_config_func": load_config_func,
+                "find_ffmpeg_func": find_ffmpeg_func,
+                "scan_progress_dict": scan_progress_dict,
+                "add_scan_log_func": add_scan_log_func,
+                "screenshot_index": i + 1,
+                "total_screenshots": num_screenshots,
+                "screenshot_path": str(screenshot_path)
+            }
+        ))
     
-    # Synchronous mode (for backwards compatibility or when async_mode=False)
-    screenshots = existing_screenshots.copy()
-    try:
-        for i in range(num_screenshots):
-            screenshot_path = screenshot_base.parent / f"{screenshot_base.name}_{i+1}.jpg"
-            if screenshot_path.exists():
-                screenshots.append(str(screenshot_path))
-                if add_scan_log_func:
-                    add_scan_log_func("info", f"  Screenshot {i+1}/{num_screenshots} already exists")
-                continue
-            
-            # Calculate timestamp (distribute evenly across video)
-            timestamp = (length / (num_screenshots + 1)) * (i + 1)
-            
-            if add_scan_log_func:
-                add_scan_log_func("info", f"  Extracting screenshot {i+1}/{num_screenshots} at {timestamp:.1f}s...")
-            
-            # Basic ffmpeg command (no optimizations - diagnose why it's slow)
-            cmd = [
-                ffmpeg_exe,
-                "-hide_banner",
-                "-loglevel", "error",
-                "-ss", str(timestamp),
-                "-i", str(video_path),
-                "-vframes", "1",
-                "-q:v", "2",  # High quality
-                "-y",  # Overwrite
-                str(screenshot_path)
-            ]
-            
-            if shutdown_flag.is_set():
-                if add_scan_log_func:
-                    add_scan_log_func("warning", f"  Screenshot extraction interrupted")
-                break
-            
-            start_time = time.time()
-            try:
-                result = run_interruptible_subprocess(cmd, timeout=30, capture_output=True)
-                elapsed = time.time() - start_time
-                
-                if add_scan_log_func:
-                    add_scan_log_func("info", f"  Subprocess total time: {elapsed:.2f}s")
-                
-                if result and result.returncode == 0 and screenshot_path.exists():
-                    file_size = screenshot_path.stat().st_size
-                    if add_scan_log_func:
-                        add_scan_log_func("success", f"  Screenshot {i+1}/{num_screenshots} extracted in {elapsed:.2f}s ({file_size/1024:.1f}KB)")
-                    screenshots.append(str(screenshot_path))
-                elif result:
-                    error_msg = result.stderr.decode('utf-8', errors='ignore') if result.stderr else 'Unknown error'
-                    error_preview = error_msg[:200] + "..." if len(error_msg) > 200 else error_msg
-                    if add_scan_log_func:
-                        add_scan_log_func("error", f"  Screenshot {i+1}/{num_screenshots} failed (exit {result.returncode}): {error_preview}")
-                    logger.warning(f"Failed to extract screenshot {i+1} from {video_path}: {error_preview}")
-            except subprocess.TimeoutExpired:
-                elapsed = time.time() - start_time
-                if add_scan_log_func:
-                    add_scan_log_func("error", f"  Screenshot {i+1}/{num_screenshots} timed out after {elapsed:.1f}s at {timestamp:.1f}s")
-                logger.warning(f"Screenshot {i+1} extraction timed out for {video_path} at {timestamp:.1f}s (took {elapsed:.1f}s)")
-    except subprocess.TimeoutExpired:
-        if add_scan_log_func:
-            add_scan_log_func("error", f"  Screenshot extraction timed out for {video_name}")
-        logger.warning(f"Screenshot extraction timed out for {video_path}")
-    except Exception as e:
-        if add_scan_log_func:
-            add_scan_log_func("error", f"  Screenshot extraction error: {str(e)[:100]}")
-        logger.error(f"Error extracting screenshots from {video_path}: {e}", exc_info=True)
-    
+    queue_size = frame_extraction_queue.qsize()
+    scan_progress_dict["frame_queue_size"] = queue_size
+    scan_progress_dict["frames_total"] = scan_progress_dict.get("frames_total", 0) + num_screenshots
     if add_scan_log_func:
-        if screenshots:
-            add_scan_log_func("success", f"  Extracted {len(screenshots)}/{num_screenshots} screenshot(s)")
-        else:
-            add_scan_log_func("warning", f"  No screenshots extracted")
-    
-    return screenshots
+        add_scan_log_func("info", f"  Queued {num_screenshots} screenshot extractions (queue: {queue_size})")
+    # Ensure worker is running to process the queue
+    try:
+        process_frame_queue(3, scan_progress_dict, add_scan_log_func)
+    except Exception:
+        pass
+    return existing_screenshots  # Return existing screenshots immediately, rest will be processed in background
 

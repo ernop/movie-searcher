@@ -7,6 +7,16 @@
   },
   "files.watcherExclude": {
     "screenshots": true
-  }
+  },
+  "editor.fontFamily": "'Consolas', 'Courier New', monospace",
+  "editor.fontSize": 14,
+  "editor.fontWeight": "500",
+  "editor.fontLigatures": false,
+  "editor.lineHeight": 1.5,
+  "editor.letterSpacing": 0.5,
+  "workbench.fontAliasing": "antialiased",
+  "terminal.integrated.fontFamily": "'Consolas', 'Courier New', monospace",
+  "terminal.integrated.fontSize": 14,
+  "window.zoomLevel": 0
 }
 

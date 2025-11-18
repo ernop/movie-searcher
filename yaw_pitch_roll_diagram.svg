@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 400" style="background: #f5f5f5;">
+  <!-- Title -->
+  <text x="250" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#333">Yaw, Pitch, Roll Axes</text>
+  
+  <!-- Origin point -->
+  <g transform="translate(250, 200)">
+    <circle cx="0" cy="0" r="4" fill="#333"/>
+    <text x="10" y="5" font-family="Arial, sans-serif" font-size="12" fill="#333">O</text>
+    
+    <!-- X-axis (Red) - Pitch axis -->
+    <line x1="0" y1="0" x2="120" y2="-60" stroke="#cc0000" stroke-width="3" marker-end="url(#arrowhead-red)"/>
+    <line x1="0" y1="0" x2="-120" y2="60" stroke="#cc0000" stroke-width="2" stroke-dasharray="5,3"/>
+    <text x="130" y="-55" font-family="Arial, sans-serif" font-size="14" fill="#cc0000" font-weight="bold">+X</text>
+    <text x="-130" y="65" font-family="Arial, sans-serif" font-size="14" fill="#cc0000">-X</text>
+    <text x="140" y="-40" font-family="Arial, sans-serif" font-size="12" fill="#666">(Pitch)</text>
+    
+    <!-- Y-axis (Green) - Roll axis -->
+    <line x1="0" y1="0" x2="120" y2="60" stroke="#00aa00" stroke-width="3" marker-end="url(#arrowhead-green)"/>
+    <line x1="0" y1="0" x2="-120" y2="-60" stroke="#00aa00" stroke-width="2" stroke-dasharray="5,3"/>
+    <text x="130" y="75" font-family="Arial, sans-serif" font-size="14" fill="#00aa00" font-weight="bold">+Y</text>
+    <text x="-130" y="-55" font-family="Arial, sans-serif" font-size="14" fill="#00aa00">-Y</text>
+    <text x="140" y="90" font-family="Arial, sans-serif" font-size="12" fill="#666">(Roll)</text>
+    
+    <!-- Z-axis (Blue) - Yaw axis -->
+    <line x1="0" y1="0" x2="0" y2="-120" stroke="#0066cc" stroke-width="3" marker-end="url(#arrowhead-blue)"/>
+    <line x1="0" y1="0" x2="0" y2="120" stroke="#0066cc" stroke-width="2" stroke-dasharray="5,3"/>
+    <text x="10" y="-135" font-family="Arial, sans-serif" font-size="14" fill="#0066cc" font-weight="bold">+Z</text>
+    <text x="10" y="140" font-family="Arial, sans-serif" font-size="14" fill="#0066cc">-Z</text>
+    <text x="-30" y="-135" font-family="Arial, sans-serif" font-size="12" fill="#666">(Yaw)</text>
+  </g>
+  
+  <!-- Legend -->
+  <g transform="translate(250, 350)">
+    <text x="0" y="0" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#666">
+      <tspan font-weight="bold" fill="#333">Solid arrows = Positive (+)</tspan> | <tspan fill="#666">Dashed lines = Negative (-)</tspan>
+    </text>
+  </g>
+  
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#cc0000"/>
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#00aa00"/>
+    </marker>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0066cc"/>
+    </marker>
+  </defs>
+</svg>

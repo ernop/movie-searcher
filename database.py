@@ -12,7 +12,7 @@ import logging
 # Import all models and Base from models module
 from models import (
     Base,
-    Movie, Rating, WatchHistory, SearchHistory, LaunchHistory, 
+    Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, 
     IndexedPath, Config, Screenshot, Image, SchemaVersion, MovieAudio,
     CURRENT_SCHEMA_VERSION
 )
@@ -322,6 +322,162 @@ def migrate_db_schema():
             set_schema_version(6, "Added timestamp_seconds column to screenshots table")
             current_version = 6
         
+        if current_version < 7:
+            logger.info("Migrating to schema version 7: Add movie_status table alongside watch_history")
+            with engine.begin() as conn:
+                # Create movie_status table if it doesn't exist (add new structure alongside old)
+                if "movie_status" not in existing_tables:
+                    logger.info("Creating movie_status table (new structure)...")
+                    conn.execute(text("""
+                        CREATE TABLE movie_status (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            movie_id INTEGER NOT NULL UNIQUE,
+                            movieStatus VARCHAR,
+                            created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                            updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                            FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX ix_movie_status_movie_id ON movie_status (movie_id)"))
+                    
+                    # If watch_history exists, migrate data from it to movie_status
+                    if "watch_history" in existing_tables:
+                        logger.info("Migrating data from watch_history to movie_status (taking most recent status per movie)...")
+                        # Check if watch_history has boolean or string status
+                        wh_columns = {col['name']: col for col in inspector.get_columns("watch_history")}
+                        if "watch_status" in wh_columns:
+                            # New schema with boolean
+                            conn.execute(text("""
+                                INSERT INTO movie_status (movie_id, movieStatus, created, updated)
+                                SELECT 
+                                    wh.movie_id,
+                                    CASE 
+                                        WHEN wh.watch_status = 1 THEN 'watched'
+                                        WHEN wh.watch_status = 0 THEN 'unwatched'
+                                        ELSE NULL
+                                    END,
+                                    MIN(wh.created) as created,
+                                    MAX(wh.updated) as updated
+                                FROM watch_history wh
+                                INNER JOIN (
+                                    SELECT movie_id, MAX(updated) as max_updated
+                                    FROM watch_history
+                                    GROUP BY movie_id
+                                ) latest ON wh.movie_id = latest.movie_id AND wh.updated = latest.max_updated
+                                GROUP BY wh.movie_id
+                            """))
+                        else:
+                            # Old schema migration path - this shouldn't happen but handle it
+                            conn.execute(text("""
+                                INSERT INTO movie_status (movie_id, movieStatus, created, updated)
+                                SELECT 
+                                    wh.movie_id,
+                                    CASE 
+                                        WHEN wh.watch_status = 'watched' THEN 'watched'
+                                        WHEN wh.watch_status = 'not watched' OR wh.watch_status = 'unwatched' THEN 'unwatched'
+                                        ELSE NULL
+                                    END,
+                                    MIN(wh.created) as created,
+                                    MAX(wh.updated) as updated
+                                FROM watch_history wh
+                                INNER JOIN (
+                                    SELECT movie_id, MAX(updated) as max_updated
+                                    FROM watch_history
+                                    GROUP BY movie_id
+                                ) latest ON wh.movie_id = latest.movie_id AND wh.updated = latest.max_updated
+                                GROUP BY wh.movie_id
+                            """))
+                        
+                        # VERIFY: Check that migration succeeded
+                        migrated_count = conn.execute(text("SELECT COUNT(*) FROM movie_status")).scalar()
+                        original_count = conn.execute(text("SELECT COUNT(DISTINCT movie_id) FROM watch_history")).scalar()
+                        logger.info(f"Migration verification: {migrated_count} rows in movie_status, {original_count} distinct movies in watch_history")
+                        
+                        if migrated_count != original_count:
+                            logger.warning(f"Migration data mismatch: {migrated_count} != {original_count}. watch_history will be kept for reference.")
+                        else:
+                            logger.info("Data migration successful. watch_history table is now deprecated but kept for reference.")
+                            logger.info("watch_history will be removed in a future migration after confirming movie_status works correctly.")
+                    else:
+                        logger.info("No watch_history table found. movie_status table created empty.")
+                else:
+                    # movie_status already exists - this might be from a previous partial migration
+                    existing_count = conn.execute(text("SELECT COUNT(*) FROM movie_status")).scalar()
+                    logger.info(f"movie_status table already exists with {existing_count} rows. Skipping creation.")
+                    
+                    # If watch_history exists but movie_status is empty, try to migrate
+                    if "watch_history" in existing_tables and existing_count == 0:
+                        logger.info("movie_status exists but is empty. Migrating data from watch_history...")
+                        wh_columns = {col['name']: col for col in inspector.get_columns("watch_history")}
+                        if "watch_status" in wh_columns:
+                            conn.execute(text("""
+                                INSERT INTO movie_status (movie_id, movieStatus, created, updated)
+                                SELECT 
+                                    wh.movie_id,
+                                    CASE 
+                                        WHEN wh.watch_status = 1 THEN 'watched'
+                                        WHEN wh.watch_status = 0 THEN 'unwatched'
+                                        ELSE NULL
+                                    END,
+                                    MIN(wh.created) as created,
+                                    MAX(wh.updated) as updated
+                                FROM watch_history wh
+                                INNER JOIN (
+                                    SELECT movie_id, MAX(updated) as max_updated
+                                    FROM watch_history
+                                    GROUP BY movie_id
+                                ) latest ON wh.movie_id = latest.movie_id AND wh.updated = latest.max_updated
+                                GROUP BY wh.movie_id
+                            """))
+                        logger.info("Data migration completed.")
+            
+            set_schema_version(7, "Converted watch_history to movie_status (one-to-one relationship)")
+            current_version = 7
+        
+        if current_version < 8:
+            logger.info("Migrating to schema version 8: Convert status boolean to movieStatus enum string")
+            with engine.begin() as conn:
+                # Check if movie_status table exists and has status column
+                if "movie_status" in existing_tables:
+                    table_columns = {col['name']: col for col in inspector.get_columns("movie_status")}
+                    if "status" in table_columns:
+                        # Rename status column to movieStatus and convert boolean to string enum
+                        logger.info("Converting status boolean to movieStatus enum string...")
+                        # SQLite doesn't support ALTER COLUMN, so we need to recreate the table
+                        conn.execute(text("""
+                            CREATE TABLE movie_status_new (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                                movie_id INTEGER NOT NULL UNIQUE,
+                                movieStatus VARCHAR,
+                                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                                FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE
+                            )
+                        """))
+                        conn.execute(text("CREATE INDEX ix_movie_status_movie_id ON movie_status_new (movie_id)"))
+                        
+                        # Migrate data: convert boolean to enum string
+                        conn.execute(text("""
+                            INSERT INTO movie_status_new (movie_id, movieStatus, created, updated)
+                            SELECT 
+                                movie_id,
+                                CASE 
+                                    WHEN status = 1 THEN 'watched'
+                                    WHEN status = 0 THEN 'unwatched'
+                                    ELSE NULL
+                                END,
+                                created,
+                                updated
+                            FROM movie_status
+                        """))
+                        
+                        # Drop old table and rename new one
+                        conn.execute(text("DROP TABLE movie_status"))
+                        conn.execute(text("ALTER TABLE movie_status_new RENAME TO movie_status"))
+            
+            set_schema_version(8, "Converted status boolean to movieStatus enum string")
+            current_version = 8
+        
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "
@@ -355,13 +511,13 @@ def migrate_db_schema():
         # Drop tables first (this automatically drops their indexes in SQLite)
         # But we also try to drop indexes explicitly in case they exist independently
         tables_to_drop = [
-            "movies_new", "ratings_new", "watch_history_new", 
+            "movies_new", "ratings_new", "movie_status_new", 
             "search_history_new", "launch_history_new", 
             "indexed_paths_new", "config_new", "screenshots_new", "images_new"
         ]
         indexes_to_drop = [
             "ix_movies_path", "ix_movies_name", "ix_movies_hash",
-            "ix_ratings_movie_id", "ix_watch_history_movie_id",
+            "ix_ratings_movie_id", "ix_movie_status_movie_id",
             "ix_search_history_query", "ix_launch_history_movie_id",
             "ix_indexed_paths_path", "ix_config_key", "ix_screenshots_movie_id", "ix_images_movie_id"
         ]
@@ -477,35 +633,41 @@ def migrate_db_schema():
             JOIN movies_new m ON m.path = r.movie_id
         """))
         
-        # Create new watch_history table
+        # Create new movie_status table (one-to-one, taking most recent status per movie)
         conn.execute(text("""
-            CREATE TABLE watch_history_new (
+            CREATE TABLE movie_status_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                movie_id INTEGER NOT NULL,
-                watch_status BOOLEAN,
+                movie_id INTEGER NOT NULL UNIQUE,
+                movieStatus VARCHAR,
                 created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                 updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                 FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
             )
         """))
-        conn.execute(text("CREATE INDEX ix_watch_history_movie_id ON watch_history_new (movie_id)"))
+        conn.execute(text("CREATE INDEX ix_movie_status_movie_id ON movie_status_new (movie_id)"))
         
-        # Migrate watch_history data
-        logger.info("Migrating watch_history data...")
-        # Convert old string status to boolean
+        # Migrate watch_history data - take most recent status per movie
+        logger.info("Migrating watch_history data to movie_status (taking most recent status per movie)...")
+        # Convert old string status to enum string and take most recent per movie
         conn.execute(text("""
-            INSERT INTO watch_history_new (movie_id, watch_status, created, updated)
+            INSERT INTO movie_status_new (movie_id, movieStatus, created, updated)
             SELECT 
                 m.id,
                 CASE 
-                    WHEN wh.watch_status = 'watched' THEN 1
-                    WHEN wh.watch_status = 'not watched' OR wh.watch_status = 'unwatched' THEN 0
+                    WHEN wh.watch_status = 'watched' OR wh.watch_status = 1 THEN 'watched'
+                    WHEN wh.watch_status = 'not watched' OR wh.watch_status = 'unwatched' OR wh.watch_status = 0 THEN 'unwatched'
                     ELSE NULL
                 END,
-                COALESCE(wh.timestamp, CURRENT_TIMESTAMP),
-                COALESCE(wh.timestamp, CURRENT_TIMESTAMP)
+                MIN(COALESCE(wh.timestamp, CURRENT_TIMESTAMP)),
+                MAX(COALESCE(wh.timestamp, CURRENT_TIMESTAMP))
             FROM watch_history wh
             JOIN movies_new m ON m.path = wh.movie_id
+            INNER JOIN (
+                SELECT movie_id, MAX(COALESCE(timestamp, '1970-01-01')) as max_timestamp
+                FROM watch_history
+                GROUP BY movie_id
+            ) latest ON wh.movie_id = latest.movie_id AND COALESCE(wh.timestamp, '1970-01-01') = latest.max_timestamp
+            GROUP BY m.id
         """))
         
         # Create new search_history table
@@ -635,6 +797,7 @@ def migrate_db_schema():
         logger.info("Dropping old tables...")
         conn.execute(text("DROP TABLE IF EXISTS ratings"))
         conn.execute(text("DROP TABLE IF EXISTS watch_history"))
+        conn.execute(text("DROP TABLE IF EXISTS movie_status"))
         conn.execute(text("DROP TABLE IF EXISTS search_history"))
         conn.execute(text("DROP TABLE IF EXISTS launch_history"))
         conn.execute(text("DROP TABLE IF EXISTS indexed_paths"))
@@ -649,7 +812,7 @@ def migrate_db_schema():
         logger.info("Renaming new tables...")
         conn.execute(text("ALTER TABLE movies_new RENAME TO movies"))
         conn.execute(text("ALTER TABLE ratings_new RENAME TO ratings"))
-        conn.execute(text("ALTER TABLE watch_history_new RENAME TO watch_history"))
+        conn.execute(text("ALTER TABLE movie_status_new RENAME TO movie_status"))
         conn.execute(text("ALTER TABLE search_history_new RENAME TO search_history"))
         conn.execute(text("ALTER TABLE launch_history_new RENAME TO launch_history"))
         conn.execute(text("ALTER TABLE indexed_paths_new RENAME TO indexed_paths"))
@@ -701,8 +864,8 @@ def remove_sample_files():
             # Delete Rating records
             db.query(Rating).filter(Rating.movie_id == movie.id).delete()
             
-            # Delete WatchHistory records
-            db.query(WatchHistory).filter(WatchHistory.movie_id == movie.id).delete()
+            # Delete MovieStatus record
+            db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).delete()
             
             # Delete LaunchHistory records
             db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).delete()

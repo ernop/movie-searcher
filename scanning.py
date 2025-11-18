@@ -812,7 +812,7 @@ def get_video_length(file_path):
     """Extract video length using video_processing module"""
     return get_video_length_vp(file_path)
 
-def extract_screenshots(video_path, num_screenshots=5, async_mode=True, scan_progress_dict=None):
+def extract_screenshots(video_path, num_screenshots=5, scan_progress_dict=None):
     """
     Extract screenshots from video using ffmpeg.
     
@@ -821,20 +821,14 @@ def extract_screenshots(video_path, num_screenshots=5, async_mode=True, scan_pro
     
     Returns a list of screenshot file paths (existing ones immediately, rest queued for background processing).
     """
-    return extract_screenshots_core(video_path, num_screenshots, load_config, find_ffmpeg_core, add_scan_log, async_mode, scan_progress_dict)
+    return extract_screenshots_core(video_path, num_screenshots, load_config, find_ffmpeg_core, add_scan_log, scan_progress_dict)
 
-def extract_movie_screenshot(video_path, timestamp_seconds=150, async_mode=True, priority: str = "normal", subtitle_path=None):
-    """Extract a single screenshot from video - can be synchronous or queued for async processing"""
-    if async_mode:
-        # Use video_processing module's extract_movie_screenshot which handles async queuing
-        return extract_movie_screenshot_core(
-            video_path, timestamp_seconds, async_mode,
-            load_config, find_ffmpeg_core, scan_progress, add_scan_log, priority, subtitle_path=subtitle_path
-        )
-    else:
-        # Synchronous mode - import here to avoid circular dependency
-        from video_processing import extract_movie_screenshot_sync
-        return extract_movie_screenshot_sync(video_path, timestamp_seconds, lambda: find_ffmpeg_core(load_config), subtitle_path=subtitle_path)
+def extract_movie_screenshot(video_path, timestamp_seconds=150, priority: str = "normal", subtitle_path=None, movie_id=None):
+    """Queue a screenshot extraction for async processing"""
+    return extract_movie_screenshot_core(
+        video_path, timestamp_seconds,
+        load_config, find_ffmpeg_core, scan_progress, add_scan_log, priority, subtitle_path=subtitle_path, movie_id=movie_id
+    )
 
 def process_frame_queue(max_workers=3):
     """Process queued frame extractions in background thread pool"""
@@ -946,29 +940,13 @@ def index_movie(file_path, db: Session = None):
         if len(screenshots) > 0:
             add_scan_log("info", f"  Using existing screenshot")
         
-        # Extract one movie screenshot (~3 minutes = 180 seconds)
-        add_scan_log("info", f"  Checking screenshot...")
-        if existing_screenshot:
-            # Check if the screenshot file still exists
-            if os.path.exists(existing_screenshot.shot_path):
-                add_scan_log("info", f"  Screenshot already exists")
-            else:
-                # Screenshot file was deleted, remove from DB and queue for re-extraction
-                add_scan_log("warning", f"  Screenshot file missing, queuing re-extraction...")
-                db.delete(existing_screenshot)
-                extract_movie_screenshot(normalized_path, timestamp_seconds=180, async_mode=True)
-        else:
-            # No screenshot exists, queue for extraction (even if file unchanged)
-            add_scan_log("info", f"  No screenshot found, queuing extraction...")
-            extract_movie_screenshot(normalized_path, timestamp_seconds=180, async_mode=True)
-        
         # Filter out YTS images before storing in database (defense in depth)
         images = filter_yts_images(images)
         
         # Clean movie name and extract year (pass full path to handle TV series with season/episode)
         cleaned_name, year = clean_movie_name(normalized_path)
         
-        # Create or update movie record
+        # Create or update movie record FIRST - we need movie.id before queuing screenshots
         if existing:
             # Update existing movie
             existing.name = cleaned_name
@@ -978,6 +956,8 @@ def index_movie(file_path, db: Session = None):
             existing.hash = file_hash
             existing.updated = datetime.now()
             movie = existing
+            # Flush to ensure we have the latest state
+            db.flush()
         else:
             # Create new movie
             movie = Movie(
@@ -991,6 +971,23 @@ def index_movie(file_path, db: Session = None):
             )
             db.add(movie)
             db.flush()  # Flush to get movie.id
+        
+        # Extract one movie screenshot (~3 minutes = 180 seconds)
+        # Now we have movie.id available to pass
+        add_scan_log("info", f"  Checking screenshot...")
+        if existing_screenshot:
+            # Check if the screenshot file still exists
+            if os.path.exists(existing_screenshot.shot_path):
+                add_scan_log("info", f"  Screenshot already exists")
+            else:
+                # Screenshot file was deleted, remove from DB and queue for re-extraction
+                add_scan_log("warning", f"  Screenshot file missing, queuing re-extraction...")
+                db.delete(existing_screenshot)
+                extract_movie_screenshot(normalized_path, timestamp_seconds=180, movie_id=movie.id)
+        else:
+            # No screenshot exists, queue for extraction (even if file unchanged)
+            add_scan_log("info", f"  No screenshot found, queuing extraction...")
+            extract_movie_screenshot(normalized_path, timestamp_seconds=180, movie_id=movie.id)
         
         # Store images in Image table
         if images:

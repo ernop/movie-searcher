@@ -29,30 +29,74 @@ try:
 except Exception:
     # Safe to ignore; file handler below still uses UTF-8
     pass
-LOG_FILE = Path(__file__).parent.parent / "movie_searcher.log" if Path(__file__).parent.parent.exists() else Path(__file__).parent / "movie_searcher.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
 
-try:
-    from mutagen import File as MutagenFile
-    HAS_MUTAGEN = True
-except ImportError:
-    HAS_MUTAGEN = False
+# Log file in root directory
+LOG_FILE = Path(__file__).parent / "movie_searcher.log"
+
+# Custom filter to suppress verbose video_processing logs from console
+class ConsoleLogFilter(logging.Filter):
+    """Filter to suppress verbose logs from video_processing module on console"""
+    def filter(self, record):
+        # Allow all logs that are WARNING or above
+        if record.levelno >= logging.WARNING:
+            return True
+        # Suppress INFO/DEBUG logs from video_processing module
+        if record.name.startswith('video_processing'):
+            return False
+        # Allow all other logs
+        return True
+
+# Global shutdown flag for filter (set during shutdown)
+_app_shutting_down = False
+
+# Custom filter to suppress asyncio shutdown errors (known Windows issue)
+class SuppressShutdownErrorsFilter(logging.Filter):
+    """Filter to suppress known harmless errors during shutdown"""
+    def filter(self, record):
+        # Suppress AssertionError from asyncio during shutdown (Windows ProactorEventLoop issue)
+        if record.levelno == logging.ERROR:
+            if 'asyncio' in record.name:
+                msg = record.getMessage() if hasattr(record, 'getMessage') else str(record.msg)
+                if 'AssertionError' in msg or '_attach' in msg:
+                    return False
+            # Suppress ffmpeg errors during shutdown (processes being killed is expected)
+            if 'video_processing' in record.name:
+                msg = record.getMessage() if hasattr(record, 'getMessage') else str(record.msg)
+                if '_ffmpeg_job failed' in msg and _app_shutting_down:
+                    return False
+        return True
+
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)  # Capture everything
+
+# File handler: logs everything (DEBUG and above) with shutdown error suppression
+file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+file_handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+file_handler.addFilter(SuppressShutdownErrorsFilter())
+root_logger.addHandler(file_handler)
+
+# Console handler: only logs INFO and above, with filtering for video_processing
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.addFilter(ConsoleLogFilter())
+console_handler.addFilter(SuppressShutdownErrorsFilter())
+console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+root_logger.addHandler(console_handler)
+
+logger = logging.getLogger(__name__)
 
 # Database setup - import from database module
 from database import (
     Base, SessionLocal, get_db,
-    Movie, Rating, WatchHistory, SearchHistory, LaunchHistory, IndexedPath, Config, Screenshot, Image, SchemaVersion,
+    Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, IndexedPath, Config, Screenshot, Image, SchemaVersion,
     init_db, migrate_db_schema, remove_sample_files,
     get_movie_id_by_path, get_indexed_paths_set, get_movie_screenshot_path
 )
+from models import MovieStatusEnum
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import func
 
@@ -62,7 +106,7 @@ from video_processing import (
     shutdown_flag, kill_all_active_subprocesses,
     run_interruptible_subprocess,
     get_video_length as get_video_length_vp, validate_ffmpeg_path, find_ffmpeg as find_ffmpeg_core,
-    extract_movie_screenshot_sync, generate_screenshot_filename,
+    generate_screenshot_filename,
     extract_screenshots as extract_screenshots_core,
     frame_extraction_queue, process_frame_queue as process_frame_queue_core,
     SCREENSHOT_DIR
@@ -215,6 +259,8 @@ async def lifespan(app):
     
     # Shutdown
     logger.info("Shutdown event triggered, cleaning up...")
+    global _app_shutting_down
+    _app_shutting_down = True
     shutdown_flag.set()
     kill_all_active_subprocesses()
 
@@ -233,14 +279,14 @@ class SearchRequest(BaseModel):
     query: str
 
 class LaunchRequest(BaseModel):
-    path: str
+    movie_id: int
     subtitle_path: Optional[str] = None
     close_existing_vlc: bool = True
     start_time: Optional[float] = None  # Start time in seconds
 
-class WatchedRequest(BaseModel):
-    path: str
-    watch_status: Optional[bool] = None  # None = unset, True = watched, False = unwatched
+class ChangeStatusRequest(BaseModel):
+    movie_id: int
+    movieStatus: Optional[str] = None  # None = unset, "watched", "unwatched", "want_to_watch"
 
 class RatingRequest(BaseModel):
     movie_id: int
@@ -256,7 +302,6 @@ class CleanNameTestRequest(BaseModel):
 class ScreenshotsIntervalRequest(BaseModel):
     movie_id: int
     every_minutes: float = 3
-    async_mode: bool = True
     subtitle_path: Optional[str] = None  # Path to subtitle file to burn in (if any)
 
 @app.post("/api/frames/start")
@@ -296,7 +341,7 @@ async def get_frame_worker_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 def get_video_length(file_path):
-    """Extract video length using mutagen if available, otherwise return None"""
+    """Extract video length using ffprobe from configured ffmpeg bundle"""
     return get_video_length_vp(file_path)
 
 def find_ffmpeg():
@@ -536,9 +581,9 @@ async def search_movies(
         # Get watched movie IDs efficiently
         watched_movie_ids = set()
         if filter_type in ("watched", "unwatched", "all"):
-            watched_entries = db.query(WatchHistory.movie_id).filter(
-                WatchHistory.watch_status == True
-            ).distinct().all()
+            watched_entries = db.query(MovieStatus.movie_id).filter(
+                MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value
+            ).all()
             watched_movie_ids = {row[0] for row in watched_entries}
 
         # Apply watched/unwatched filter
@@ -589,34 +634,53 @@ async def search_movies(
         # Preload watch status info (latest watch_status for each movie)
         watch_status_dict = {}
         if result_ids:
-            # Get latest watch entry for each movie (regardless of status)
-            watch_entries = db.query(WatchHistory).filter(
-                WatchHistory.movie_id.in_(result_ids)
-            ).order_by(WatchHistory.updated.desc()).all()
-            for entry in watch_entries:
-                if entry.movie_id not in watch_status_dict:
-                    watch_status_dict[entry.movie_id] = {
-                        "watch_status": entry.watch_status,
-                        "watched_date": entry.updated.isoformat() if entry.updated else None,
-                    }
+            # Get movie status for each movie (one-to-one relationship)
+            movie_statuses = db.query(MovieStatus).filter(
+                MovieStatus.movie_id.in_(result_ids)
+            ).all()
+            for movie_status in movie_statuses:
+                watch_status_dict[movie_status.movie_id] = {
+                    "watch_status": movie_status.movieStatus,
+                    "watched_date": movie_status.updated.isoformat() if movie_status.updated else None,
+                }
 
 
         # Build results
         for score, movie in page_slice:
             watch_info = watch_status_dict.get(movie.id, {})
             watch_status = watch_info.get("watch_status")
-            is_watched = watch_status is True  # For backward compatibility
+            is_watched = watch_status == MovieStatusEnum.WATCHED.value  # For backward compatibility
             
-            images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
-            screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
-            images = filter_yts_images(images)
-            screenshot_path = get_movie_screenshot_path(db, movie.id)
+            image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
+            screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
+            
+            # Return IDs and paths
+            images = [{"id": img.id, "path": img.image_path} for img in image_objs if "www.YTS.AM" not in img.image_path]
+            screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
+            
+            # For get_largest_image (needs paths)
+            image_paths = [img.image_path for img in image_objs if "www.YTS.AM" not in img.image_path]
+            screenshot_paths = [s.shot_path for s in screenshot_objs]
+            screenshot_obj = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).first()
+            screenshot_path = screenshot_obj.shot_path if screenshot_obj else None
             info = {
-                "images": images,
-                "screenshots": screenshots,
+                "images": image_paths,
+                "screenshots": screenshot_paths,
                 "frame": screenshot_path
             }
-            largest_image = get_largest_image(info)
+            largest_image_path = get_largest_image(info)
+            largest_image_id = None
+            if largest_image_path:
+                for img in image_objs:
+                    if img.image_path == largest_image_path and "www.YTS.AM" not in img.image_path:
+                        largest_image_id = img.id
+                        break
+                if not largest_image_id:
+                    for s in screenshot_objs:
+                        if s.shot_path == largest_image_path:
+                            largest_image_id = s.id
+                            break
+            
             has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
             
             # Get rating
@@ -636,8 +700,10 @@ async def search_movies(
                 "score": score,
                 "images": images,
                 "screenshots": screenshots,
-                "frame": screenshot_path,
-                "image": largest_image,
+                "screenshot_id": screenshot_obj.id if screenshot_obj else None,
+                "screenshot_path": screenshot_path,
+                "image_id": largest_image_id,
+                "image_path": largest_image_path,
                 "year": movie.year,
                 "has_launched": has_launched,
                 "rating": rating
@@ -666,116 +732,6 @@ async def search_movies(
     finally:
         db.close()
 
-@app.get("/api/movie")
-async def get_movie_details(path: str = Query(...)):
-    """Get detailed information about a specific movie"""
-    db = SessionLocal()
-    try:
-        from sqlalchemy.sql import func
-        # Resolve by normalized path, tolerant to slash variants and case on Windows
-        normalized_path = None
-        try:
-            normalized_path = os.path.normpath(path)
-        except Exception:
-            normalized_path = path
-
-        movie = db.query(Movie).filter(Movie.path == normalized_path).first()
-        if not movie and os.name == 'nt':
-            movie = db.query(Movie).filter(func.lower(Movie.path) == normalized_path.lower()).first()
-        if not movie:
-            swapped = normalized_path.replace("\\", "/") if "\\" in normalized_path else normalized_path.replace("/", "\\")
-            movie = db.query(Movie).filter(Movie.path == swapped).first()
-            if not movie and os.name == 'nt':
-                movie = db.query(Movie).filter(func.lower(Movie.path) == swapped.lower()).first()
-        if not movie:
-            raise HTTPException(status_code=404, detail="Movie not found")
-        
-        # Get latest watch status (None/True/False)
-        watch_entry = db.query(WatchHistory).filter(
-            WatchHistory.movie_id == movie.id
-        ).order_by(WatchHistory.updated.desc()).first()
-        watch_status = watch_entry.watch_status if watch_entry else None
-        
-        # Get images and screenshots from tables
-        images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
-        screenshots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
-        
-        # Filter out YTS images
-        images = filter_yts_images(images)
-        
-        # Get screenshot path
-        screenshot_path = get_movie_screenshot_path(db, movie.id)
-        
-        info = {
-            "images": images,
-            "screenshots": screenshots,
-            "frame": screenshot_path
-        }
-        
-        # Get largest image
-        largest_image = get_largest_image(info)
-
-        # If no image/screenshot is available, synchronously extract a thumbnail now
-        if not largest_image:
-            try:
-                # Prefer a reasonable default timestamp; extract_movie_screenshot_sync will clamp if needed
-                default_ts = 15
-                shot_path = extract_movie_screenshot_sync(movie.path, default_ts, find_ffmpeg)
-                if shot_path and os.path.exists(shot_path):
-                    # Persist to DB if not already present
-                    existing = db.query(Screenshot).filter(
-                        Screenshot.movie_id == movie.id,
-                        Screenshot.shot_path == shot_path
-                    ).first()
-                    if not existing:
-                        db.add(Screenshot(movie_id=movie.id, shot_path=shot_path, timestamp_seconds=default_ts))
-                        db.commit()
-                    # Refresh media lists
-                    screenshots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
-                    screenshot_path = get_movie_screenshot_path(db, movie.id)
-                    info = {
-                        "images": images,
-                        "screenshots": [s["path"] for s in screenshots],  # get_largest_image expects list of paths
-                        "frame": screenshot_path
-                    }
-                    largest_image = get_largest_image(info)
-            except HTTPException:
-                # Propagate API errors as-is
-                raise
-            except Exception as e:
-                # Non-fatal: If extraction fails, continue without image
-                logger.warning(f"On-demand screenshot extraction failed for {movie.path}: {e}")
-        
-        # Year is normalized and stored during indexing/cleaning
-        year = movie.year
-        
-        has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
-        
-        # Get rating
-        rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
-        rating = int(rating_entry.rating) if rating_entry else None
-        
-        return {
-            "id": movie.id,
-            "path": movie.path,
-            "name": movie.name,
-            "length": movie.length,
-            "created": movie.created,
-            "size": movie.size,
-            "watch_status": watch_status,
-            "watched": watch_status is True,  # Keep for backward compatibility
-            "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
-            "images": images,
-            "screenshots": screenshots,
-            "frame": screenshot_path,
-            "image": largest_image,
-            "year": year,
-            "has_launched": has_launched,
-            "rating": rating
-        }
-    finally:
-        db.close()
-
 @app.get("/api/movie/{movie_id}")
 async def get_movie_details_by_id(movie_id: int):
     """Get detailed information about a specific movie by its database ID"""
@@ -785,63 +741,54 @@ async def get_movie_details_by_id(movie_id: int):
         if not movie:
             raise HTTPException(status_code=404, detail="Movie not found")
 
-        # Get latest watch status (None/True/False)
-        watch_entry = db.query(WatchHistory).filter(
-            WatchHistory.movie_id == movie.id
-        ).order_by(WatchHistory.updated.desc()).first()
-        watch_status = watch_entry.watch_status if watch_entry else None
+        # Get watch status (None or enum value)
+        movie_status = db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).first()
+        watch_status = movie_status.movieStatus if movie_status else None
 
         # Get images and screenshots from tables
-        images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
-        screenshots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
+        image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
+        screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()
+        
+        # Filter out YTS images and return IDs and paths
+        images = [{"id": img.id, "path": img.image_path} for img in image_objs if "www.YTS.AM" not in img.image_path]
+        screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
 
-        # Filter out YTS images
-        images = filter_yts_images(images)
+        # Get screenshot ID and path (for frame)
+        screenshot_obj = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).first()
+        screenshot_id = screenshot_obj.id if screenshot_obj else None
+        screenshot_path = screenshot_obj.shot_path if screenshot_obj else None
 
-        # Get screenshot path
-        screenshot_path = get_movie_screenshot_path(db, movie.id)
-
+        # Build info dict for get_largest_image (needs paths to check file sizes)
+        image_paths = [img.image_path for img in image_objs if "www.YTS.AM" not in img.image_path]
+        screenshot_paths = [s.shot_path for s in screenshot_objs]
         info = {
-            "images": images,
-            "screenshots": screenshots,
+            "images": image_paths,
+            "screenshots": screenshot_paths,
             "frame": screenshot_path
         }
 
-        # Get largest image
-        largest_image = get_largest_image(info)
-
-        # If no image/screenshot is available, best-effort extract a thumbnail
-        if not largest_image:
-            try:
-                default_ts = 15
-                shot_path = extract_movie_screenshot_sync(movie.path, default_ts, find_ffmpeg)
-                if shot_path and os.path.exists(shot_path):
-                    existing = db.query(Screenshot).filter(
-                        Screenshot.movie_id == movie.id,
-                        Screenshot.shot_path == shot_path
-                    ).first()
-                    if not existing:
-                        db.add(Screenshot(movie_id=movie.id, shot_path=shot_path, timestamp_seconds=default_ts))
-                        db.commit()
-                    screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
-                    screenshot_path = get_movie_screenshot_path(db, movie.id)
-                    info = {
-                        "images": images,
-                        "screenshots": screenshots,
-                        "frame": screenshot_path
-                    }
-                    largest_image = get_largest_image(info)
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.warning(f"On-demand screenshot extraction failed for id={movie.id}: {e}")
+        # Get largest image ID and path
+        largest_image_path = get_largest_image(info)
+        largest_image_id = None
+        if largest_image_path:
+            # Find the ID for the largest image path
+            for img in image_objs:
+                if img.image_path == largest_image_path and "www.YTS.AM" not in img.image_path:
+                    largest_image_id = img.id
+                    break
+            if not largest_image_id:
+                # Check screenshots
+                for s in screenshot_objs:
+                    if s.shot_path == largest_image_path:
+                        largest_image_id = s.id
+                        break
 
         year = movie.year
         has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
         
         # Get rating
         rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
-        rating = int(rating_entry.rating) if rating_entry else None
+        rating = int(rating_entry.rating) if rating_entry and rating_entry.rating is not None else None
         
         return {
             "id": movie.id,
@@ -851,12 +798,14 @@ async def get_movie_details_by_id(movie_id: int):
             "created": movie.created,
             "size": movie.size,
             "watch_status": watch_status,
-            "watched": watch_status is True,  # Keep for backward compatibility
-            "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
+            "watched": watch_status == MovieStatusEnum.WATCHED.value,  # Keep for backward compatibility
+            "watched_date": movie_status.updated.isoformat() if movie_status and movie_status.updated else None,
             "images": images,
             "screenshots": screenshots,
-            "frame": screenshot_path,
-            "image": largest_image,
+            "screenshot_id": screenshot_id,
+            "screenshot_path": screenshot_path,
+            "image_id": largest_image_id,
+            "image_path": largest_image_path,
             "year": year,
             "has_launched": has_launched,
             "rating": rating
@@ -864,52 +813,13 @@ async def get_movie_details_by_id(movie_id: int):
     finally:
         db.close()
 
-@app.get("/api/image")
-async def get_image(image_path: str):
-    """Serve image files"""
-    from fastapi.responses import FileResponse
-    
-    try:
-        if not image_path:
-            raise HTTPException(status_code=400, detail="image_path is required")
-        # Normalize path - handle both forward and backslashes on Windows
-        # URL decode first in case it was encoded
-        import urllib.parse
-        decoded_path = urllib.parse.unquote(image_path)
-        # Convert forward slashes to backslashes on Windows for path operations
-        if os.name == 'nt':  # Windows
-            normalized_path = decoded_path.replace('/', '\\')
-        else:
-            normalized_path = decoded_path.replace('\\', '/')
-        
-        path_obj = Path(normalized_path)
-        if not path_obj.exists():
-            raise HTTPException(status_code=404, detail="Image not found")
-        
-        # Security: ensure path is within allowed directories
-        movies_folder = get_movies_folder()
-        screenshots_dir = (Path(__file__).parent / "screenshots")
-        if movies_folder or screenshots_dir:
-            movies_path = Path(movies_folder)
-            try:
-                path_obj.resolve().relative_to(movies_path.resolve())
-            except ValueError:
-                # Also allow screenshots directory (use local path to avoid None resolve())
-                try:
-                    path_obj.resolve().relative_to(screenshots_dir.resolve())
-                except ValueError:
-                    raise HTTPException(status_code=403, detail="Access denied")
-        
-        return FileResponse(str(path_obj))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error serving image {image_path}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# REMOVED: Insecure path-based image endpoint
+# Use /api/image/{image_id} instead - serves images by database ID (secure)
 
 @app.post("/api/movie/screenshots/interval")
 async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
     """Queue screenshots every N minutes across the movie duration (default 3 minutes)."""
+    logger.info(f"POST /api/movie/screenshots/interval - Request data: movie_id={request.movie_id}, every_minutes={request.every_minutes}, subtitle_path={request.subtitle_path}")
     db = SessionLocal()
     try:
         movie = db.query(Movie).filter(Movie.id == request.movie_id).first()
@@ -991,9 +901,10 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
         for ts in timestamps:
             try:
                 # User-triggered work gets higher priority over backlog
-                result = extract_movie_screenshot(movie.path, timestamp_seconds=ts, async_mode=request.async_mode, priority="user_high", subtitle_path=subtitle_path)
+                # Pass movie_id to avoid path lookup issues in database save
+                result = extract_movie_screenshot(movie.path, timestamp_seconds=ts, priority="user_high", subtitle_path=subtitle_path, movie_id=movie.id)
                 if result is None:
-                    # None means it was queued successfully (async mode)
+                    # None means it was queued successfully
                     queued += 1
                     if queued <= 5 or queued % 10 == 0:  # Log first 5 and every 10th
                         logger.info(f"Queued screenshot at {ts}s (total queued: {queued})")
@@ -1045,6 +956,27 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
     finally:
         db.close()
 
+@app.get("/api/image/{image_id}")
+async def get_image_by_id(image_id: int):
+    """Serve an image file by its database ID"""
+    from fastapi.responses import FileResponse
+    db = SessionLocal()
+    try:
+        img = db.query(Image).filter(Image.id == image_id).first()
+        if not img:
+            raise HTTPException(status_code=404, detail="Image not found")
+        path_obj = Path(img.image_path)
+        if not path_obj.exists():
+            raise HTTPException(status_code=404, detail="Image file missing")
+        return FileResponse(str(path_obj))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving image id={image_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
 @app.get("/api/screenshot/{screenshot_id}")
 async def get_screenshot_by_id(screenshot_id: int):
     """Serve a screenshot image by its database ID"""
@@ -1057,19 +989,6 @@ async def get_screenshot_by_id(screenshot_id: int):
         path_obj = Path(shot.shot_path)
         if not path_obj.exists():
             raise HTTPException(status_code=404, detail="Screenshot file missing")
-        # Restrict to the app screenshots directory
-        screenshots_dir = (Path(__file__).parent / "screenshots").resolve()
-        try:
-            path_obj.resolve().relative_to(screenshots_dir)
-        except ValueError:
-            # As a safeguard, also allow under movies folder (legacy paths)
-            movies_folder = get_movies_folder()
-            if not movies_folder:
-                raise HTTPException(status_code=403, detail="Access denied")
-            try:
-                path_obj.resolve().relative_to(Path(movies_folder).resolve())
-            except ValueError:
-                raise HTTPException(status_code=403, detail="Access denied")
         return FileResponse(str(path_obj))
     except HTTPException:
         raise
@@ -1082,19 +1001,20 @@ async def get_screenshot_by_id(screenshot_id: int):
 @app.post("/api/launch")
 async def launch_movie(request: LaunchRequest):
     """Launch movie in VLC with optional subtitle"""
+    logger.info(f"POST /api/launch - Request data: movie_id={request.movie_id}, subtitle_path={request.subtitle_path}, close_existing_vlc={request.close_existing_vlc}, start_time={request.start_time}")
     # Validate movie exists in index before launching
     db = SessionLocal()
     try:
-        movie = db.query(Movie).filter(Movie.path == request.path).first()
+        movie = db.query(Movie).filter(Movie.id == request.movie_id).first()
         if not movie:
-            raise HTTPException(status_code=404, detail=f"Movie not found in index: {request.path}")
+            raise HTTPException(status_code=404, detail=f"Movie not found: {request.movie_id}")
     finally:
         db.close()
     
     # Delegate to VLC integration module
     try:
         result = launch_movie_in_vlc(
-            movie_path=request.path,
+            movie_path=movie.path,
             subtitle_path=request.subtitle_path,
             close_existing=request.close_existing_vlc,
             start_time=request.start_time
@@ -1161,29 +1081,15 @@ async def get_launch_history():
     db = SessionLocal()
     try:
         # Single query with JOINs to get all data at once
-        # Subquery to get most recent watch entry per movie
-        watch_subq = db.query(
-            WatchHistory.movie_id,
-            func.max(WatchHistory.updated).label('max_updated')
-        ).filter(
-            WatchHistory.watch_status == True
-        ).group_by(WatchHistory.movie_id).subquery()
-        
-        watch_alias = aliased(WatchHistory)
-        
         results = db.query(
             LaunchHistory,
             Movie,
-            watch_alias,
+            MovieStatus,
             Screenshot
         ).join(
             Movie, LaunchHistory.movie_id == Movie.id
         ).outerjoin(
-            watch_subq, Movie.id == watch_subq.c.movie_id
-        ).outerjoin(
-            watch_alias, 
-            (watch_alias.movie_id == watch_subq.c.movie_id) & 
-            (watch_alias.updated == watch_subq.c.max_updated)
+            MovieStatus, Movie.id == MovieStatus.movie_id
         ).outerjoin(
             Screenshot, Movie.id == Screenshot.movie_id
         ).order_by(
@@ -1191,28 +1097,41 @@ async def get_launch_history():
         ).limit(100).all()
         
         launches_with_info = []
-        for launch, movie, watch_entry, screenshot in results:
+        for launch, movie, movie_status, screenshot in results:
             if not movie:
                 continue
             
             # Get images and screenshots from tables
-            images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
-            screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
+            image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
+            screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
             
-            # Filter out YTS images
-            images = filter_yts_images(images)
+            # Return IDs and paths
+            images = [{"id": img.id, "path": img.image_path} for img in image_objs if "www.YTS.AM" not in img.image_path]
+            screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
             
-            # Get screenshot path
-            screenshot_path = None
-            if screenshot and os.path.exists(screenshot.shot_path):
-                screenshot_path = screenshot.shot_path
-            
+            # For get_largest_image (needs paths)
+            image_paths = [img.image_path for img in image_objs if "www.YTS.AM" not in img.image_path]
+            screenshot_paths = [s.shot_path for s in screenshot_objs]
+            screenshot_path = screenshot.shot_path if screenshot and os.path.exists(screenshot.shot_path) else None
             info = {
-                "images": images,
-                "screenshots": screenshots,
+                "images": image_paths,
+                "screenshots": screenshot_paths,
                 "frame": screenshot_path
             }
+            largest_image_path = get_largest_image(info)
+            largest_image_id = None
+            if largest_image_path:
+                for img in image_objs:
+                    if img.image_path == largest_image_path and "www.YTS.AM" not in img.image_path:
+                        largest_image_id = img.id
+                        break
+                if not largest_image_id:
+                    for s in screenshot_objs:
+                        if s.shot_path == largest_image_path:
+                            largest_image_id = s.id
+                            break
             
+            screenshot_path = screenshot.shot_path if screenshot and os.path.exists(screenshot.shot_path) else None
             movie_info = {
                 "id": movie.id,
                 "path": movie.path,
@@ -1220,12 +1139,14 @@ async def get_launch_history():
                 "length": movie.length,
                 "created": movie.created,
                 "size": movie.size,
-                "watched": watch_entry is not None,
-                "watched_date": watch_entry.updated.isoformat() if watch_entry and watch_entry.updated else None,
+                "watched": movie_status is not None and movie_status.movieStatus == MovieStatusEnum.WATCHED.value,
+                "watched_date": movie_status.updated.isoformat() if movie_status and movie_status.updated else None,
                 "images": images,
                 "screenshots": screenshots,
-                "frame": screenshot_path,
-                "image": get_largest_image(info),
+                "screenshot_id": screenshot.id if screenshot else None,
+                "screenshot_path": screenshot_path,
+                "image_id": largest_image_id,
+                "image_path": largest_image_path,
                 "year": movie.year
             }
             
@@ -1239,60 +1160,53 @@ async def get_launch_history():
     finally:
         db.close()
 
-@app.post("/api/watched")
-async def mark_watched(request: WatchedRequest):
-    """Mark movie as watched or unwatched"""
+@app.post("/api/change-status")
+async def change_status(request: ChangeStatusRequest):
+    """Change movie status (watched, unwatched, want_to_watch, or null to unset)"""
+    logger.info(f"POST /api/change-status - Request data: movie_id={request.movie_id}, movieStatus={request.movieStatus}")
     db = SessionLocal()
     try:
-        # Log the incoming request for debugging
-        logger.debug(f"mark_watched called with path={request.path}, watch_status={request.watch_status}")
         
-        # Resolve movie by path, with path normalization to be robust to slash variants on Windows
-        movie = None
-        if request.path:
-            input_path = request.path
-            try:
-                # Normalize path (handles both forward and backslashes)
-                normalized_path = os.path.normpath(input_path)
-            except Exception:
-                normalized_path = input_path
-
-            # First try exact match as stored
-            movie = db.query(Movie).filter(Movie.path == normalized_path).first()
-
-            if not movie and os.name == 'nt':
-                # On Windows, also attempt a case-insensitive comparison, since some sources may vary in case
-                movie = db.query(Movie).filter(func.lower(Movie.path) == normalized_path.lower()).first()
-
-            if not movie:
-                # As a last attempt, try swapping slashes in case the DB stored variant differs
-                swapped = normalized_path.replace("\\", "/") if "\\" in normalized_path else normalized_path.replace("/", "\\")
-                movie = db.query(Movie).filter(Movie.path == swapped).first()
-                if not movie and os.name == 'nt':
-                    movie = db.query(Movie).filter(func.lower(Movie.path) == swapped.lower()).first()
-
+        # Validate movieStatus value if provided
+        if request.movieStatus is not None:
+            valid_statuses = {MovieStatusEnum.WATCHED.value, MovieStatusEnum.UNWATCHED.value, MovieStatusEnum.WANT_TO_WATCH.value}
+            if request.movieStatus not in valid_statuses:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid movieStatus: {request.movieStatus}. Must be one of: {', '.join(valid_statuses)}"
+                )
+        
+        # Look up movie by ID
+        movie = db.query(Movie).filter(Movie.id == request.movie_id).first()
         if not movie:
-            raise HTTPException(status_code=404, detail=f"Movie not found: {request.path}")
+            raise HTTPException(status_code=404, detail=f"Movie not found: {request.movie_id}")
         
-        # Delete all existing watch history entries for this movie
-        db.query(WatchHistory).filter(
-            WatchHistory.movie_id == movie.id
-        ).delete()
-        
-        # If watch_status is not None, create a new entry with that status
-        if request.watch_status is not None:
-            watch_entry = WatchHistory(
-                movie_id=movie.id,
-                watch_status=request.watch_status
-            )
-            db.add(watch_entry)
+        # Update or create movie status (one-to-one relationship)
+        if request.movieStatus is not None:
+            movie_status = db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).first()
+            if movie_status:
+                movie_status.movieStatus = request.movieStatus
+                # updated field will be automatically set by SQLAlchemy onupdate
+            else:
+                movie_status = MovieStatus(
+                    movie_id=movie.id,
+                    movieStatus=request.movieStatus
+                )
+                db.add(movie_status)
+        else:
+            # If movieStatus is None, remove the status entry (unset)
+            movie_status = db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).first()
+            if movie_status:
+                db.delete(movie_status)
         
         db.commit()
         
-        # Return the new watch_status
-        return {"status": "updated", "watch_status": request.watch_status}
+        # Return the new movieStatus
+        return {"status": "updated", "movieStatus": request.movieStatus}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error in mark_watched endpoint: {e}", exc_info=True)
+        logger.error(f"Error in change_status endpoint: {e}", exc_info=True)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -1305,57 +1219,75 @@ async def get_watched():
     try:
         watched_movies_list = []
         
-        # Get all movies with "watched" status, get most recent entry per movie
-        watch_entries = db.query(WatchHistory).filter(
-            WatchHistory.watch_status == True
-        ).order_by(WatchHistory.updated.desc()).all()
+        # Get all movies with "watched" status (one-to-one relationship, no need for deduplication)
+        movie_statuses = db.query(MovieStatus).filter(
+            MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value
+        ).order_by(MovieStatus.updated.desc()).all()
         
-        watched_movie_ids = set()
-        for watch_entry in watch_entries:
-            if watch_entry.movie_id not in watched_movie_ids:
-                watched_movie_ids.add(watch_entry.movie_id)
-                
-                movie = db.query(Movie).filter(Movie.id == watch_entry.movie_id).first()
-                if movie:
+        for movie_status in movie_statuses:
+            movie = db.query(Movie).filter(Movie.id == movie_status.movie_id).first()
+            if movie:
+                try:
+                    # Get images and screenshots from tables
+                    image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
+                    screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
+                    
+                    # Return IDs and paths
+                    images = [{"id": img.id, "path": img.image_path} for img in image_objs if "www.YTS.AM" not in img.image_path]
+                    screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
+                    
+                    # Get screenshot ID and path
+                    screenshot_obj = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).first()
+                    screenshot_id = screenshot_obj.id if screenshot_obj else None
+                    screenshot_path = screenshot_obj.shot_path if screenshot_obj else None
+                    
+                    # For get_largest_image (needs paths)
+                    image_paths = [img.image_path for img in image_objs if "www.YTS.AM" not in img.image_path]
+                    screenshot_paths = [s.shot_path for s in screenshot_objs]
+                    info = {
+                        "images": image_paths,
+                        "screenshots": screenshot_paths,
+                        "frame": screenshot_path
+                    }
+                    
+                    # Safely get largest image ID and path with error handling
+                    largest_image_id = None
+                    largest_image_path = None
                     try:
-                        # Get images and screenshots from tables
-                        images = [img.image_path for img in db.query(Image).filter(Image.movie_id == movie.id).all()]
-                        screenshots = [s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()]
-                        
-                        # Get screenshot path
-                        screenshot_path = get_movie_screenshot_path(db, movie.id)
-                        
-                        info = {
-                            "images": images,
-                            "screenshots": screenshots,
-                            "frame": screenshot_path
-                        }
-                        
-                        # Safely get largest image with error handling
-                        largest_image = None
-                        try:
-                            largest_image = get_largest_image(info)
-                        except Exception as e:
-                            logger.warning(f"Error getting largest image for movie {movie.id}: {e}")
-                        
-                        movie_info = {
-                            "path": movie.path,
-                            "name": movie.name,
-                            "length": movie.length,
-                            "created": movie.created,
-                            "size": movie.size,
-                            "watched_date": watch_entry.updated.isoformat() if watch_entry.updated else None,
-                            "images": images,
-                            "screenshots": screenshots,
-                            "frame": screenshot_path,
-                            "image": largest_image,
-                            "year": movie.year,
-                            "has_launched": db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
-                        }
-                        watched_movies_list.append(movie_info)
+                        largest_image_path = get_largest_image(info)
+                        if largest_image_path:
+                            for img in image_objs:
+                                if img.image_path == largest_image_path and "www.YTS.AM" not in img.image_path:
+                                    largest_image_id = img.id
+                                    break
+                            if not largest_image_id:
+                                for s in screenshot_objs:
+                                    if s.shot_path == largest_image_path:
+                                        largest_image_id = s.id
+                                        break
                     except Exception as e:
-                        logger.error(f"Error processing movie {watch_entry.movie_id} in watched list: {e}", exc_info=True)
-                        continue
+                        logger.warning(f"Error getting largest image for movie {movie.id}: {e}")
+                    
+                    movie_info = {
+                        "path": movie.path,
+                        "name": movie.name,
+                        "length": movie.length,
+                        "created": movie.created,
+                        "size": movie.size,
+                        "watched_date": movie_status.updated.isoformat() if movie_status.updated else None,
+                        "images": images,
+                        "screenshots": screenshots,
+                        "screenshot_id": screenshot_id,
+                        "screenshot_path": screenshot_path,
+                        "image_id": largest_image_id,
+                        "image_path": largest_image_path,
+                        "year": movie.year,
+                        "has_launched": db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
+                    }
+                    watched_movies_list.append(movie_info)
+                except Exception as e:
+                    logger.error(f"Error processing movie {movie_status.movie_id} in watched list: {e}", exc_info=True)
+                    continue
         
         # Sort by watched date (most recent first)
         # Handle None values by converting them to empty string for sorting
@@ -1369,13 +1301,26 @@ async def get_watched():
         db.close()
 
 @app.get("/api/subtitles")
-async def get_subtitles(video_path: str):
+async def get_subtitles(movie_id: int = Query(None), video_path: str = Query(None)):
     """Find available subtitle files for a video
     
     Searches in:
     1. Current folder (same directory as video)
     2. "subs" folder (case insensitive) if it exists in the same directory
     """
+    # Get video path from movie_id if provided
+    if movie_id:
+        db = SessionLocal()
+        try:
+            movie = db.query(Movie).filter(Movie.id == movie_id).first()
+            if not movie:
+                raise HTTPException(status_code=404, detail=f"Movie not found: {movie_id}")
+            video_path = movie.path
+        finally:
+            db.close()
+    elif not video_path:
+        raise HTTPException(status_code=400, detail="Either movie_id or video_path must be provided")
+    
     video_path_obj = Path(video_path)
     video_dir = video_path_obj.parent
     
@@ -1428,6 +1373,7 @@ async def get_rating(movie_id: int):
 @app.post("/api/rating")
 async def set_rating(request: RatingRequest):
     """Set rating for a movie (1-5 only)"""
+    logger.info(f"POST /api/rating - Request data: movie_id={request.movie_id}, rating={request.rating}")
     db = SessionLocal()
     try:
         # Validate rating is 1-5
@@ -1479,49 +1425,6 @@ async def delete_rating(movie_id: int):
     finally:
         db.close()
 
-@app.get("/api/watch-history")
-async def get_watch_history(movie_id: Optional[str] = Query(None), limit: int = Query(100, ge=1, le=1000)):
-    """Get watch history for a specific movie or all movies. movie_id can be a path or integer ID."""
-    db = SessionLocal()
-    try:
-        actual_movie_id = None
-        if movie_id:
-            # Try to parse as integer first
-            try:
-                actual_movie_id = int(movie_id)
-            except ValueError:
-                # If not an integer, treat as path and get movie ID
-                movie = db.query(Movie).filter(Movie.path == movie_id).first()
-                if movie:
-                    actual_movie_id = movie.id
-                else:
-                    raise HTTPException(status_code=404, detail=f"Movie not found: {movie_id}")
-        
-        if actual_movie_id:
-            watch_history = db.query(WatchHistory).filter(
-                WatchHistory.movie_id == actual_movie_id
-            ).order_by(WatchHistory.updated.desc()).limit(limit).all()
-        else:
-            watch_history = db.query(WatchHistory).order_by(
-                WatchHistory.updated.desc()
-            ).limit(limit).all()
-        
-        history_list = []
-        for entry in watch_history:
-            movie = db.query(Movie).filter(Movie.id == entry.movie_id).first()
-            history_list.append({
-                "id": entry.id,
-                "movie_id": entry.movie_id,
-                "movie_path": movie.path if movie else None,
-                "name": movie.name if movie else f"Movie ID {entry.movie_id}",
-                "watch_status": entry.watch_status,
-                "timestamp": entry.updated.isoformat() if entry.updated else None
-            })
-        
-        return {"history": history_list}
-    finally:
-        db.close()
-
 @app.get("/api/config")
 async def get_config():
     """Get current configuration"""
@@ -1552,7 +1455,7 @@ async def get_config():
 async def set_config(request: ConfigRequest):
     """Set movies folder path and/or user settings"""
     global ROOT_MOVIE_PATH
-    logger.info(f"set_config called with: {request.movies_folder}, settings: {request.settings}")
+    logger.info(f"POST /api/config - Request data: movies_folder={request.movies_folder}, settings={request.settings}")
     
     config = load_config()
     
@@ -1700,11 +1603,10 @@ async def get_stats():
     db = SessionLocal()
     try:
         total_movies = db.query(Movie).count()
-        # Count distinct movies with "watched" status
-        watched_movie_ids = {entry.movie_id for entry in db.query(WatchHistory).filter(
-            WatchHistory.watch_status == True
-        ).all()}
-        watched_count = len(watched_movie_ids)
+        # Count movies with "watched" status
+        watched_count = db.query(MovieStatus).filter(
+            MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value
+        ).count()
         indexed_paths = [ip.path for ip in db.query(IndexedPath).all()]
         movies_folder = get_movies_folder()
         return {
@@ -1776,6 +1678,7 @@ async def get_cleaning_patterns():
 @app.post("/api/cleaning-patterns")
 async def save_cleaning_patterns_endpoint(data: dict):
     """Save approved cleaning patterns"""
+    logger.info(f"POST /api/cleaning-patterns - Request data: {json.dumps(data, indent=2)}")
     try:
         patterns = {
             'exact_strings': set(data.get('exact_strings', [])),
@@ -1832,6 +1735,7 @@ async def reclean_all_names():
 @app.post("/api/clean-name/test")
 async def test_clean_name(request: CleanNameTestRequest):
     """Test existing clean_movie_name function without modifying any data"""
+    logger.info(f"POST /api/clean-name/test - Request data: text={request.text}")
     try:
         patterns = load_cleaning_patterns()
         cleaned, year = clean_movie_name(request.text, patterns)
@@ -1929,13 +1833,13 @@ async def explore_movies(
 
         # Apply watched filter using EXISTS subquery for performance
         if filter_type == "watched":
-            exists_watch = db.query(WatchHistory.id).filter(
-                (WatchHistory.movie_id == Movie.id) & (WatchHistory.watch_status == True)
+            exists_watch = db.query(MovieStatus.id).filter(
+                (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
             ).exists()
             movie_q = movie_q.filter(exists_watch)
         elif filter_type == "unwatched":
-            exists_watch = db.query(WatchHistory.id).filter(
-                (WatchHistory.movie_id == Movie.id) & (WatchHistory.watch_status == True)
+            exists_watch = db.query(MovieStatus.id).filter(
+                (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
             ).exists()
             movie_q = movie_q.filter(~exists_watch)
 
@@ -2001,25 +1905,17 @@ async def explore_movies(
         
         movie_ids = [m.id for m in rows]
 
-        # Batched fetch for watch status info (latest watch entry regardless of status) limited to page ids
+        # Batched fetch for watch status info (one-to-one relationship)
         watch_status_info = {}
         if movie_ids:
-            subq = db.query(
-                WatchHistory.movie_id, func.max(WatchHistory.updated).label("max_updated")
-            ).filter(
-                WatchHistory.movie_id.in_(movie_ids)
-            ).group_by(WatchHistory.movie_id).subquery()
-
-            wh_alias = aliased(WatchHistory)
-            latest_watches = db.query(wh_alias).join(
-                subq,
-                (wh_alias.movie_id == subq.c.movie_id) & (wh_alias.updated == subq.c.max_updated)
+            movie_statuses = db.query(MovieStatus).filter(
+                MovieStatus.movie_id.in_(movie_ids)
             ).all()
-            for w in latest_watches:
-                watch_status_info[w.movie_id] = {
-                    "watch_status": w.watch_status,
-                    "watched": w.watch_status is True,  # Keep for backward compatibility
-                    "watched_date": w.updated.isoformat() if w.updated else None
+            for ms in movie_statuses:
+                watch_status_info[ms.movie_id] = {
+                    "watch_status": ms.movieStatus,
+                    "watched": ms.movieStatus == MovieStatusEnum.WATCHED.value,  # Keep for backward compatibility
+                    "watched_date": ms.updated.isoformat() if ms.updated else None
                 }
 
 
@@ -2072,13 +1968,13 @@ async def explore_movies(
         # Fetch only needed columns for speed
         counts_q = db.query(Movie.id, Movie.name, Movie.year)
         if filter_type == "watched":
-            exists_watch = db.query(WatchHistory.id).filter(
-                (WatchHistory.movie_id == Movie.id) & (WatchHistory.watch_status == True)
+            exists_watch = db.query(MovieStatus.id).filter(
+                (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
             ).exists()
             counts_q = counts_q.filter(exists_watch)
         elif filter_type == "unwatched":
-            exists_watch = db.query(WatchHistory.id).filter(
-                (WatchHistory.movie_id == Movie.id) & (WatchHistory.watch_status == True)
+            exists_watch = db.query(MovieStatus.id).filter(
+                (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
             ).exists()
             counts_q = counts_q.filter(~exists_watch)
         letter_counts = {}
@@ -2179,22 +2075,14 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
         # Batched fetch for watch status info (latest watch entry regardless of status)
         watch_status_info = {}
         if movie_ids:
-            subq = db.query(
-                WatchHistory.movie_id, func.max(WatchHistory.updated).label("max_updated")
-            ).filter(
-                WatchHistory.movie_id.in_(movie_ids)
-            ).group_by(WatchHistory.movie_id).subquery()
-            
-            wh_alias = aliased(WatchHistory)
-            latest_watches = db.query(wh_alias).join(
-                subq,
-                (wh_alias.movie_id == subq.c.movie_id) & (wh_alias.updated == subq.c.max_updated)
+            movie_statuses = db.query(MovieStatus).filter(
+                MovieStatus.movie_id.in_(movie_ids)
             ).all()
-            for w in latest_watches:
-                watch_status_info[w.movie_id] = {
-                    "watch_status": w.watch_status,
-                    "watched": w.watch_status is True,
-                    "watched_date": w.updated.isoformat() if w.updated else None
+            for ms in movie_statuses:
+                watch_status_info[ms.movie_id] = {
+                    "watch_status": ms.movieStatus,
+                    "watched": ms.movieStatus == MovieStatusEnum.WATCHED.value,
+                    "watched_date": ms.updated.isoformat() if ms.updated else None
                 }
         
         # One screenshot id per movie (prefer smallest id as representative)
@@ -2261,6 +2149,8 @@ if __name__ == "__main__":
     def signal_handler(sig, frame):
         """Handle Ctrl+C gracefully"""
         logger.info("Received interrupt signal, shutting down...")
+        global _app_shutting_down
+        _app_shutting_down = True
         shutdown_flag.set()
         kill_all_active_subprocesses()
         sys.exit(0)
@@ -2271,6 +2161,7 @@ if __name__ == "__main__":
         signal.signal(signal.SIGTERM, signal_handler)
     
     # Configure uvicorn logging
+    # Note: uvicorn logs will go to both console (for HTTP requests) and file (for complete log)
     import logging.config
     uvicorn_log_config = {
         "version": 1,
@@ -2294,15 +2185,27 @@ if __name__ == "__main__":
                 "class": "logging.StreamHandler",
                 "stream": "ext://sys.stdout",
             },
+            "file_default": {
+                "formatter": "default",
+                "class": "logging.FileHandler",
+                "filename": str(LOG_FILE),
+                "encoding": "utf-8",
+            },
+            "file_access": {
+                "formatter": "access",
+                "class": "logging.FileHandler",
+                "filename": str(LOG_FILE),
+                "encoding": "utf-8",
+            },
         },
         "loggers": {
             "uvicorn.error": {
-                "handlers": ["default"],
+                "handlers": ["default", "file_default"],
                 "level": "INFO",
                 "propagate": False,
             },
             "uvicorn.access": {
-                "handlers": ["access"],
+                "handlers": ["access", "file_access"],
                 "level": "INFO",
                 "propagate": False,
             },

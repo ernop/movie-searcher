@@ -4,6 +4,27 @@
 - Avoid compliments or praise; keep the tone neutral.
 - Verify claims before agreeing; no reflexive agreement.
 - Never include real credentials (API keys, tokens, passwords); use placeholders instead.
+- NEVER lie to the user. If you fail to do something, do NOT pretend you succeeded. Always be honest about what you actually accomplished versus what you attempted.
+
+# DECISION LOGGING FOR FALLBACK ANALYSIS
+
+Some fallback code exists temporarily and is instrumented to track which paths are actually used. The purpose is to collect data (100-200 samples) on which fallback paths execute, then remove unused paths.
+
+Decision points are logged to `decision_log.jsonl` (JSONL format) with:
+- `timestamp`: ISO format timestamp
+- `decision`: Unique decision point name (e.g., "srt_encoding", "subtitle_font_loading")
+- `path`: Which path was taken (e.g., "utf-8", "arial.ttf", "textsize")
+- `context`: Optional additional context
+
+Tracked decision points:
+- `srt_encoding`: Which encoding succeeded (utf-8, latin-1, windows-1252, iso-8859-1, cp1252, utf8_with_errors_ignore)
+- `subtitle_font_loading`: Which font loaded (arial.ttf, verdana.ttf, tahoma.ttf, default_font)
+- `pil_textsize_method`: Which PIL method worked (textsize, textbbox)
+- `process_executor_submit`: Submission success (first_attempt, retry_after_recreate)
+- `ffmpeg_path_parsing`: How config parsed (direct_string, json_path_field, json_ffmpeg_path_field, json_value_field, raw_row_value, exception_fallback_raw_value)
+- `vlc_config_loading`: Config load result (config_loaded, default_true_on_error)
+
+After collecting 100-200 samples, analyze the log to see which paths dominate. If one path is used >95% of the time, remove the fallback code and always use that path. If usage is mixed, investigate and fix the root cause.
 
 # PRIME DIRECTIVE - NO FALLBACKS
 
@@ -161,10 +182,59 @@ If connection fails, fix the service availability, network config, or credential
 
 Fallbacks create multiple sources of truth, hide bugs, and make debugging harder. They seem helpful but cause:
 
-1. Inconsistent behavior - different code paths produce different results
-2. Hidden failures - errors are masked instead of fixed
-3. Maintenance burden - multiple methods to maintain and keep in sync
-4. False confidence - system appears to work but produces unreliable data
+1. **Inconsistent behavior** - different code paths produce different results
+2. **Hidden failures** - errors are masked instead of fixed
+3. **Maintenance burden** - multiple methods to maintain and keep in sync
+4. **False confidence** - system appears to work but produces unreliable data
+5. **Unclear execution paths** - you never know which code is actually running, making debugging nearly impossible
+
+### The Core Problem
+
+When fallbacks exist, you can't tell which path your code took. This makes it impossible to:
+- Debug issues (which path failed?)
+- Understand system behavior (what's actually happening?)
+- Fix root causes (which method should work?)
+- Trust the system (is it using the right method?)
+
+### Real Example from This Project
+
+We found screenshots were randomly missing because:
+- Screenshot extraction succeeded (file created)
+- Database save failed silently (path lookup failed)
+- Code fell back to alternative path lookup
+- Fallback also failed silently
+- Result: Screenshot exists on disk but not in database = "randomly missing"
+
+If we had no fallback, the error would have been visible immediately and we could have fixed the root cause (path mismatch) instead of debugging "random" missing screenshots.
+
+### The Pattern to Avoid
+
+```python
+# BAD: Try method 1, if fails try method 2, if fails try method 3
+value = try_method_1() or try_method_2() or try_method_3() or default_value
+
+# BAD: Silent fallback
+try:
+    result = primary_method()
+except:
+    result = fallback_method()  # Hides the error!
+
+# BAD: Multiple attempts
+if not value:
+    value = try_alternative()
+if not value:
+    value = try_another_alternative()
+```
+
+### The Right Approach
+
+```python
+# GOOD: Use the correct method, fail explicitly if it doesn't work
+value = correct_method()  # If this fails, the error is visible
+
+# GOOD: Fix the root cause instead of working around it
+# If correct_method() fails, fix why it fails, don't add alternatives
+```
 
 When you see missing data or failures, the fix is always to improve the single upstream source, never to add downstream alternatives.
 
@@ -172,6 +242,127 @@ When you see missing data or failures, the fix is always to improve the single u
 
 - Every table MUST have an autoincrement integer ID as primary key (NOT NULL)
 - Every table MUST have `created` and `updated` DateTime fields that auto-update
+
+# DATABASE MIGRATION RULES
+
+## The Core Principle: Migrations Must Be Idempotent and Handle Partial Failure States
+
+Migrations can fail partway through execution, leaving the database in an inconsistent state:
+- New tables/indexes may have been created
+- Old tables/indexes may still exist
+- Schema version may not have been updated
+- Data may be partially migrated
+
+## The Root Cause of Migration Failures
+
+When writing migrations, we mistakenly assumed:
+1. **Clean state assumption**: That migrations always start from a clean, known state
+2. **Atomic operation assumption**: That migrations either complete fully or roll back completely
+3. **No cleanup needed**: That we can create new objects without checking for existing artifacts
+
+In reality, failed migrations leave artifacts that must be cleaned up before retrying.
+
+## The Rule: Always Clean Up Before Creating, But NEVER Drop Production Tables
+
+WRONG (assumes clean state and drops tables):
+```python
+# Create new table
+conn.execute(text("CREATE TABLE new_table (...)"))
+conn.execute(text("CREATE INDEX ix_new_table_id ON new_table (id)"))
+# Migrate data
+conn.execute(text("INSERT INTO new_table SELECT ... FROM old_table"))
+# Drop old table - DANGEROUS IN PRODUCTION!
+conn.execute(text("DROP TABLE old_table"))
+# Rename
+conn.execute(text("ALTER TABLE new_table RENAME TO final_table"))
+```
+
+WRONG (drops tables without verification):
+```python
+# Clean up any artifacts from previous failed attempts FIRST
+conn.execute(text("DROP TABLE IF EXISTS new_table"))
+conn.execute(text("DROP TABLE IF EXISTS final_table"))
+# Drop old table - STILL DANGEROUS!
+conn.execute(text("DROP TABLE IF EXISTS old_table"))
+```
+
+RIGHT (handles partial failure AND preserves data):
+```python
+# SAFETY: Backup existing table if it has data
+if "final_table" in existing_tables:
+    existing_count = conn.execute(text("SELECT COUNT(*) FROM final_table")).scalar()
+    if existing_count > 0:
+        logger.warning(f"Backing up existing final_table with {existing_count} rows...")
+        conn.execute(text("DROP TABLE IF EXISTS final_table_backup_vN"))
+        conn.execute(text("CREATE TABLE final_table_backup_vN AS SELECT * FROM final_table"))
+
+# Clean up intermediate artifacts from previous failed attempts (safe to drop)
+conn.execute(text("DROP TABLE IF EXISTS new_table"))
+conn.execute(text("DROP INDEX IF EXISTS ix_new_table_id"))
+
+# Create new table
+conn.execute(text("CREATE TABLE new_table (...)"))
+conn.execute(text("CREATE INDEX ix_new_table_id ON new_table (id)"))
+
+# Migrate data
+conn.execute(text("INSERT INTO new_table SELECT ... FROM old_table"))
+
+# VERIFY: Check that migration succeeded before touching old table
+migrated_count = conn.execute(text("SELECT COUNT(*) FROM new_table")).scalar()
+original_count = conn.execute(text("SELECT COUNT(*) FROM old_table")).scalar()
+if migrated_count != original_count:
+    raise Exception(f"Migration verification failed: {migrated_count} != {original_count}")
+
+# SAFETY: Rename old table to backup (NEVER drop in production)
+logger.info("Backing up old_table to old_table_backup_vN...")
+conn.execute(text("DROP TABLE IF EXISTS old_table_backup_vN"))
+conn.execute(text("ALTER TABLE old_table RENAME TO old_table_backup_vN"))
+
+# Only drop intermediate/empty tables, never production data tables
+if "final_table" in existing_tables and existing_count == 0:
+    conn.execute(text("DROP TABLE IF EXISTS final_table"))
+
+# Rename new table
+conn.execute(text("ALTER TABLE new_table RENAME TO final_table"))
+logger.info("Migration complete. Old tables backed up with _backup_vN suffix.")
+```
+
+## Why This Matters
+
+When a migration fails:
+- The database is left in an inconsistent state
+- Schema version is not updated (still at old version)
+- On next startup, migration tries again
+- If we don't clean up artifacts, we get "already exists" errors
+- User must manually fix database or we must handle it in code
+
+## The Fix Pattern
+
+1. **Backup before modifying**: Always backup existing tables with data before replacing them
+2. **Verify before dropping**: Check row counts and data integrity before removing old tables
+3. **Rename, don't drop**: Rename old tables to `_backup_vN` instead of dropping them (allows recovery)
+4. **Only drop intermediate tables**: Only drop empty/intermediate tables from failed migrations, never production data
+5. **Check for both old and new**: Don't just check for old state - also check for partial new state
+6. **Make migrations idempotent**: They should be safe to run multiple times
+7. **Extensive logging**: Log every step so you can trace what happened if something goes wrong
+
+## Example: Table Rename Migration
+
+When migrating from `old_table` to `new_table`:
+- **Backup** `new_table` if it exists with data (to `new_table_backup_vN`)
+- **Drop** only intermediate tables from failed attempts (`new_table_temp`, `new_table_new`)
+- **Drop** only empty indexes that might exist independently
+- **Create** fresh `new_table_new`
+- **Migrate** data from `old_table` to `new_table_new`
+- **Verify** row counts match before proceeding
+- **Rename** `old_table` to `old_table_backup_vN` (NEVER drop)
+- **Rename** `new_table_new` to `new_table`
+
+This ensures the migration works whether:
+- It's the first run (clean state)
+- It's a retry after partial failure (artifacts exist)
+- It's a retry after complete failure (both old and new exist)
+- **And most importantly**: Data is always preserved in backup tables for recovery
 
 # GENERAL DEVELOPMENT RULES
 
