@@ -13,7 +13,7 @@ import logging
 from models import (
     Base,
     Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, 
-    IndexedPath, Config, Screenshot, Image, SchemaVersion, MovieAudio,
+    IndexedPath, Config, Screenshot, SchemaVersion, MovieAudio,
     CURRENT_SCHEMA_VERSION
 )
 
@@ -478,6 +478,28 @@ def migrate_db_schema():
             set_schema_version(8, "Converted status boolean to movieStatus enum string")
             current_version = 8
         
+        if current_version < 9:
+            logger.info("Migrating to schema version 9: Add image_path column to movies table")
+            existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
+            if "image_path" not in existing_columns:
+                with engine.begin() as conn:
+                    logger.info("Adding 'image_path' column to movies table...")
+                    conn.execute(text("ALTER TABLE movies ADD COLUMN image_path VARCHAR"))
+                    logger.info("Migration complete: added 'image_path' column")
+            
+            set_schema_version(9, "Added image_path column to movies table")
+            current_version = 9
+        
+        if current_version < 10:
+            logger.info("Migrating to schema version 10: Drop images table (replaced by movie.image_path)")
+            with engine.begin() as conn:
+                logger.info("Dropping 'images' table...")
+                conn.execute(text("DROP TABLE IF EXISTS images"))
+                logger.info("Migration complete: dropped 'images' table")
+            
+            set_schema_version(10, "Dropped images table (replaced by movie.image_path)")
+            current_version = 10
+        
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "
@@ -857,9 +879,6 @@ def remove_sample_files():
         for movie in sample_movies:
             # Delete Screenshot records
             db.query(Screenshot).filter(Screenshot.movie_id == movie.id).delete()
-            
-            # Delete Image records
-            db.query(Image).filter(Image.movie_id == movie.id).delete()
             
             # Delete Rating records
             db.query(Rating).filter(Rating.movie_id == movie.id).delete()

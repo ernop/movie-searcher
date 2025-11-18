@@ -25,6 +25,7 @@ class Movie(Base):
     size = Column(Integer, nullable=True)
     hash = Column(String, nullable=True, index=True)
     language = Column(String, nullable=True, index=True)  # Primary audio language code (e.g., 'en', 'es', 'fr')
+    image_path = Column(String, nullable=True)  # Path to movie's image (poster/cover) or fallback screenshot
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -92,16 +93,6 @@ class Screenshot(Base):
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
-class Image(Base):
-    """Images that came with the movie (posters, covers, thumbnails, etc.) - existing files found in movie folder"""
-    __tablename__ = "images"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
-    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
-    image_path = Column(String, nullable=False)  # Path to the image file
-    created = Column(DateTime, default=func.now(), nullable=False)
-    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-
 class MovieAudio(Base):
     """Audio streams/types available for a movie (e.g., language codes like eng, jpn, und)."""
     __tablename__ = "movie_audio"
@@ -122,5 +113,5 @@ class SchemaVersion(Base):
     applied_at = Column(DateTime, default=func.now(), nullable=False)
 
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 10
 

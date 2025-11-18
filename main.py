@@ -92,7 +92,7 @@ logger = logging.getLogger(__name__)
 # Database setup - import from database module
 from database import (
     Base, SessionLocal, get_db,
-    Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, IndexedPath, Config, Screenshot, Image, SchemaVersion,
+    Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, IndexedPath, Config, Screenshot, SchemaVersion,
     init_db, migrate_db_schema, remove_sample_files,
     get_movie_id_by_path, get_indexed_paths_set, get_movie_screenshot_path
 )
@@ -124,8 +124,7 @@ from scanning import (
     add_scan_log, is_sample_file, get_file_hash, find_images_in_folder,
     clean_movie_name, filter_yts_images,
     load_cleaning_patterns, extract_screenshots, extract_movie_screenshot,
-    process_frame_queue, VIDEO_EXTENSIONS, IMAGE_EXTENSIONS,
-    set_callbacks as set_scanning_callbacks
+    process_frame_queue, VIDEO_EXTENSIONS, IMAGE_EXTENSIONS
 )
 
 # FastAPI app will be created after lifespan function is defined
@@ -135,87 +134,89 @@ app = None
 # Configuration
 SCRIPT_DIR = Path(__file__).parent.absolute()
 
+# Initialize video processing immediately at module load time
+# (lifespan function is not reliably called in all uvicorn configurations)
+logger.info(f"Initializing video processing at module load...")
+from video_processing import initialize_video_processing
+initialize_video_processing(SCRIPT_DIR)
+logger.info(f"Video processing initialized")
+
 # Prevent duplicate scan starts (race between concurrent requests)
 scan_start_lock = threading.Lock()
 
-# Initialize video processing will be run during app startup (lifespan)
-
 SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.vtt', '.ass', '.ssa'}
 
-def load_config():
-    """Load configuration from database"""
-    db = SessionLocal()
-    try:
-        config = {}
-        try:
-            config_rows = db.query(Config).all()
-            for row in config_rows:
-                # Parse as JSON - if invalid, log error and skip
-                try:
-                    config[row.key] = json.loads(row.value)
-                except (json.JSONDecodeError, TypeError) as e:
-                    logger.warning(f"Invalid JSON in config key '{row.key}': {e}. Skipping.")
-                    continue
-        except Exception as e:
-            # Database tables not initialized yet
-            logger.debug(f"Database not initialized yet: {e}")
-            pass
+# Import config functions from shared module
+from config import load_config, save_config, get_movies_folder
+
+def filter_existing_screenshots(screenshot_objs: list) -> list:
+    """
+    Filter screenshot objects to only include those where the file actually exists on disk.
+    Returns list of Screenshot objects with existing files.
+    
+    Handles path normalization issues - paths in DB might be absolute, relative, or have different separators.
+    """
+    existing = []
+    for screenshot in screenshot_objs:
+        if not screenshot.shot_path:
+            logger.debug(f"Screenshot has no shot_path (will be filtered): screenshot_id={screenshot.id}")
+            continue
         
-        return config
-    finally:
-        db.close()
+        # Try multiple path resolution strategies
+        path_exists = False
+        path_variants = [
+            screenshot.shot_path,  # Original path as stored
+            str(Path(screenshot.shot_path)),  # Path object conversion
+            str(Path(screenshot.shot_path).resolve()),  # Resolved absolute path
+        ]
+        
+        # Also try relative to screenshot directory if it looks relative
+        from video_processing import SCREENSHOT_DIR
+        if SCREENSHOT_DIR:
+            # If path doesn't look absolute (no drive letter on Windows, no leading / on Unix)
+            if not (len(screenshot.shot_path) > 1 and screenshot.shot_path[1] == ':') and not screenshot.shot_path.startswith('/'):
+                path_variants.append(str(SCREENSHOT_DIR / screenshot.shot_path))
+            # Extract filename and try in screenshot dir
+            filename = Path(screenshot.shot_path).name
+            path_variants.append(str(SCREENSHOT_DIR / filename))
+        
+        for path_variant in path_variants:
+            try:
+                if Path(path_variant).exists():
+                    path_exists = True
+                    break
+            except Exception:
+                continue
+        
+        if path_exists:
+            existing.append(screenshot)
+        else:
+            logger.info(f"Screenshot file missing (will be filtered): screenshot_id={screenshot.id}, shot_path={screenshot.shot_path}, movie_id={screenshot.movie_id}")
+    return existing
 
-def save_config(config):
-    """Save configuration to database"""
-    db = SessionLocal()
-    try:
-        for key, value in config.items():
-            # Always JSON-encode the value, even if it's a string
-            # This ensures consistent storage format and proper parsing on load
-            value_str = json.dumps(value)
-            existing = db.query(Config).filter(Config.key == key).first()
-            if existing:
-                existing.value = value_str
-            else:
-                db.add(Config(key=key, value=value_str))
-        db.commit()
-    finally:
-        db.close()
-
-def get_movies_folder():
-    """Get the movies folder path from config only - no defaults, no guessing"""
-    config = load_config()
-    path = config.get("movies_folder")
-    if path:
-        return path
-    return None
-
-def get_image_url_path(image_path):
-    """Convert absolute image path to relative URL path for static serving"""
+def get_image_url_path(image_path: str) -> Optional[str]:
+    """
+    Convert absolute image path to relative URL path for static serving.
+    Returns None if path is a screenshot (handled separately) or if movies folder not configured.
+    
+    Args:
+        image_path: Absolute path to image file
+        
+    Returns:
+        Relative path from movies folder root, or None if not in movies folder
+    """
     if not image_path:
         return None
     
-    # Check if it's a screenshot (in screenshots directory)
-    from video_processing import SCREENSHOT_DIR
-    if SCREENSHOT_DIR:
-        try:
-            image_path_obj = Path(image_path).resolve()
-            screenshot_dir_obj = Path(SCREENSHOT_DIR).resolve()
-            try:
-                relative_path = image_path_obj.relative_to(screenshot_dir_obj)
-                # Screenshots are served via /screenshots/ - return None to use screenshot path directly
-                return None  # Screenshots handled separately via filename extraction
-            except ValueError:
-                pass  # Not in screenshots directory
-        except Exception:
-            pass
+    # Screenshots are handled separately via /screenshots/ endpoint
+    if 'screenshots' in image_path:
+        return None
     
-    # Check if it's in movies folder
     movies_folder = get_movies_folder()
     if not movies_folder:
         return None
+    
     try:
-        # Convert to Path objects and resolve
         image_path_obj = Path(image_path).resolve()
         movies_folder_obj = Path(movies_folder).resolve()
         
@@ -225,10 +226,56 @@ def get_image_url_path(image_path):
             # Convert to forward slashes for URL
             return str(relative_path).replace('\\', '/')
         except ValueError:
-            # Image is not within movies folder
+            # Image is not in movies folder
             return None
     except Exception:
         return None
+
+def ensure_movie_has_screenshot(movie_id: int, movie_path: str, has_image: bool, screenshot_objs: list):
+    """
+    Ensure movie has at least one screenshot or image. If not, queue a screenshot at 5 minutes (300s).
+    This is called when viewing movie details or cards to ensure every movie has visual content.
+    
+    Args:
+        movie_id: Movie ID
+        movie_path: Path to movie file
+        has_image: Whether movie has an image_path set and file exists
+        screenshot_objs: List of Screenshot objects (already filtered for existing files)
+    """
+    has_screenshots = len(screenshot_objs) > 0
+    
+    if not has_image and not has_screenshots:
+        # Queue mandatory screenshot at 5 minutes (300 seconds)
+        logger.info(f"Movie movie_id={movie_id} has no images or screenshots. Queuing mandatory screenshot at 300s...")
+        try:
+            # Check queue size before to verify if screenshot gets queued
+            from video_processing import frame_extraction_queue
+            queue_size_before = frame_extraction_queue.qsize()
+            
+            result = extract_movie_screenshot(
+                movie_path,
+                timestamp_seconds=300,
+                priority="normal",
+                movie_id=movie_id
+            )
+            # extract_movie_screenshot returns:
+            # - str(path) if screenshot already exists (file on disk)
+            # - None if queued successfully OR if ffmpeg not found
+            # We check queue size to verify it was actually queued
+            if isinstance(result, str):
+                logger.info(f"Screenshot already exists for movie_id={movie_id} at 300s: {result}")
+            else:
+                # Check if queue size increased (indicates successful queue)
+                queue_size_after = frame_extraction_queue.qsize()
+                if queue_size_after > queue_size_before:
+                    logger.info(f"Successfully queued mandatory screenshot at 300s for movie_id={movie_id}, path={movie_path} (queue size: {queue_size_before} -> {queue_size_after})")
+                else:
+                    logger.warning(f"Failed to queue screenshot for movie_id={movie_id} - queue size unchanged ({queue_size_before}). Check if ffmpeg is configured.")
+        except Exception as e:
+            logger.error(f"Failed to queue mandatory screenshot for movie_id={movie_id}, path={movie_path}: {e}", exc_info=True)
+    else:
+        logger.debug(f"Movie movie_id={movie_id} already has image={has_image} or screenshots={has_screenshots}, skipping auto-queue")
+
 
 # Auto-detect and save ffmpeg if not configured (called during startup)
 def auto_detect_ffmpeg():
@@ -274,13 +321,18 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app):
     """Lifespan context manager for startup and shutdown"""
-    # Startup
-    logger.info("Startup: initializing database...")
-    # Note: init_db creates missing tables but doesn't modify existing ones.
-    # migrate_db_schema handles one-time migration from old schema.
-    init_db()
-    migrate_db_schema()
-    logger.info("Startup: database ready.")
+    try:
+        # Startup
+        logger.info("=== LIFESPAN STARTUP BEGIN ===")
+        logger.info("Startup: initializing database...")
+        # Note: init_db creates missing tables but doesn't modify existing ones.
+        # migrate_db_schema handles one-time migration from old schema.
+        init_db()
+        migrate_db_schema()
+        logger.info("Startup: database ready.")
+    except Exception as e:
+        logger.error(f"Error during lifespan startup: {e}", exc_info=True)
+        raise
 
     # Initialize video processing and ffmpeg after DB is ready
     logger.info("Startup: initializing video processing...")
@@ -294,11 +346,11 @@ async def lifespan(app):
         app.mount("/", StaticFiles(directory=str(static_dir), html=False), name="static")
         logger.info(f"Startup: mounted static directory at /")
     
-    # Mount screenshots directory as static files (after SCREENSHOT_DIR is initialized)
+    # Screenshots are served via custom endpoint /screenshots/{filename} for proper URL encoding handling
+    # StaticFiles mount removed - using custom endpoint handles spaces and special characters correctly
     from video_processing import SCREENSHOT_DIR
     if SCREENSHOT_DIR and SCREENSHOT_DIR.exists():
-        app.mount("/screenshots", StaticFiles(directory=str(SCREENSHOT_DIR)), name="screenshots")
-        logger.info(f"Startup: mounted screenshots directory at /screenshots")
+        logger.info(f"Startup: screenshots directory ready at {SCREENSHOT_DIR} (served via /screenshots/ endpoint)")
     
     # Mount movies folder as static files for image serving
     movies_folder = get_movies_folder()
@@ -309,12 +361,16 @@ async def lifespan(app):
         except Exception as e:
             logger.warning(f"Failed to mount movies directory: {e}")
 
-    removed_count = remove_sample_files()
-    if removed_count > 0:
-        print(f"Removed {removed_count} sample file(s) from database")
-    
-    # Set up callbacks for scanning module to avoid circular imports
-    set_scanning_callbacks(load_config, get_movies_folder)
+    try:
+        removed_count = remove_sample_files()
+        if removed_count > 0:
+            print(f"Removed {removed_count} sample file(s) from database")
+        
+        # No longer needed - scanning module imports config directly
+        logger.info("=== LIFESPAN STARTUP COMPLETE ===")
+    except Exception as e:
+        logger.error(f"Error during lifespan startup (final phase): {e}", exc_info=True)
+        raise
     
     yield
     
@@ -697,6 +753,32 @@ async def search_movies(
                     "watched_date": movie_status.updated.isoformat() if movie_status.updated else None,
                 }
 
+        # Batch load all screenshots for all movies in result set
+        screenshots_dict = {}  # movie_id -> list of Screenshot objects
+        first_screenshot_dict = {}  # movie_id -> first Screenshot object
+        if result_ids:
+            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(result_ids)).all()
+            for s in all_screenshots:
+                if s.movie_id not in screenshots_dict:
+                    screenshots_dict[s.movie_id] = []
+                    first_screenshot_dict[s.movie_id] = s
+                screenshots_dict[s.movie_id].append(s)
+
+        # Batch load launch history flags
+        launched_set = set()
+        if result_ids:
+            launched_rows = db.query(LaunchHistory.movie_id).filter(
+                LaunchHistory.movie_id.in_(result_ids)
+            ).distinct().all()
+            launched_set = {r.movie_id for r in launched_rows}
+
+        # Batch load ratings
+        rating_dict = {}
+        if result_ids:
+            rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
+                Rating.movie_id.in_(result_ids)
+            ).all()
+            rating_dict = {movie_id: int(rating) for movie_id, rating in rating_rows}
 
         # Build results
         for score, movie in page_slice:
@@ -704,41 +786,22 @@ async def search_movies(
             watch_status = watch_info.get("watch_status")
             is_watched = watch_status == MovieStatusEnum.WATCHED.value  # For backward compatibility
             
-            image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
-            screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
+            # Get screenshots from preloaded dictionary
+            screenshot_objs_raw = screenshots_dict.get(movie.id, [])
             
-            # Return IDs and paths
-            images = [{"id": img.id, "path": img.image_path, "url_path": get_image_url_path(img.image_path)} for img in image_objs if "www.YTS.AM" not in img.image_path]
+            # Filter to only screenshots that actually exist on disk
+            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
+            
+            # Ensure movie has at least one screenshot/image - queue if missing
+            has_image = bool(movie.image_path and os.path.exists(movie.image_path))
+            ensure_movie_has_screenshot(movie.id, movie.path, has_image, screenshot_objs)
+            
             screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
-            
-            # For get_largest_image (needs paths)
-            image_paths = [img.image_path for img in image_objs if "www.YTS.AM" not in img.image_path]
-            screenshot_paths = [s.shot_path for s in screenshot_objs]
-            screenshot_obj = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).first()
+            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
             screenshot_path = screenshot_obj.shot_path if screenshot_obj else None
-            info = {
-                "images": image_paths,
-                "screenshots": screenshot_paths,
-                "frame": screenshot_path
-            }
-            largest_image_path = get_largest_image(info)
-            largest_image_id = None
-            if largest_image_path:
-                for img in image_objs:
-                    if img.image_path == largest_image_path and "www.YTS.AM" not in img.image_path:
-                        largest_image_id = img.id
-                        break
-                if not largest_image_id:
-                    for s in screenshot_objs:
-                        if s.shot_path == largest_image_path:
-                            largest_image_id = s.id
-                            break
             
-            has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
-            
-            # Get rating
-            rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
-            rating = int(rating_entry.rating) if rating_entry else None
+            has_launched = movie.id in launched_set
+            rating = rating_dict.get(movie.id)
 
             results.append({
                 "id": movie.id,
@@ -751,13 +814,11 @@ async def search_movies(
                 "watched": is_watched,  # Keep for backward compatibility
                 "watched_date": watch_info.get("watched_date"),
                 "score": score,
-                "images": images,
                 "screenshots": screenshots,
                 "screenshot_id": screenshot_obj.id if screenshot_obj else None,
                 "screenshot_path": screenshot_path,
-                "image_id": largest_image_id,
-                "image_path": largest_image_path,
-                "image_path_url": get_image_url_path(largest_image_path) if largest_image_path else None,
+                "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
+                "image_path_url": get_image_url_path(movie.image_path) if movie.image_path else None,
                 "year": movie.year,
                 "has_launched": has_launched,
                 "rating": rating
@@ -799,43 +860,18 @@ async def get_movie_details_by_id(movie_id: int):
         movie_status = db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).first()
         watch_status = movie_status.movieStatus if movie_status else None
 
-        # Get images and screenshots from tables
-        image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
-        screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()
+        # Get screenshots from table
+        screenshot_objs_raw = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()
         
-        # Filter out YTS images and return IDs and paths (convert absolute paths to relative URL paths)
-        images = [{"id": img.id, "path": img.image_path, "url_path": get_image_url_path(img.image_path)} for img in image_objs if "www.YTS.AM" not in img.image_path]
+        # Filter to only screenshots that actually exist on disk
+        screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
+        
         screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
 
-        # Get screenshot ID and path (for frame)
-        screenshot_obj = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).first()
+        # Get screenshot ID and path (for frame) - only from existing screenshots
+        screenshot_obj = screenshot_objs[0] if screenshot_objs else None
         screenshot_id = screenshot_obj.id if screenshot_obj else None
         screenshot_path = screenshot_obj.shot_path if screenshot_obj else None
-
-        # Build info dict for get_largest_image (needs paths to check file sizes)
-        image_paths = [img.image_path for img in image_objs if "www.YTS.AM" not in img.image_path]
-        screenshot_paths = [s.shot_path for s in screenshot_objs]
-        info = {
-            "images": image_paths,
-            "screenshots": screenshot_paths,
-            "frame": screenshot_path
-        }
-
-        # Get largest image ID and path
-        largest_image_path = get_largest_image(info)
-        largest_image_id = None
-        if largest_image_path:
-            # Find the ID for the largest image path
-            for img in image_objs:
-                if img.image_path == largest_image_path and "www.YTS.AM" not in img.image_path:
-                    largest_image_id = img.id
-                    break
-            if not largest_image_id:
-                # Check screenshots
-                for s in screenshot_objs:
-                    if s.shot_path == largest_image_path:
-                        largest_image_id = s.id
-                        break
 
         year = movie.year
         has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
@@ -843,6 +879,11 @@ async def get_movie_details_by_id(movie_id: int):
         # Get rating
         rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
         rating = int(rating_entry.rating) if rating_entry and rating_entry.rating is not None else None
+        
+        # Ensure movie has at least one screenshot/image - queue if missing
+        # Check movie.image_path instead of Image table
+        has_image = bool(movie.image_path and os.path.exists(movie.image_path))
+        ensure_movie_has_screenshot(movie.id, movie.path, has_image, screenshot_objs)
         
         return {
             "id": movie.id,
@@ -854,13 +895,10 @@ async def get_movie_details_by_id(movie_id: int):
             "watch_status": watch_status,
             "watched": watch_status == MovieStatusEnum.WATCHED.value,  # Keep for backward compatibility
             "watched_date": movie_status.updated.isoformat() if movie_status and movie_status.updated else None,
-            "images": images,
             "screenshots": screenshots,
             "screenshot_id": screenshot_id,
             "screenshot_path": screenshot_path,
-            "image_id": largest_image_id,
-            "image_path": largest_image_path,
-            "image_path_url": get_image_url_path(largest_image_path) if largest_image_path else None,
+            "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
             "year": year,
             "has_launched": has_launched,
             "rating": rating
@@ -909,35 +947,24 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
             # If no timestamps after filtering, use first step instead of 0
             timestamps = [int(step_seconds)] if step_seconds < length_seconds else []
 
-        # FIRST: Delete orphaned screenshot files (files on disk not in database) BEFORE deleting from DB
-        # This prevents race conditions where orphaned files get synced back to DB
-        orphaned_files = []
+        # FIRST: Sync screenshots to detect orphaned files (files on disk not in database)
+        # This uses the sync function which properly normalizes paths
+        from screenshot_sync import sync_movie_screenshots
+        from video_processing import SCREENSHOT_DIR
+        
+        sync_result = sync_movie_screenshots(movie.id, SCREENSHOT_DIR)
+        orphaned_files = sync_result.get("orphaned_files", [])
+        
+        # Delete orphaned files before deleting from DB (prevents race conditions)
         orphaned_deleted = 0
-        try:
-            from video_processing import generate_screenshot_filename, SCREENSHOT_DIR
-            video_path_obj = Path(movie.path)
-            movie_name = video_path_obj.stem
-            sanitized_name = re.sub(r'[<>:"/\\|?*]', '_', movie_name).strip('. ')[:100]
-            
-            # Get all screenshot paths currently in database for this movie
-            existing_db_paths = {s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()}
-            
-            # Check for screenshots with and without subtitle suffix
-            for suffix in ["", "_subs"]:
-                pattern = f"{sanitized_name}_screenshot*s{suffix}.jpg"
-                for screenshot_file in SCREENSHOT_DIR.glob(pattern):
-                    file_path_str = str(screenshot_file)
-                    # If file exists but NOT in database, it's orphaned - delete it
-                    if screenshot_file.exists() and file_path_str not in existing_db_paths:
-                        orphaned_files.append(file_path_str)
-                        try:
-                            os.remove(screenshot_file)
-                            orphaned_deleted += 1
-                            logger.info(f"Deleted orphaned screenshot file: {screenshot_file.name}")
-                        except Exception as del_err:
-                            logger.warning(f"Failed to delete orphaned screenshot file {screenshot_file.name}: {del_err}")
-        except Exception as e:
-            logger.warning(f"Error checking/deleting orphaned screenshot files: {e}", exc_info=True)
+        for orphaned_path in orphaned_files:
+            try:
+                if os.path.exists(orphaned_path):
+                    os.remove(orphaned_path)
+                    orphaned_deleted += 1
+                    logger.info(f"Deleted orphaned screenshot file: {Path(orphaned_path).name}")
+            except Exception as del_err:
+                logger.warning(f"Failed to delete orphaned screenshot file {Path(orphaned_path).name}: {del_err}")
         
         # SECOND: Delete all existing screenshots for this movie from database and disk
         existing_screenshots = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
@@ -1040,26 +1067,34 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
     finally:
         db.close()
 
-@app.get("/api/image/{image_id}")
-async def get_image_by_id(image_id: int):
-    """Serve an image file by its database ID"""
-    from fastapi.responses import FileResponse
+@app.post("/api/movie/{movie_id}/sync-screenshots")
+async def sync_movie_screenshots_endpoint(movie_id: int):
+    """Synchronize screenshots for a movie: detect and fix mismatches between DB and disk"""
+    from screenshot_sync import sync_movie_screenshots
+    from video_processing import SCREENSHOT_DIR
+    
     db = SessionLocal()
     try:
-        img = db.query(Image).filter(Image.id == image_id).first()
-        if not img:
-            raise HTTPException(status_code=404, detail="Image not found")
-        path_obj = Path(img.image_path)
-        if not path_obj.exists():
-            raise HTTPException(status_code=404, detail="Image file missing")
-        return FileResponse(str(path_obj))
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail=f"Movie not found: {movie_id}")
+        
+        result = sync_movie_screenshots(movie_id, SCREENSHOT_DIR)
+        return {
+            "status": "success",
+            "movie_id": movie_id,
+            "orphaned_files": result["orphaned_files"],
+            "missing_files": result["missing_files"],
+            "synced_count": result["synced_count"]
+        }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error serving image id={image_id}: {e}")
+        logger.error(f"Error syncing screenshots for movie_id={movie_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
 
 @app.get("/api/screenshot/{screenshot_id}")
 async def get_screenshot_by_id(screenshot_id: int):
@@ -1081,6 +1116,48 @@ async def get_screenshot_by_id(screenshot_id: int):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
+@app.get("/screenshots/{filename:path}")
+async def get_screenshot_by_filename(filename: str):
+    """
+    Serve screenshot by filename. This is a fallback for StaticFiles when URL encoding causes issues.
+    Handles URL-decoded filenames with spaces properly.
+    """
+    from fastapi.responses import FileResponse
+    from urllib.parse import unquote
+    import video_processing
+    
+    logger.debug(f"Screenshot request - SCREENSHOT_DIR value: {video_processing.SCREENSHOT_DIR}")
+    logger.debug(f"Screenshot request - SCREENSHOT_DIR exists: {video_processing.SCREENSHOT_DIR.exists() if video_processing.SCREENSHOT_DIR else 'N/A'}")
+    
+    if not video_processing.SCREENSHOT_DIR or not video_processing.SCREENSHOT_DIR.exists():
+        raise HTTPException(status_code=404, detail=f"Screenshots directory not found (SCREENSHOT_DIR={video_processing.SCREENSHOT_DIR})")
+    
+    # URL decode the filename (handles %20 -> space, etc.)
+    decoded_filename = unquote(filename)
+    
+    # Security: prevent directory traversal
+    if '..' in decoded_filename or '/' in decoded_filename or '\\' in decoded_filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    # Construct full path
+    screenshot_path = video_processing.SCREENSHOT_DIR / decoded_filename
+    
+    # Verify file exists
+    if not screenshot_path.exists():
+        # Try to find by exact match in database for better error message
+        db = SessionLocal()
+        try:
+            matching = db.query(Screenshot).filter(Screenshot.shot_path.like(f'%{decoded_filename}')).first()
+            if matching:
+                logger.warning(f"Screenshot file missing but DB entry exists: filename={decoded_filename}, db_path={matching.shot_path}, screenshot_id={matching.id}")
+            else:
+                logger.warning(f"Screenshot file not found: filename={decoded_filename}")
+        finally:
+            db.close()
+        raise HTTPException(status_code=404, detail=f"Screenshot file not found: {decoded_filename}")
+    
+    return FileResponse(str(screenshot_path))
 
 @app.post("/api/launch")
 async def launch_movie(request: LaunchRequest):
@@ -1180,42 +1257,38 @@ async def get_launch_history():
             LaunchHistory.created.desc()
         ).limit(100).all()
         
+        # Extract movie IDs for batch loading
+        launch_movie_ids = [movie.id for _, movie, _, _ in results if movie]
+        
+        # Batch load all screenshots for all movies in launch history
+        screenshots_dict = {}  # movie_id -> list of Screenshot objects
+        if launch_movie_ids:
+            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(launch_movie_ids)).all()
+            for s in all_screenshots:
+                if s.movie_id not in screenshots_dict:
+                    screenshots_dict[s.movie_id] = []
+                screenshots_dict[s.movie_id].append(s)
+        
         launches_with_info = []
         for launch, movie, movie_status, screenshot in results:
             if not movie:
                 continue
             
-            # Get images and screenshots from tables
-            image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
-            screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
+            # Get screenshots from preloaded dictionary
+            screenshot_objs_raw = screenshots_dict.get(movie.id, [])
             
-            # Return IDs and paths
-            images = [{"id": img.id, "path": img.image_path, "url_path": get_image_url_path(img.image_path)} for img in image_objs if "www.YTS.AM" not in img.image_path]
+            # Filter to only screenshots that actually exist on disk
+            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
+            
+            # Ensure movie has at least one screenshot/image - queue if missing
+            has_image = bool(movie.image_path and os.path.exists(movie.image_path))
+            ensure_movie_has_screenshot(movie.id, movie.path, has_image, screenshot_objs)
+            
             screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
             
-            # For get_largest_image (needs paths)
-            image_paths = [img.image_path for img in image_objs if "www.YTS.AM" not in img.image_path]
-            screenshot_paths = [s.shot_path for s in screenshot_objs]
-            screenshot_path = screenshot.shot_path if screenshot and os.path.exists(screenshot.shot_path) else None
-            info = {
-                "images": image_paths,
-                "screenshots": screenshot_paths,
-                "frame": screenshot_path
-            }
-            largest_image_path = get_largest_image(info)
-            largest_image_id = None
-            if largest_image_path:
-                for img in image_objs:
-                    if img.image_path == largest_image_path and "www.YTS.AM" not in img.image_path:
-                        largest_image_id = img.id
-                        break
-                if not largest_image_id:
-                    for s in screenshot_objs:
-                        if s.shot_path == largest_image_path:
-                            largest_image_id = s.id
-                            break
+            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
+            screenshot_path = screenshot_obj.shot_path if screenshot_obj and Path(screenshot_obj.shot_path).exists() else None
             
-            screenshot_path = screenshot.shot_path if screenshot and os.path.exists(screenshot.shot_path) else None
             movie_info = {
                 "id": movie.id,
                 "path": movie.path,
@@ -1225,13 +1298,10 @@ async def get_launch_history():
                 "size": movie.size,
                 "watched": movie_status is not None and movie_status.movieStatus == MovieStatusEnum.WATCHED.value,
                 "watched_date": movie_status.updated.isoformat() if movie_status and movie_status.updated else None,
-                "images": images,
                 "screenshots": screenshots,
-                "screenshot_id": screenshot.id if screenshot else None,
+                "screenshot_id": screenshot_obj.id if screenshot_obj else None,
                 "screenshot_path": screenshot_path,
-                "image_id": largest_image_id,
-                "image_path": largest_image_path,
-                "image_path_url": get_image_url_path(largest_image_path) if largest_image_path else None,
+                "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
                 "year": movie.year
             }
             
@@ -1309,49 +1379,54 @@ async def get_watched():
             MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value
         ).order_by(MovieStatus.updated.desc()).all()
         
+        watched_movie_ids = [ms.movie_id for ms in movie_statuses]
+        
+        # Batch load all movies
+        movies_dict = {}
+        if watched_movie_ids:
+            movies = db.query(Movie).filter(Movie.id.in_(watched_movie_ids)).all()
+            movies_dict = {m.id: m for m in movies}
+        
+        # Batch load all screenshots for all watched movies
+        screenshots_dict = {}  # movie_id -> list of Screenshot objects
+        first_screenshot_dict = {}  # movie_id -> first Screenshot object
+        if watched_movie_ids:
+            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(watched_movie_ids)).all()
+            for s in all_screenshots:
+                if s.movie_id not in screenshots_dict:
+                    screenshots_dict[s.movie_id] = []
+                    first_screenshot_dict[s.movie_id] = s
+                screenshots_dict[s.movie_id].append(s)
+
+        # Batch load launch history flags
+        launched_set = set()
+        if watched_movie_ids:
+            launched_rows = db.query(LaunchHistory.movie_id).filter(
+                LaunchHistory.movie_id.in_(watched_movie_ids)
+            ).distinct().all()
+            launched_set = {r.movie_id for r in launched_rows}
+        
         for movie_status in movie_statuses:
-            movie = db.query(Movie).filter(Movie.id == movie_status.movie_id).first()
+            movie = movies_dict.get(movie_status.movie_id)
             if movie:
                 try:
-                    # Get images and screenshots from tables
-                    image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
-                    screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
+                    # Get screenshots from preloaded dictionary
+                    screenshot_objs_raw = screenshots_dict.get(movie.id, [])
                     
-                    # Return IDs and paths
-                    images = [{"id": img.id, "path": img.image_path} for img in image_objs if "www.YTS.AM" not in img.image_path]
+                    # Filter to only screenshots that actually exist on disk
+                    screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
+                    
+                    # Ensure movie has at least one screenshot/image - queue if missing
+                    # Check movie.image_path instead of Image table
+                    has_image = bool(movie.image_path and os.path.exists(movie.image_path))
+                    ensure_movie_has_screenshot(movie.id, movie.path, has_image, screenshot_objs)
+                    
                     screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
                     
-                    # Get screenshot ID and path
-                    screenshot_obj = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).first()
+                    # Get screenshot ID and path - only from existing screenshots
+                    screenshot_obj = screenshot_objs[0] if screenshot_objs else None
                     screenshot_id = screenshot_obj.id if screenshot_obj else None
                     screenshot_path = screenshot_obj.shot_path if screenshot_obj else None
-                    
-                    # For get_largest_image (needs paths)
-                    image_paths = [img.image_path for img in image_objs if "www.YTS.AM" not in img.image_path]
-                    screenshot_paths = [s.shot_path for s in screenshot_objs]
-                    info = {
-                        "images": image_paths,
-                        "screenshots": screenshot_paths,
-                        "frame": screenshot_path
-                    }
-                    
-                    # Safely get largest image ID and path with error handling
-                    largest_image_id = None
-                    largest_image_path = None
-                    try:
-                        largest_image_path = get_largest_image(info)
-                        if largest_image_path:
-                            for img in image_objs:
-                                if img.image_path == largest_image_path and "www.YTS.AM" not in img.image_path:
-                                    largest_image_id = img.id
-                                    break
-                            if not largest_image_id:
-                                for s in screenshot_objs:
-                                    if s.shot_path == largest_image_path:
-                                        largest_image_id = s.id
-                                        break
-                    except Exception as e:
-                        logger.warning(f"Error getting largest image for movie {movie.id}: {e}")
                     
                     movie_info = {
                         "path": movie.path,
@@ -1360,15 +1435,12 @@ async def get_watched():
                         "created": movie.created,
                         "size": movie.size,
                         "watched_date": movie_status.updated.isoformat() if movie_status.updated else None,
-                        "images": images,
                         "screenshots": screenshots,
                         "screenshot_id": screenshot_id,
                         "screenshot_path": screenshot_path,
-                        "image_id": largest_image_id,
-                        "image_path": largest_image_path,
-                        "image_path_url": get_image_url_path(largest_image_path) if largest_image_path else None,
+                        "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
                         "year": movie.year,
-                        "has_launched": db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
+                        "has_launched": movie.id in launched_set
                     }
                     watched_movies_list.append(movie_info)
                 except Exception as e:
@@ -1839,53 +1911,6 @@ async def get_currently_playing():
     playing = get_currently_playing_movies()
     return {"playing": playing}
 
-def get_largest_image(movie_info):
-    """Get the largest image file from movie's images or screenshots.
-    Prefers qualified images from movie folder over screenshots."""
-    folder_images = []
-    
-    # First, check folder images (filter out YTS spam images)
-    if movie_info.get("images"):
-        filtered_images = filter_yts_images(movie_info["images"])
-        for img_path in filtered_images:
-            try:
-                if os.path.exists(img_path):
-                    size = os.path.getsize(img_path)
-                    folder_images.append((img_path, size))
-            except:
-                pass
-    
-    # If we have qualified folder images, return the largest one
-    if folder_images:
-        largest = max(folder_images, key=lambda x: x[1])
-        return largest[0]
-    
-    # Fallback to screenshots only if no qualified folder images exist
-    screenshot_images = []
-    if movie_info.get("screenshots"):
-        for screenshot_path in movie_info["screenshots"]:
-            try:
-                if os.path.exists(screenshot_path):
-                    size = os.path.getsize(screenshot_path)
-                    screenshot_images.append((screenshot_path, size))
-            except:
-                pass
-    
-    # Add frame if available (also a screenshot)
-    if movie_info.get("frame"):
-        try:
-            if os.path.exists(movie_info["frame"]):
-                size = os.path.getsize(movie_info["frame"])
-                screenshot_images.append((movie_info["frame"], size))
-        except:
-            pass
-    
-    if not screenshot_images:
-        return None
-    
-    # Return the largest screenshot
-    largest = max(screenshot_images, key=lambda x: x[1])
-    return largest[0]
 
 def get_first_letter(name):
     """Get the first letter of a movie name for alphabet navigation"""
@@ -2011,14 +2036,15 @@ async def explore_movies(
                 }
 
 
-        # One screenshot id per movie (prefer smallest id as representative)
-        screenshot_map = {}
+        # Batch load screenshots for auto-enqueue check
+        screenshots_dict = {}  # movie_id -> list of Screenshot objects
         if movie_ids:
-            shots = db.query(Screenshot.movie_id, func.min(Screenshot.id)).filter(
-                Screenshot.movie_id.in_(movie_ids)
-            ).group_by(Screenshot.movie_id).all()
-            screenshot_map = {movie_id: shot_id for movie_id, shot_id in shots}
-
+            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
+            for s in all_screenshots:
+                if s.movie_id not in screenshots_dict:
+                    screenshots_dict[s.movie_id] = []
+                screenshots_dict[s.movie_id].append(s)
+        
         # Has launched flags for page ids
         launched_set = set()
         if movie_ids:
@@ -2026,7 +2052,7 @@ async def explore_movies(
                 LaunchHistory.movie_id.in_(movie_ids)
             ).distinct().all()
             launched_set = {r.movie_id for r in launched_rows}
-
+        
         # Get ratings for page ids
         rating_map = {}
         if movie_ids:
@@ -2034,10 +2060,21 @@ async def explore_movies(
                 Rating.movie_id.in_(movie_ids)
             ).all()
             rating_map = {movie_id: int(rating) for movie_id, rating in rating_rows}
-
+        
         # Build response items without heavy filesystem ops
         result_movies = []
         for m in rows:
+            # Ensure movie has at least one screenshot/image - queue if missing
+            screenshot_objs_raw = screenshots_dict.get(m.id, [])
+            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
+            # Check movie.image_path instead of Image table
+            has_image = bool(m.image_path and os.path.exists(m.image_path))
+            ensure_movie_has_screenshot(m.id, m.path, has_image, screenshot_objs)
+            
+            # Get screenshot_id from filtered existing screenshots (first one)
+            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
+            screenshot_id = screenshot_obj.id if screenshot_obj else None
+            
             info = watch_status_info.get(m.id, {})
             watch_status = info.get("watch_status")
             result_movies.append({
@@ -2052,7 +2089,8 @@ async def explore_movies(
                 "watched_date": info.get("watched_date"),
                 "year": m.year,
                 "has_launched": (m.id in launched_set),
-                "screenshot_id": screenshot_map.get(m.id),  # frontend will call /api/screenshot/{id}
+                "screenshot_id": screenshot_id,  # frontend will call /api/screenshot/{id}
+                "image_path": m.image_path if (m.image_path and os.path.exists(m.image_path)) else None,
                 "rating": rating_map.get(m.id)
             })
 
@@ -2177,13 +2215,14 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
                     "watched_date": ms.updated.isoformat() if ms.updated else None
                 }
         
-        # One screenshot id per movie (prefer smallest id as representative)
-        screenshot_map = {}
+        # Batch load screenshots for auto-enqueue check
+        screenshots_dict = {}  # movie_id -> list of Screenshot objects
         if movie_ids:
-            shots = db.query(Screenshot.movie_id, func.min(Screenshot.id)).filter(
-                Screenshot.movie_id.in_(movie_ids)
-            ).group_by(Screenshot.movie_id).all()
-            screenshot_map = {movie_id: shot_id for movie_id, shot_id in shots}
+            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
+            for s in all_screenshots:
+                if s.movie_id not in screenshots_dict:
+                    screenshots_dict[s.movie_id] = []
+                screenshots_dict[s.movie_id].append(s)
         
         # Has launched flags
         launched_set = set()
@@ -2204,8 +2243,21 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
         # Build response items
         result_movies = []
         for m in random_movies:
+            # Ensure movie has at least one screenshot/image - queue if missing
+            screenshot_objs_raw = screenshots_dict.get(m.id, [])
+            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
+            # Check movie.image_path instead of Image table
+            has_image = bool(m.image_path and os.path.exists(m.image_path))
+            ensure_movie_has_screenshot(m.id, m.path, has_image, screenshot_objs)
+            
+            # Get screenshot_id from filtered existing screenshots (first one)
+            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
+            screenshot_id = screenshot_obj.id if screenshot_obj else None
+            
             info = watch_status_info.get(m.id, {})
             watch_status = info.get("watch_status")
+            screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
+            
             result_movies.append({
                 "id": m.id,
                 "path": m.path,
@@ -2218,7 +2270,10 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
                 "watched_date": info.get("watched_date"),
                 "year": m.year,
                 "has_launched": (m.id in launched_set),
-                "screenshot_id": screenshot_map.get(m.id),
+                "screenshot_id": screenshot_id,
+                "image_path": m.image_path if (m.image_path and os.path.exists(m.image_path)) else None,
+                "image_path_url": get_image_url_path(m.image_path) if m.image_path else None,
+                "screenshots": screenshots,
                 "rating": rating_map.get(m.id)
             })
         
