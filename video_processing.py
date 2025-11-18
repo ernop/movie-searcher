@@ -315,8 +315,50 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
         
         logger.info(f"_ffmpeg_job completed: returncode={proc.returncode}, elapsed={elapsed:.2f}s, output_exists={Path(out_path).exists()}")
         if proc.returncode != 0:
-            stderr_preview = (proc.stderr.decode("utf-8", "ignore")[:200] if proc.stderr else "")
-            logger.error(f"_ffmpeg_job failed: stderr={stderr_preview}")
+            stderr_full = (proc.stderr.decode("utf-8", "ignore") if proc.stderr else "")
+            stdout_full = (proc.stdout.decode("utf-8", "ignore") if proc.stdout else "")
+            stderr_preview = stderr_full[:500] if len(stderr_full) > 500 else stderr_full
+            stdout_preview = stdout_full[:200] if len(stdout_full) > 200 else stdout_full
+            
+            # Collect diagnostic information
+            video_exists = Path(video_path_normalized).exists()
+            output_dir = Path(out_path).parent
+            output_dir_exists = output_dir.exists()
+            output_dir_writable = os.access(output_dir, os.W_OK) if output_dir_exists else False
+            output_file_exists = Path(out_path).exists()
+            
+            # Try to get video length to check if timestamp is valid
+            video_length = None
+            try:
+                video_length = get_video_length(str(video_path_normalized))
+            except:
+                pass
+            
+            error_msg = f"_ffmpeg_job failed: video={Path(video_path_local).name}, ts={ts}s, returncode={proc.returncode}"
+            if stderr_preview:
+                error_msg += f", stderr={stderr_preview}"
+            elif not stderr_full:
+                error_msg += f", stderr=(empty)"
+            if stdout_preview:
+                error_msg += f", stdout={stdout_preview}"
+            
+            # Add diagnostic info
+            error_msg += f", video_exists={video_exists}"
+            if not video_exists:
+                error_msg += f", video_path={video_path_normalized}"
+            error_msg += f", output_dir_exists={output_dir_exists}"
+            if output_dir_exists:
+                error_msg += f", output_dir_writable={output_dir_writable}"
+            else:
+                error_msg += f", output_dir={output_dir}"
+            if not output_file_exists:
+                error_msg += f", output_file_missing={Path(out_path).name}"
+            if video_length is not None:
+                error_msg += f", video_length={video_length:.1f}s"
+                if ts > video_length:
+                    error_msg += f", timestamp_exceeds_length=True"
+            
+            logger.error(error_msg)
             
         return {
             "returncode": proc.returncode,
@@ -683,6 +725,51 @@ def extract_movie_screenshot(video_path, timestamp_seconds, load_config_func, fi
     if screenshot_path.exists():
         logger.info(f"Screenshot already exists, skipping queue: {screenshot_path.name} (subtitle_path={subtitle_path})")
         add_scan_log_func("info", f"Screenshot already exists: {screenshot_path.name}")
+        # Still sync to database if missing (file exists but not in DB) - robust with retry
+        if movie_id:
+            synced_to_db = False
+            for attempt in range(3):
+                db = SessionLocal()
+                try:
+                    movie = db.query(Movie).filter(Movie.id == movie_id).first()
+                    if not movie:
+                        logger.error(f"Movie ID {movie_id} not found when syncing existing screenshot {screenshot_path.name}")
+                        db.close()
+                        break
+                    
+                    existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
+                    if existing:
+                        logger.debug(f"Screenshot already in database: movie_id={movie.id}, path={screenshot_path.name}")
+                        synced_to_db = True
+                        break
+                    
+                    logger.info(f"Syncing existing screenshot to database (attempt {attempt + 1}/3): movie_id={movie.id}, path={screenshot_path.name}, timestamp={timestamp_seconds}s")
+                    db.add(Screenshot(movie_id=movie.id, shot_path=str(screenshot_path), timestamp_seconds=timestamp_seconds))
+                    db.commit()
+                    
+                    # Verify it was actually saved
+                    saved_screenshot = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
+                    if saved_screenshot:
+                        logger.info(f"Successfully synced existing screenshot to database: movie_id={movie.id}, screenshot_id={saved_screenshot.id}, path={screenshot_path.name}")
+                        synced_to_db = True
+                        break
+                    else:
+                        logger.warning(f"Commit succeeded but screenshot not found in database (attempt {attempt + 1}/3): movie_id={movie.id}, path={screenshot_path.name}")
+                        db.rollback()
+                        
+                except Exception as db_err:
+                    logger.error(f"Database error when syncing existing screenshot (attempt {attempt + 1}/3): path={screenshot_path.name}, error={db_err}", exc_info=True)
+                    try:
+                        db.rollback()
+                    except:
+                        pass
+                    if attempt < 2:
+                        time.sleep(0.1 * (attempt + 1))
+                finally:
+                    db.close()
+            
+            if not synced_to_db and movie_id:
+                logger.error(f"FAILED to sync existing screenshot to database after 3 attempts: movie_id={movie_id}, path={screenshot_path.name}")
         return str(screenshot_path)
     
     logger.debug(f"Screenshot does not exist, will queue: {screenshot_path.name} (subtitle_path={subtitle_path})")
@@ -753,40 +840,62 @@ def process_screenshot_extraction_worker(screenshot_info):
         if screenshot_path.exists():
             logger.info(f"Screenshot file exists on disk, skipping extraction: {screenshot_path.name} (subtitle_path={subtitle_path})")
             add_scan_log_func("info", f"Screenshot already exists: {screenshot_path.name}")
-            db = SessionLocal()
-            try:
-                # movie_id must be provided - we own this code path and should always have it
-                movie_id_to_use = screenshot_info.get("movie_id")
-                if not movie_id_to_use:
-                    logger.error(f"movie_id not provided when syncing existing screenshot {screenshot_path.name}. This is a programming error - movie_id must be passed.")
-                    add_scan_log_func("error", f"Programming error: movie_id missing when syncing screenshot")
-                    return True
-                
-                movie = db.query(Movie).filter(Movie.id == movie_id_to_use).first()
-                if not movie:
-                    logger.error(f"Movie ID {movie_id_to_use} not found in database when syncing existing screenshot {screenshot_path.name}. Movie may have been deleted.")
-                    add_scan_log_func("error", f"Movie ID {movie_id_to_use} not found in database")
-                    return True
-                
-                if movie:
+            
+            # Robust database sync with retry and verification
+            movie_id_to_use = screenshot_info.get("movie_id")
+            if not movie_id_to_use:
+                logger.error(f"movie_id not provided when syncing existing screenshot {screenshot_path.name}. This is a programming error - movie_id must be passed.")
+                add_scan_log_func("error", f"Programming error: movie_id missing when syncing screenshot")
+                return True
+            
+            synced_to_db = False
+            for attempt in range(3):
+                db = SessionLocal()
+                try:
+                    movie = db.query(Movie).filter(Movie.id == movie_id_to_use).first()
+                    if not movie:
+                        logger.error(f"Movie ID {movie_id_to_use} not found in database when syncing existing screenshot {screenshot_path.name}. Movie may have been deleted.")
+                        add_scan_log_func("error", f"Movie ID {movie_id_to_use} not found in database")
+                        db.close()
+                        return True
+                    
+                    # Check if already exists
                     existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
-                    if not existing:
-                        logger.info(f"Adding existing screenshot to database: movie_id={movie.id}, path={screenshot_path.name}, timestamp={timestamp_seconds}s")
-                        db.add(Screenshot(movie_id=movie.id, shot_path=str(screenshot_path), timestamp_seconds=timestamp_seconds))
-                        try:
-                            db.commit()
-                            logger.info(f"Successfully added existing screenshot to database: movie_id={movie.id}, path={screenshot_path.name}")
-                        except Exception as commit_err:
-                            logger.error(f"Failed to commit existing screenshot to database: movie_id={movie.id}, path={screenshot_path.name}, error={commit_err}", exc_info=True)
-                            db.rollback()
-                    else:
+                    if existing:
                         logger.debug(f"Screenshot already in database: movie_id={movie.id}, path={screenshot_path.name}")
-                else:
-                    logger.warning(f"Existing screenshot file found but movie not in database: {screenshot_path.name}")
-            except Exception as db_err:
-                logger.error(f"Database error when syncing existing screenshot: path={screenshot_path.name}, error={db_err}", exc_info=True)
-            finally:
-                db.close()
+                        synced_to_db = True
+                        break
+                    
+                    # Add missing screenshot
+                    logger.info(f"Syncing existing screenshot to database (attempt {attempt + 1}/3): movie_id={movie.id}, path={screenshot_path.name}, timestamp={timestamp_seconds}s")
+                    db.add(Screenshot(movie_id=movie.id, shot_path=str(screenshot_path), timestamp_seconds=timestamp_seconds))
+                    db.commit()
+                    
+                    # Verify it was actually saved
+                    saved_screenshot = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(screenshot_path)).first()
+                    if saved_screenshot:
+                        logger.info(f"Successfully synced existing screenshot to database: movie_id={movie.id}, screenshot_id={saved_screenshot.id}, path={screenshot_path.name}")
+                        synced_to_db = True
+                        break
+                    else:
+                        logger.warning(f"Commit succeeded but screenshot not found in database (attempt {attempt + 1}/3): movie_id={movie.id}, path={screenshot_path.name}")
+                        db.rollback()
+                        
+                except Exception as db_err:
+                    logger.error(f"Database error when syncing existing screenshot (attempt {attempt + 1}/3): path={screenshot_path.name}, error={db_err}", exc_info=True)
+                    try:
+                        db.rollback()
+                    except:
+                        pass
+                    if attempt < 2:
+                        time.sleep(0.1 * (attempt + 1))  # Brief delay before retry
+                finally:
+                    db.close()
+            
+            if not synced_to_db:
+                logger.error(f"FAILED to sync existing screenshot to database after 3 attempts: movie_id={movie_id_to_use}, path={screenshot_path.name}. File exists on disk but will not be displayed.")
+                add_scan_log_func("error", f"Database sync failed after retries: {screenshot_path.name}")
+            
             return True
         
         logger.info(f"Screenshot file does not exist, proceeding with extraction: {screenshot_path.name} (subtitle_path={subtitle_path})")
@@ -807,48 +916,69 @@ def process_screenshot_extraction_worker(screenshot_info):
                 add_scan_log_func("warning", f"Screenshot extraction took {elapsed:.1f}s (expected <1s)")
 
             if rc == 0 and out_path.exists():
-                db = SessionLocal()
-                try:
-                    # movie_id must be provided - we own this code path and should always have it
-                    movie_id_to_use = screenshot_info.get("movie_id")
-                    if not movie_id_to_use:
-                        logger.error(f"movie_id not provided when saving screenshot {out_path.name}. This is a programming error - movie_id must be passed.")
-                        add_scan_log_func("error", f"Programming error: movie_id missing when saving screenshot")
-                        return
-                    
-                    movie = db.query(Movie).filter(Movie.id == movie_id_to_use).first()
-                    if not movie:
-                        logger.error(f"Movie ID {movie_id_to_use} not found in database when saving screenshot {out_path.name}. Movie may have been deleted.")
-                        add_scan_log_func("error", f"Movie ID {movie_id_to_use} not found in database")
-                        return
-                    
-                    if movie:
+                # Robust database save with retry and verification
+                movie_id_to_use = screenshot_info.get("movie_id")
+                if not movie_id_to_use:
+                    logger.error(f"movie_id not provided when saving screenshot {out_path.name}. This is a programming error - movie_id must be passed.")
+                    add_scan_log_func("error", f"Programming error: movie_id missing when saving screenshot")
+                    return
+                
+                # Retry database save up to 3 times
+                saved_to_db = False
+                for attempt in range(3):
+                    db = SessionLocal()
+                    try:
+                        movie = db.query(Movie).filter(Movie.id == movie_id_to_use).first()
+                        if not movie:
+                            logger.error(f"Movie ID {movie_id_to_use} not found in database when saving screenshot {out_path.name}. Movie may have been deleted.")
+                            add_scan_log_func("error", f"Movie ID {movie_id_to_use} not found in database")
+                            db.close()
+                            return
+                        
+                        # Check if already exists (race condition protection)
                         existing = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(out_path)).first()
-                        if not existing:
-                            logger.info(f"Saving screenshot to database: movie_id={movie.id}, path={out_path.name}, timestamp={timestamp_seconds}s")
-                            db.add(Screenshot(movie_id=movie.id, shot_path=str(out_path), timestamp_seconds=timestamp_seconds))
-                            try:
-                                db.commit()
-                                # Get the screenshot ID we just created
-                                saved_screenshot = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(out_path)).first()
-                                screenshot_id = saved_screenshot.id if saved_screenshot else 'unknown'
-                                logger.info(f"Successfully saved screenshot to database: movie_id={movie.id}, screenshot_id={screenshot_id}, path={out_path.name}, timestamp={timestamp_seconds}s")
-                                # Track completion time
-                                with screenshot_completion_lock:
-                                    screenshot_completion_times.append(time.time())
-                                    # Keep only last 1000 timestamps to avoid memory growth
-                                    if len(screenshot_completion_times) > 1000:
-                                        screenshot_completion_times.pop(0)
-                            except Exception as commit_err:
-                                logger.error(f"Failed to commit screenshot to database: movie_id={movie.id}, path={out_path.name}, error={commit_err}", exc_info=True)
-                                db.rollback()
-                                add_scan_log_func("error", f"Database commit failed for screenshot: {str(commit_err)[:100]}")
-                        else:
+                        if existing:
                             logger.debug(f"Screenshot already exists in database: movie_id={movie.id}, path={out_path.name}")
-                    else:
-                        logger.error(f"Cannot save screenshot to database: movie not found. Screenshot file exists at {out_path} but will not be displayed.")
-                        add_scan_log_func("error", f"Screenshot extracted but not saved to database (movie not found)")
-                    
+                            saved_to_db = True
+                            break
+                        
+                        # Add new screenshot
+                        logger.info(f"Saving screenshot to database (attempt {attempt + 1}/3): movie_id={movie.id}, path={out_path.name}, timestamp={timestamp_seconds}s")
+                        db.add(Screenshot(movie_id=movie.id, shot_path=str(out_path), timestamp_seconds=timestamp_seconds))
+                        db.commit()
+                        
+                        # Verify it was actually saved
+                        saved_screenshot = db.query(Screenshot).filter(Screenshot.movie_id == movie.id, Screenshot.shot_path == str(out_path)).first()
+                        if saved_screenshot:
+                            screenshot_id = saved_screenshot.id
+                            logger.info(f"Successfully saved screenshot to database: movie_id={movie.id}, screenshot_id={screenshot_id}, path={out_path.name}, timestamp={timestamp_seconds}s")
+                            saved_to_db = True
+                            # Track completion time
+                            with screenshot_completion_lock:
+                                screenshot_completion_times.append(time.time())
+                                if len(screenshot_completion_times) > 1000:
+                                    screenshot_completion_times.pop(0)
+                            break
+                        else:
+                            logger.warning(f"Commit succeeded but screenshot not found in database (attempt {attempt + 1}/3): movie_id={movie.id}, path={out_path.name}")
+                            db.rollback()
+                            
+                    except Exception as db_err:
+                        logger.error(f"Database error when saving screenshot (attempt {attempt + 1}/3): path={out_path.name}, error={db_err}", exc_info=True)
+                        try:
+                            db.rollback()
+                        except:
+                            pass
+                        if attempt < 2:
+                            time.sleep(0.1 * (attempt + 1))  # Brief delay before retry
+                    finally:
+                        db.close()
+                
+                if not saved_to_db:
+                    logger.error(f"FAILED to save screenshot to database after 3 attempts: movie_id={movie_id_to_use}, path={out_path.name}. File exists on disk but will not be displayed.")
+                    add_scan_log_func("error", f"Database save failed after retries: {out_path.name}")
+                    # File exists but not in DB - this is a critical error that needs attention
+                else:
                     scan_progress_dict["frames_processed"] = scan_progress_dict.get("frames_processed", 0) + 1
                     scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
                     si = screenshot_info.get("screenshot_index", None)
@@ -857,15 +987,11 @@ def process_screenshot_extraction_worker(screenshot_info):
                         add_scan_log_func("success", f"Screenshot {si}/{ts} extracted: {Path(vid_path).name}")
                     else:
                         add_scan_log_func("success", f"Screenshot extracted: {Path(vid_path).name}")
-                except Exception as db_err:
-                    logger.error(f"Database error when saving screenshot: path={out_path.name}, error={db_err}", exc_info=True)
-                    add_scan_log_func("error", f"Database error: {str(db_err)[:100]}")
-                finally:
-                    db.close()
             else:
                 rc = result.get("returncode", -99)
                 stderr_msg = result.get("stderr", "") or ""
                 stdout_msg = result.get("stdout", "") or ""
+                out_path = Path(result.get("out_path", ""))
                 stderr_preview = (stderr_msg[:200] + "...") if len(stderr_msg) > 200 else stderr_msg
                 stdout_preview = (stdout_msg[:200] + "...") if len(stdout_msg) > 200 else stdout_msg
                 error_detail = f"exit={rc}"
@@ -873,7 +999,12 @@ def process_screenshot_extraction_worker(screenshot_info):
                     error_detail += f", stderr={stderr_preview}"
                 if stdout_preview:
                     error_detail += f", stdout={stdout_preview}"
-                add_scan_log_func("warning", f"Screenshot extraction failed: {Path(vid_path).name} - {error_detail}")
+                file_exists = out_path.exists() if out_path else False
+                error_msg = f"Screenshot extraction failed: {Path(vid_path).name} at {timestamp_seconds}s - {error_detail}"
+                if file_exists:
+                    error_msg += f" (output file exists: {out_path.name})"
+                logger.error(error_msg)
+                add_scan_log_func("error", f"Screenshot extraction failed: {Path(vid_path).name} at {timestamp_seconds}s - exit={rc}")
 
         if shutdown_flag.is_set():
             return False

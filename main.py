@@ -190,6 +190,46 @@ def get_movies_folder():
         return path
     return None
 
+def get_image_url_path(image_path):
+    """Convert absolute image path to relative URL path for static serving"""
+    if not image_path:
+        return None
+    
+    # Check if it's a screenshot (in screenshots directory)
+    from video_processing import SCREENSHOT_DIR
+    if SCREENSHOT_DIR:
+        try:
+            image_path_obj = Path(image_path).resolve()
+            screenshot_dir_obj = Path(SCREENSHOT_DIR).resolve()
+            try:
+                relative_path = image_path_obj.relative_to(screenshot_dir_obj)
+                # Screenshots are served via /screenshots/ - return None to use screenshot path directly
+                return None  # Screenshots handled separately via filename extraction
+            except ValueError:
+                pass  # Not in screenshots directory
+        except Exception:
+            pass
+    
+    # Check if it's in movies folder
+    movies_folder = get_movies_folder()
+    if not movies_folder:
+        return None
+    try:
+        # Convert to Path objects and resolve
+        image_path_obj = Path(image_path).resolve()
+        movies_folder_obj = Path(movies_folder).resolve()
+        
+        # Check if image is within movies folder
+        try:
+            relative_path = image_path_obj.relative_to(movies_folder_obj)
+            # Convert to forward slashes for URL
+            return str(relative_path).replace('\\', '/')
+        except ValueError:
+            # Image is not within movies folder
+            return None
+    except Exception:
+        return None
+
 # Auto-detect and save ffmpeg if not configured (called during startup)
 def auto_detect_ffmpeg():
     """Auto-detect ffmpeg and save to config if found"""
@@ -247,6 +287,27 @@ async def lifespan(app):
     initialize_video_processing(SCRIPT_DIR)
     auto_detect_ffmpeg()
     logger.info("Startup: video processing ready.")
+    
+    # Mount static files directory (favicon, etc.)
+    static_dir = SCRIPT_DIR / "static"
+    if static_dir.exists():
+        app.mount("/", StaticFiles(directory=str(static_dir), html=False), name="static")
+        logger.info(f"Startup: mounted static directory at /")
+    
+    # Mount screenshots directory as static files (after SCREENSHOT_DIR is initialized)
+    from video_processing import SCREENSHOT_DIR
+    if SCREENSHOT_DIR and SCREENSHOT_DIR.exists():
+        app.mount("/screenshots", StaticFiles(directory=str(SCREENSHOT_DIR)), name="screenshots")
+        logger.info(f"Startup: mounted screenshots directory at /screenshots")
+    
+    # Mount movies folder as static files for image serving
+    movies_folder = get_movies_folder()
+    if movies_folder and os.path.exists(movies_folder):
+        try:
+            app.mount("/movies", StaticFiles(directory=movies_folder), name="movies")
+            logger.info(f"Startup: mounted movies directory at /movies")
+        except Exception as e:
+            logger.warning(f"Failed to mount movies directory: {e}")
 
     removed_count = remove_sample_files()
     if removed_count > 0:
@@ -450,14 +511,6 @@ async def serve_movie_detail_spa(movie_id: int, slug: str = ""):
         return f.read()
 
 
-@app.get("/favicon.ico")
-async def get_favicon():
-    """Serve the favicon"""
-    from fastapi.responses import FileResponse
-    favicon_path = SCRIPT_DIR / "favicon.ico"
-    if favicon_path.exists():
-        return FileResponse(favicon_path, media_type="image/x-icon")
-    raise HTTPException(status_code=404, detail="favicon.ico not found")
 
 @app.post("/api/index")
 async def index_movies(root_path: str = Query(None)):
@@ -655,7 +708,7 @@ async def search_movies(
             screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
             
             # Return IDs and paths
-            images = [{"id": img.id, "path": img.image_path} for img in image_objs if "www.YTS.AM" not in img.image_path]
+            images = [{"id": img.id, "path": img.image_path, "url_path": get_image_url_path(img.image_path)} for img in image_objs if "www.YTS.AM" not in img.image_path]
             screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
             
             # For get_largest_image (needs paths)
@@ -704,6 +757,7 @@ async def search_movies(
                 "screenshot_path": screenshot_path,
                 "image_id": largest_image_id,
                 "image_path": largest_image_path,
+                "image_path_url": get_image_url_path(largest_image_path) if largest_image_path else None,
                 "year": movie.year,
                 "has_launched": has_launched,
                 "rating": rating
@@ -749,8 +803,8 @@ async def get_movie_details_by_id(movie_id: int):
         image_objs = db.query(Image).filter(Image.movie_id == movie.id).all()
         screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()
         
-        # Filter out YTS images and return IDs and paths
-        images = [{"id": img.id, "path": img.image_path} for img in image_objs if "www.YTS.AM" not in img.image_path]
+        # Filter out YTS images and return IDs and paths (convert absolute paths to relative URL paths)
+        images = [{"id": img.id, "path": img.image_path, "url_path": get_image_url_path(img.image_path)} for img in image_objs if "www.YTS.AM" not in img.image_path]
         screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
 
         # Get screenshot ID and path (for frame)
@@ -806,9 +860,22 @@ async def get_movie_details_by_id(movie_id: int):
             "screenshot_path": screenshot_path,
             "image_id": largest_image_id,
             "image_path": largest_image_path,
+            "image_path_url": get_image_url_path(largest_image_path) if largest_image_path else None,
             "year": year,
             "has_launched": has_launched,
             "rating": rating
+        }
+    finally:
+        db.close()
+
+@app.get("/api/movie/{movie_id}/screenshots")
+async def get_movie_screenshots(movie_id: int):
+    """Get screenshots for a movie (lightweight endpoint for polling)"""
+    db = SessionLocal()
+    try:
+        screenshots = db.query(Screenshot).filter(Screenshot.movie_id == movie_id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()
+        return {
+            "screenshots": [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshots]
         }
     finally:
         db.close()
@@ -842,9 +909,37 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
             # If no timestamps after filtering, use first step instead of 0
             timestamps = [int(step_seconds)] if step_seconds < length_seconds else []
 
-        # Delete all existing screenshots for this movie before generating new set
-        # IMPORTANT: Only delete screenshots that are in the database - the database is the source of truth.
-        # Never delete files on disk that aren't in the database (orphaned files). Report them to the user instead.
+        # FIRST: Delete orphaned screenshot files (files on disk not in database) BEFORE deleting from DB
+        # This prevents race conditions where orphaned files get synced back to DB
+        orphaned_files = []
+        orphaned_deleted = 0
+        try:
+            from video_processing import generate_screenshot_filename, SCREENSHOT_DIR
+            video_path_obj = Path(movie.path)
+            movie_name = video_path_obj.stem
+            sanitized_name = re.sub(r'[<>:"/\\|?*]', '_', movie_name).strip('. ')[:100]
+            
+            # Get all screenshot paths currently in database for this movie
+            existing_db_paths = {s.shot_path for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()}
+            
+            # Check for screenshots with and without subtitle suffix
+            for suffix in ["", "_subs"]:
+                pattern = f"{sanitized_name}_screenshot*s{suffix}.jpg"
+                for screenshot_file in SCREENSHOT_DIR.glob(pattern):
+                    file_path_str = str(screenshot_file)
+                    # If file exists but NOT in database, it's orphaned - delete it
+                    if screenshot_file.exists() and file_path_str not in existing_db_paths:
+                        orphaned_files.append(file_path_str)
+                        try:
+                            os.remove(screenshot_file)
+                            orphaned_deleted += 1
+                            logger.info(f"Deleted orphaned screenshot file: {screenshot_file.name}")
+                        except Exception as del_err:
+                            logger.warning(f"Failed to delete orphaned screenshot file {screenshot_file.name}: {del_err}")
+        except Exception as e:
+            logger.warning(f"Error checking/deleting orphaned screenshot files: {e}", exc_info=True)
+        
+        # SECOND: Delete all existing screenshots for this movie from database and disk
         existing_screenshots = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
         deleted_count = 0
         for screenshot in existing_screenshots:
@@ -859,31 +954,14 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
             db.delete(screenshot)
         db.commit()
         
-        # Check for orphaned screenshot files (files on disk not in database) and report them
-        orphaned_files = []
-        try:
-            from video_processing import generate_screenshot_filename, SCREENSHOT_DIR
-            video_path_obj = Path(movie.path)
-            movie_name = video_path_obj.stem
-            sanitized_name = re.sub(r'[<>:"/\\|?*]', '_', movie_name).strip('. ')[:100]
-            
-            # Check for screenshots with and without subtitle suffix
-            for suffix in ["", "_subs"]:
-                pattern = f"{sanitized_name}_screenshot*s{suffix}.jpg"
-                for screenshot_file in SCREENSHOT_DIR.glob(pattern):
-                    # Check if this file is in the database (should be empty now after deletion, but check anyway)
-                    file_path_str = str(screenshot_file)
-                    exists_in_db = db.query(Screenshot).filter(Screenshot.shot_path == file_path_str).first() is not None
-                    if screenshot_file.exists() and not exists_in_db:
-                        orphaned_files.append(file_path_str)
-        except Exception as e:
-            logger.warning(f"Error checking for orphaned screenshot files: {e}")
-        
         if deleted_count > 0:
-            logger.info(f"Deleted {deleted_count} existing screenshots for movie_id={request.movie_id} before generating new set")
+            logger.info(f"Deleted {deleted_count} existing screenshots from database and disk for movie_id={request.movie_id} before generating new set")
         
-        if orphaned_files:
-            logger.warning(f"Found {len(orphaned_files)} orphaned screenshot file(s) on disk not in database for movie_id={request.movie_id}. These were NOT deleted. Files: {orphaned_files}")
+        if orphaned_deleted > 0:
+            logger.info(f"Deleted {orphaned_deleted} orphaned screenshot file(s) on disk not in database for movie_id={request.movie_id}")
+        
+        if orphaned_files and orphaned_deleted == 0:
+            logger.warning(f"Found {len(orphaned_files)} orphaned screenshot file(s) on disk but failed to delete them. Files: {orphaned_files}")
         
         # Use provided subtitle_path if any
         subtitle_path = request.subtitle_path
@@ -922,10 +1000,16 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
         
         logger.info(f"Screenshot queuing complete: queued={queued}, skipped_existing={skipped_existing}, errors={errors}")
         
+        if skipped_existing > 0:
+            logger.warning(f"WARNING: {skipped_existing} screenshots were skipped because files already exist. This may indicate orphaned files weren't properly deleted.")
+        
         # Check queue size before starting worker
         from video_processing import frame_extraction_queue
         queue_size_before = frame_extraction_queue.qsize()
         logger.info(f"Queue size before starting worker: {queue_size_before}")
+        
+        if queue_size_before == 0 and queued == 0 and skipped_existing > 0:
+            logger.warning(f"WARNING: No screenshots queued but {skipped_existing} were skipped. This suggests orphaned files exist that should have been deleted.")
         
         # Ensure background worker is running to process the queue now
         try:
@@ -936,7 +1020,7 @@ async def create_interval_screenshots(request: ScreenshotsIntervalRequest):
             logger.error(f"Failed to start frame queue processor: {e}", exc_info=True)
 
         # Return current known screenshots (new ones will appear as the worker processes them)
-        current_shots = [{"path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
+        current_shots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()]
         response = {
             "status": "queued",
             "queued": queued,
@@ -1106,7 +1190,7 @@ async def get_launch_history():
             screenshot_objs = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
             
             # Return IDs and paths
-            images = [{"id": img.id, "path": img.image_path} for img in image_objs if "www.YTS.AM" not in img.image_path]
+            images = [{"id": img.id, "path": img.image_path, "url_path": get_image_url_path(img.image_path)} for img in image_objs if "www.YTS.AM" not in img.image_path]
             screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
             
             # For get_largest_image (needs paths)
@@ -1147,6 +1231,7 @@ async def get_launch_history():
                 "screenshot_path": screenshot_path,
                 "image_id": largest_image_id,
                 "image_path": largest_image_path,
+                "image_path_url": get_image_url_path(largest_image_path) if largest_image_path else None,
                 "year": movie.year
             }
             
@@ -1281,6 +1366,7 @@ async def get_watched():
                         "screenshot_path": screenshot_path,
                         "image_id": largest_image_id,
                         "image_path": largest_image_path,
+                        "image_path_url": get_image_url_path(largest_image_path) if largest_image_path else None,
                         "year": movie.year,
                         "has_launched": db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
                     }
@@ -1432,7 +1518,6 @@ async def get_config():
     try:
         config = load_config()
         movies_folder = get_movies_folder()
-        logger.info(f"get_config returning movies_folder: {movies_folder}")
         
         # Check ffmpeg status
         ffmpeg_path = find_ffmpeg()
@@ -1755,44 +1840,51 @@ async def get_currently_playing():
     return {"playing": playing}
 
 def get_largest_image(movie_info):
-    """Get the largest image file from movie's images or screenshots"""
-    all_images = []
+    """Get the largest image file from movie's images or screenshots.
+    Prefers qualified images from movie folder over screenshots."""
+    folder_images = []
     
-    # Add folder images (filter out YTS images)
+    # First, check folder images (filter out YTS spam images)
     if movie_info.get("images"):
         filtered_images = filter_yts_images(movie_info["images"])
         for img_path in filtered_images:
             try:
                 if os.path.exists(img_path):
                     size = os.path.getsize(img_path)
-                    all_images.append((img_path, size))
+                    folder_images.append((img_path, size))
             except:
                 pass
     
-    # Add screenshots
+    # If we have qualified folder images, return the largest one
+    if folder_images:
+        largest = max(folder_images, key=lambda x: x[1])
+        return largest[0]
+    
+    # Fallback to screenshots only if no qualified folder images exist
+    screenshot_images = []
     if movie_info.get("screenshots"):
         for screenshot_path in movie_info["screenshots"]:
             try:
                 if os.path.exists(screenshot_path):
                     size = os.path.getsize(screenshot_path)
-                    all_images.append((screenshot_path, size))
+                    screenshot_images.append((screenshot_path, size))
             except:
                 pass
     
-    # Add frame if available
+    # Add frame if available (also a screenshot)
     if movie_info.get("frame"):
         try:
             if os.path.exists(movie_info["frame"]):
                 size = os.path.getsize(movie_info["frame"])
-                all_images.append((movie_info["frame"], size))
+                screenshot_images.append((movie_info["frame"], size))
         except:
             pass
     
-    if not all_images:
+    if not screenshot_images:
         return None
     
-    # Return the path of the largest image
-    largest = max(all_images, key=lambda x: x[1])
+    # Return the largest screenshot
+    largest = max(screenshot_images, key=lambda x: x[1])
     return largest[0]
 
 def get_first_letter(name):
@@ -2139,95 +2231,6 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
 
 
 if __name__ == "__main__":
-    # Register atexit handler for cleanup on exit
-    atexit.register(lambda: (shutdown_flag.set(), kill_all_active_subprocesses()))
-    
-    import uvicorn
-    import signal
-    import sys
-    
-    def signal_handler(sig, frame):
-        """Handle Ctrl+C gracefully"""
-        logger.info("Received interrupt signal, shutting down...")
-        global _app_shutting_down
-        _app_shutting_down = True
-        shutdown_flag.set()
-        kill_all_active_subprocesses()
-        sys.exit(0)
-    
-    # Register signal handlers for clean shutdown
-    signal.signal(signal.SIGINT, signal_handler)
-    if hasattr(signal, 'SIGTERM'):
-        signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Configure uvicorn logging
-    # Note: uvicorn logs will go to both console (for HTTP requests) and file (for complete log)
-    import logging.config
-    uvicorn_log_config = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "default": {
-                "format": "%(asctime)s - %(levelname)s - %(message)s",
-            },
-            "access": {
-                "format": "%(asctime)s - %(levelname)s - %(message)s",
-            },
-        },
-        "handlers": {
-            "default": {
-                "formatter": "default",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-            },
-            "access": {
-                "formatter": "access",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-            },
-            "file_default": {
-                "formatter": "default",
-                "class": "logging.FileHandler",
-                "filename": str(LOG_FILE),
-                "encoding": "utf-8",
-            },
-            "file_access": {
-                "formatter": "access",
-                "class": "logging.FileHandler",
-                "filename": str(LOG_FILE),
-                "encoding": "utf-8",
-            },
-        },
-        "loggers": {
-            "uvicorn.error": {
-                "handlers": ["default", "file_default"],
-                "level": "INFO",
-                "propagate": False,
-            },
-            "uvicorn.access": {
-                "handlers": ["access", "file_access"],
-                "level": "INFO",
-                "propagate": False,
-            },
-        },
-    }
-    
-    try:
-        logger.info("=" * 60)
-        logger.info("Starting Movie Searcher server")
-        logger.info("Server URL: http://127.0.0.1:8002")
-        logger.info("=" * 60)
-        uvicorn.run(
-            "main:app",
-            host="127.0.0.1",
-            port=8002,
-            reload=False,
-            use_colors=False,
-            log_config=uvicorn_log_config
-        )
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received, shutting down...")
-        shutdown_flag.set()
-        kill_all_active_subprocesses()
-        sys.exit(0)
+    from server import run_server
+    run_server()
 

@@ -1021,9 +1021,8 @@
         
         .movie-card-image {
             width: 100%;
-            aspect-ratio: 16 / 9;
             min-height: 180px;
-            max-height: 280px;
+            max-height: 450px;
             background: #1a1a1a;
             display: flex;
             align-items: center;
@@ -1036,7 +1035,8 @@
         
         .movie-card-image img {
             width: 100%;
-            height: 100%;
+            height: auto;
+            max-height: 450px;
             object-fit: contain;
             object-position: center;
         }
@@ -1303,19 +1303,23 @@
         .movie-details-poster {
             flex-shrink: 0;
             width: 300px;
-            height: 450px;
+            min-height: 200px;
+            max-height: 450px;
             background: #1a1a1a;
             border-radius: 8px;
             overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
+            position: relative;
         }
         
         .movie-details-poster img {
             width: 100%;
-            height: 100%;
-            object-fit: cover;
+            height: auto;
+            max-height: 450px;
+            object-fit: contain;
+            object-position: center;
         }
         
         .movie-details-info {
@@ -1921,9 +1925,31 @@
 
         // Movie Card Component
         function createMovieCard(movie) {
-            const imageUrl = movie.screenshot_path
-                ? movie.screenshot_path
-                : (movie.image_path ? movie.image_path : '');
+            // Helper to extract filename from path
+            function getFilename(path) {
+                if (!path) return null;
+                const parts = path.replace(/\\/g, '/').split('/');
+                return parts[parts.length - 1];
+            }
+            
+            // Use screenshot path directly if available (static files), otherwise use image path URL or image ID
+            let imageUrl = '';
+            if (movie.screenshot_path) {
+                const filename = getFilename(movie.screenshot_path);
+                imageUrl = filename ? `/screenshots/${encodeURIComponent(filename)}` : '';
+            } else if (movie.image_path_url) {
+                imageUrl = `/movies/${encodeURIComponent(movie.image_path_url)}`;
+            } else if (movie.image_path) {
+                // If image_path is a screenshot (not in movies folder), extract filename and use /screenshots/
+                const filename = getFilename(movie.image_path);
+                if (filename && movie.image_path.includes('screenshots')) {
+                    imageUrl = `/screenshots/${encodeURIComponent(filename)}`;
+                } else if (movie.image_id) {
+                    imageUrl = `/api/image/${movie.image_id}`;
+                }
+            } else if (movie.image_id) {
+                imageUrl = `/api/image/${movie.image_id}`;
+            }
             // Use watch_status if available (can be string enum or boolean for backward compat), fallback to watched boolean
             let watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? 'watched' : null);
             // Normalize: convert boolean to string enum for backward compatibility
@@ -1956,7 +1982,7 @@
             return `
                 <div class="movie-card ${watchedClass}" data-movie-id="${movie.id || ''}" onclick="${cardClick}">
                     <div class="movie-card-image">
-                        ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" loading="lazy" onerror="this.parentElement.innerHTML='No Image'">` : 'No Image'}
+                        ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" loading="lazy" onerror="this.parentElement.innerHTML='No Image'" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; }">` : 'No Image'}
                     </div>
                     <div class="movie-card-body">
                         <div class="movie-card-title">${escapeHtml(movie.name)}</div>
@@ -2602,13 +2628,23 @@
         function renderMediaGallery(images, screenshots, itemPath, movieId) {
             const allMedia = [];
             
-            // Add folder images first - images are now objects with {id, path}
+            // Helper to extract filename from path
+            function getFilename(path) {
+                if (!path) return null;
+                // Handle both Windows and Unix paths
+                const parts = path.replace(/\\/g, '/').split('/');
+                return parts[parts.length - 1];
+            }
+            
+            // Add folder images first - images are now objects with {id, path, url_path}
+            // Images are in movies folder, served as static files
             if (images && images.length > 0) {
                 images.forEach((img, idx) => {
-                    const imgObj = typeof img === 'object' ? img : {id: null, path: img}; // Handle both old (path string) and new (object) formats
+                    const imgObj = typeof img === 'object' ? img : {id: null, path: img, url_path: null}; // Handle both old (path string) and new (object) formats
                     allMedia.push({
                         id: imgObj.id,
                         path: imgObj.path,
+                        url_path: imgObj.url_path || null,
                         type: 'image',
                         label: idx === 0 ? 'Poster' : `Image ${idx + 1}`,
                         timestamp: null
@@ -2617,12 +2653,14 @@
             }
             
             // Add screenshots - screenshots are now objects with {id, path, timestamp_seconds}
+            // Screenshots are in controlled /screenshots directory, use path directly
             if (screenshots && screenshots.length > 0) {
                 screenshots.forEach((screenshot, idx) => {
                     const screenshotObj = typeof screenshot === 'object' ? screenshot : {id: null, path: screenshot, timestamp_seconds: null}; // Handle both old (path string) and new (object) formats
                     allMedia.push({
                         id: screenshotObj.id,
                         path: screenshotObj.path,
+                        filename: getFilename(screenshotObj.path), // Extract filename for static serving
                         type: 'screenshot',
                         label: `Screenshot ${idx + 1}`,
                         timestamp: screenshotObj.timestamp_seconds
@@ -2642,12 +2680,27 @@
             
             let galleryHtml = '<div class="media-gallery">';
             
+            // Track if we've seen images and screenshots to add break between them
+            let hasSeenImages = false;
+            let hasSeenScreenshots = false;
+            
             allMedia.forEach((media, idx) => {
                 const isScreenshot = media.type === 'screenshot';
                 const timestamp = media.timestamp;
                 const timestampLabel = timestamp !== null && timestamp !== undefined 
                     ? formatTimestamp(timestamp) 
                     : '';
+                
+                // Add break when transitioning from images to screenshots
+                if (isScreenshot && !hasSeenScreenshots && hasSeenImages) {
+                    galleryHtml += '<div style="width: 100%; flex-basis: 100%;"></div>';
+                    hasSeenScreenshots = true;
+                }
+                if (!isScreenshot) {
+                    hasSeenImages = true;
+                } else {
+                    hasSeenScreenshots = true;
+                }
                 
                 if (idx === 0) {
                     // First item gets the "Get more" button
@@ -2659,8 +2712,10 @@
                             launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie(${movieId});">Launch</button>`;
                         }
                     }
-                    const imageUrl = isScreenshot ? `/api/screenshot/${media.id}` : `/api/image/${media.id}`;
-                    const imageSrc = media.path || imageUrl; // Use path directly if available, fallback to ID-based URL
+                    // Use path directly for both screenshots and images (static files)
+                    const imageSrc = isScreenshot 
+                        ? (media.filename ? `/screenshots/${encodeURIComponent(media.filename)}` : '')
+                        : (media.url_path ? `/movies/${encodeURIComponent(media.url_path)}` : (media.id ? `/api/image/${media.id}` : ''));
                     galleryHtml += `
                         <div class="media-item" onclick="showMediaOverlay(${media.id || 'null'}, ${isScreenshot ? 'true' : 'false'}, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${idx})" style="position: relative;">
                             <button 
@@ -2689,8 +2744,10 @@
                             launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie(${movieId});">Launch</button>`;
                         }
                     }
-                    const imageUrl = isScreenshot ? `/api/screenshot/${media.id}` : `/api/image/${media.id}`;
-                    const imageSrc = media.path || imageUrl; // Use path directly if available, fallback to ID-based URL
+                    // Use path directly for both screenshots and images (static files)
+                    const imageSrc = isScreenshot 
+                        ? (media.filename ? `/screenshots/${encodeURIComponent(media.filename)}` : '')
+                        : (media.url_path ? `/movies/${encodeURIComponent(media.url_path)}` : (media.id ? `/api/image/${media.id}` : ''));
                     galleryHtml += `
                         <div class="media-item" onclick="showMediaOverlay(${media.id || 'null'}, ${isScreenshot ? 'true' : 'false'}, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${idx})" style="position: relative;">
                             ${launchBtnHtml}
@@ -2707,6 +2764,214 @@
             
             galleryHtml += '</div>';
             return galleryHtml;
+        }
+        
+        async function updateScreenshotsGallery(movieId, existingScreenshotIds) {
+            // Incrementally update the screenshots gallery without reloading the entire page
+            try {
+                const response = await fetch(`/api/movie/${movieId}/screenshots`);
+                if (!response.ok) return false;
+                
+                const data = await response.json();
+                const allScreenshots = data.screenshots || [];
+                
+                // Find the media gallery container
+                const container = document.getElementById('movieDetailsContainer');
+                if (!container) return false;
+                const gallery = container.querySelector('.media-gallery');
+                if (!gallery) return false;
+                
+                // Get current screenshot IDs from DOM to detect deletions
+                const domScreenshotIds = new Set();
+                const domScreenshotElements = [];
+                gallery.querySelectorAll('.media-item').forEach(item => {
+                    const onclick = item.getAttribute('onclick');
+                    if (onclick && onclick.includes(', true,')) {
+                        // Extract screenshot ID from onclick="showMediaOverlay(id, true, ...)"
+                        const match = onclick.match(/showMediaOverlay\((\d+),\s*true/);
+                        if (match) {
+                            const id = parseInt(match[1]);
+                            domScreenshotIds.add(id);
+                            domScreenshotElements.push({element: item, id: id});
+                        }
+                    }
+                });
+                
+                // Remove screenshots from DOM that are no longer in database
+                const apiScreenshotIds = new Set(allScreenshots.map(s => s.id));
+                domScreenshotElements.forEach(({element, id}) => {
+                    if (!apiScreenshotIds.has(id)) {
+                        element.remove();
+                        // Remove from currentMediaArray
+                        const idx = currentMediaArray.findIndex(m => m.id === id && m.type === 'screenshot');
+                        if (idx >= 0) {
+                            currentMediaArray.splice(idx, 1);
+                        }
+                    }
+                });
+                
+                // Find new screenshots (not in existing set)
+                const newScreenshots = allScreenshots.filter(s => !existingScreenshotIds.has(s.id));
+                if (newScreenshots.length === 0) {
+                    return false; // No new screenshots
+                }
+                
+                // Helper to extract filename from path
+                function getFilename(path) {
+                    if (!path) return null;
+                    const parts = path.replace(/\\/g, '/').split('/');
+                    return parts[parts.length - 1];
+                }
+                
+                // Sort new screenshots by timestamp (nulls last, matching API order)
+                newScreenshots.sort((a, b) => {
+                    const tsA = a.timestamp_seconds;
+                    const tsB = b.timestamp_seconds;
+                    if (tsA === null || tsA === undefined) return 1; // nulls last
+                    if (tsB === null || tsB === undefined) return -1;
+                    return tsA - tsB;
+                });
+                
+                // Get DOM elements AFTER deletions (so we only see remaining screenshots)
+                const existingItems = Array.from(gallery.querySelectorAll('.media-item'));
+                
+                // Helper to extract timestamp from DOM element
+                function getTimestampFromElement(el) {
+                    const onclick = el.getAttribute('onclick');
+                    if (!onclick || !onclick.includes(', true,')) return null; // Not a screenshot
+                    const match = onclick.match(/showMediaOverlay\([^,]+,\s*true,\s*([^,]+)/);
+                    if (match && match[1] !== 'null') {
+                        const ts = parseFloat(match[1]);
+                        return isNaN(ts) ? null : ts;
+                    }
+                    return null;
+                }
+                
+                // Insert each new screenshot in the correct position
+                newScreenshots.forEach((screenshot) => {
+                    const filename = getFilename(screenshot.path);
+                    if (!filename) return;
+                    
+                    const timestamp = screenshot.timestamp_seconds;
+                    const timestampLabel = timestamp !== null && timestamp !== undefined 
+                        ? formatTimestamp(timestamp) 
+                        : '';
+                    
+                    const imageSrc = `/screenshots/${encodeURIComponent(filename)}`;
+                    
+                    // Find DOM insertion point: first screenshot element with timestamp > this timestamp
+                    // Also check if we need to add a break before the first screenshot (if images exist)
+                    let insertBeforeElement = null;
+                    let needsBreak = false;
+                    let foundFirstScreenshot = false;
+                    for (const el of existingItems) {
+                        const elOnclick = el.getAttribute('onclick');
+                        const elTs = getTimestampFromElement(el);
+                        const isElScreenshot = elTs !== null || (elOnclick && elOnclick.includes(', true,'));
+                        if (isElScreenshot) {
+                            foundFirstScreenshot = true;
+                            if (elTs !== null && timestamp !== null && timestamp !== undefined && elTs > timestamp) {
+                                insertBeforeElement = el;
+                                break;
+                            }
+                        } else {
+                            // This is an image - if we haven't seen a screenshot yet, we'll need a break
+                            if (!foundFirstScreenshot) {
+                                needsBreak = true;
+                            }
+                        }
+                    }
+                    
+                    // Find insertion index in currentMediaArray (for navigation)
+                    let insertIndex = currentMediaArray.length;
+                    for (let i = 0; i < currentMediaArray.length; i++) {
+                        const item = currentMediaArray[i];
+                        if (item.type === 'screenshot') {
+                            const itemTs = item.timestamp;
+                            if (timestamp !== null && timestamp !== undefined) {
+                                if (itemTs !== null && itemTs !== undefined && itemTs >= timestamp) {
+                                    insertIndex = i;
+                                    break;
+                                }
+                            } else if (itemTs === null || itemTs === undefined) {
+                                insertIndex = i;
+                                break;
+                            }
+                        }
+                    }
+                    if (insertIndex === currentMediaArray.length) {
+                        // Find last screenshot index
+                        for (let i = currentMediaArray.length - 1; i >= 0; i--) {
+                            if (currentMediaArray[i].type === 'screenshot') {
+                                insertIndex = i + 1;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Insert into currentMediaArray
+                    const newMediaItem = {
+                        id: screenshot.id,
+                        path: screenshot.path,
+                        filename: filename,
+                        type: 'screenshot',
+                        label: `Screenshot ${insertIndex + 1}`,
+                        timestamp: timestamp
+                    };
+                    currentMediaArray.splice(insertIndex, 0, newMediaItem);
+                    
+                    // Create launch button if needed
+                    let launchBtnHtml = '';
+                    if (movieId) {
+                        if (timestamp !== null && timestamp !== undefined) {
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo(${movieId}, ${timestamp});">Launch</button>`;
+                        } else {
+                            launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie(${movieId});">Launch</button>`;
+                        }
+                    }
+                    
+                    // Create the new gallery item HTML
+                    const newItemHtml = `
+                        <div class="media-item" onclick="showMediaOverlay(${screenshot.id}, true, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${insertIndex})" style="position: relative;">
+                            ${launchBtnHtml}
+                            ${timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
+                            <img src="${imageSrc}" 
+                                 alt="" 
+                                 loading="lazy"
+                                 onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'"
+                                 onload="console.log('Loaded image:', '${escapeJsString(imageSrc)}')">
+                        </div>
+                    `;
+                    
+                    // Insert into DOM
+                    if (insertBeforeElement) {
+                        insertBeforeElement.insertAdjacentHTML('beforebegin', newItemHtml);
+                        // Add to existingItems so next iteration can find it
+                        const newEl = insertBeforeElement.previousElementSibling;
+                        if (newEl) {
+                            const insertIdx = existingItems.indexOf(insertBeforeElement);
+                            existingItems.splice(insertIdx, 0, newEl);
+                        }
+                    } else {
+                        // If this is the first screenshot and images exist, add break first
+                        if (needsBreak && !foundFirstScreenshot) {
+                            gallery.insertAdjacentHTML('beforeend', '<div style="width: 100%; flex-basis: 100%;"></div>');
+                        }
+                        gallery.insertAdjacentHTML('beforeend', newItemHtml);
+                        // Add to existingItems
+                        const newEl = gallery.lastElementChild;
+                        if (newEl) existingItems.push(newEl);
+                    }
+                    
+                    // Track this screenshot as existing
+                    existingScreenshotIds.add(screenshot.id);
+                });
+                
+                return true; // Had new screenshots
+            } catch (error) {
+                console.error('Error updating screenshots gallery:', error);
+                return false;
+            }
         }
         
         function formatTimestamp(seconds) {
@@ -2734,8 +2999,15 @@
             // Store current index for navigation
             currentMediaIndex = index !== undefined ? index : -1;
             
-            // Use ID-based endpoint (paths are for reference only, not direct URLs)
-            const imageUrl = mediaId ? (isScreenshot ? `/api/screenshot/${mediaId}` : `/api/image/${mediaId}`) : '';
+            // Use path directly for both screenshots and images (static files)
+            let imageUrl = '';
+            if (isScreenshot && currentMediaArray[currentMediaIndex] && currentMediaArray[currentMediaIndex].filename) {
+                imageUrl = `/screenshots/${encodeURIComponent(currentMediaArray[currentMediaIndex].filename)}`;
+            } else if (!isScreenshot && currentMediaArray[currentMediaIndex] && currentMediaArray[currentMediaIndex].url_path) {
+                imageUrl = `/movies/${encodeURIComponent(currentMediaArray[currentMediaIndex].url_path)}`;
+            } else if (mediaId) {
+                imageUrl = isScreenshot ? `/api/screenshot/${mediaId}` : `/api/image/${mediaId}`;
+            }
             img.src = imageUrl;
             
             // Show controls for screenshots with timestamps
@@ -2898,17 +3170,40 @@
                 } else {
                     showStatus('Queued ' + (data.queued || 0) + ' screenshots', 'success');
                     closeScreenshotConfig();
-                    // Reload movie details by ID
-                    setTimeout(() => {
-                        if (movieId) {
-                            loadMovieDetailsById(movieId);
+                    
+                    // CLEAR ALL EXISTING SCREENSHOTS FROM DOM - regeneration means fresh start
+                    const container = document.getElementById('movieDetailsContainer');
+                    if (container) {
+                        const gallery = container.querySelector('.media-gallery');
+                        if (gallery) {
+                            // Remove all screenshot elements (keep images)
+                            const allItems = Array.from(gallery.querySelectorAll('.media-item'));
+                            allItems.forEach(item => {
+                                const onclick = item.getAttribute('onclick');
+                                // Check if it's a screenshot (onclick contains ", true," for screenshots)
+                                if (onclick && onclick.includes(', true,')) {
+                                    item.remove();
+                                }
+                            });
+                            
+                            // Update currentMediaArray - remove screenshots, keep images
+                            currentMediaArray = currentMediaArray.filter(media => media.type !== 'screenshot');
                         }
-                    }, 1200);
-                    // Poll for updates
+                    }
+                    
+                    // Track existing screenshot IDs from API response (should be empty after deletion)
+                    const existingScreenshotIds = new Set((data.screenshots || []).map(s => s.id));
+                    
+                    // Initial update after a short delay
+                    setTimeout(() => {
+                        updateScreenshotsGallery(movieId, existingScreenshotIds);
+                    }, 1500);
+                    
+                    // Poll for new screenshots (lightweight endpoint, incremental updates)
                     let polls = 0;
-                    const maxPolls = 15;
+                    const maxPolls = 30; // Poll for up to 60 seconds (30 * 2s)
                     const pollIntervalMs = 2000;
-                    const iv = setInterval(() => {
+                    const iv = setInterval(async () => {
                         // Stop polling if user navigated away from movie details page
                         const pageMovieDetails = document.getElementById('pageMovieDetails');
                         if (!pageMovieDetails || !pageMovieDetails.classList.contains('active')) {
@@ -2927,11 +3222,15 @@
                             clearInterval(iv);
                             return;
                         }
-                        if (movieId) {
-                            loadMovieDetailsById(movieId);
-                        }
+                        
+                        // Update gallery incrementally
+                        const hadNewScreenshots = await updateScreenshotsGallery(movieId, existingScreenshotIds);
+                        
                         polls += 1;
-                        if (polls >= maxPolls) {
+                        // Stop early if no new screenshots for several polls (likely done)
+                        if (!hadNewScreenshots && polls >= 5) {
+                            clearInterval(iv);
+                        } else if (polls >= maxPolls) {
                             clearInterval(iv);
                         }
                     }, pollIntervalMs);
@@ -3834,7 +4133,19 @@
                     return;
                 }
 
-                const imageUrl = movie.image_id ? `/api/image/${movie.image_id}` : '';
+                // Use screenshot path if image_path points to screenshots directory, otherwise use image_path_url or image_id
+                let imageUrl = '';
+                if (movie.screenshot_path) {
+                    const filename = movie.screenshot_path.split(/[/\\]/).pop();
+                    imageUrl = filename ? `/screenshots/${encodeURIComponent(filename)}` : '';
+                } else if (movie.image_path_url) {
+                    imageUrl = `/movies/${encodeURIComponent(movie.image_path_url)}`;
+                } else if (movie.image_path && movie.image_path.includes('screenshots')) {
+                    const filename = movie.image_path.split(/[/\\]/).pop();
+                    imageUrl = filename ? `/screenshots/${encodeURIComponent(filename)}` : '';
+                } else if (movie.image_id) {
+                    imageUrl = `/api/image/${movie.image_id}`;
+                }
                 const externalLinks = generateExternalLinks(movie.name);
                 const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path, movie.id);
 
@@ -3869,7 +4180,7 @@
                 container.innerHTML = `
                     <div class="movie-details-header">
                         <div class="movie-details-poster">
-                            ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}">` : 'No Image'}
+                            ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; container.style.height = 'auto'; }">` : 'No Image'}
                         </div>
                         <div class="movie-details-info">
                             <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>

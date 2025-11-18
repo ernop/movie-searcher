@@ -1111,6 +1111,55 @@ def scan_directory(root_path, state=None, progress_callback=None):
         
         add_scan_log("success", f"Scan complete: {indexed} files processed, {updated} updated")
         
+        # After scan completes, enqueue screenshot jobs for movies without screenshots
+        add_scan_log("info", "Checking for movies without screenshots...")
+        movies_without_screenshots = db.query(Movie).outerjoin(
+            Screenshot, Movie.id == Screenshot.movie_id
+        ).filter(
+            Screenshot.id == None
+        ).all()
+        
+        if movies_without_screenshots:
+            add_scan_log("info", f"Found {len(movies_without_screenshots)} movies without screenshots, enqueueing initial screenshot at 5-minute mark...")
+            enqueued_count = 0
+            skipped_count = 0
+            
+            for movie in movies_without_screenshots:
+                if shutdown_flag.is_set():
+                    add_scan_log("warning", "Screenshot enqueueing interrupted by shutdown")
+                    break
+                
+                # Skip if movie length is too short (less than 5 minutes)
+                if movie.length and movie.length < 300:
+                    skipped_count += 1
+                    continue
+                
+                # Enqueue screenshot at 5-minute mark (300 seconds)
+                try:
+                    result = extract_movie_screenshot(
+                        movie.path,
+                        timestamp_seconds=300,
+                        priority="low",  # Low priority for background work
+                        movie_id=movie.id
+                    )
+                    if result is None:
+                        # None means it was queued successfully
+                        enqueued_count += 1
+                        if enqueued_count <= 10 or enqueued_count % 50 == 0:
+                            add_scan_log("info", f"Enqueued screenshot for {movie.name} (total: {enqueued_count})")
+                    elif isinstance(result, str):
+                        # String means screenshot already exists (shouldn't happen, but handle it)
+                        skipped_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to enqueue screenshot for movie_id={movie.id}, path={movie.path}: {e}", exc_info=True)
+                    skipped_count += 1
+            
+            add_scan_log("success", f"Screenshot enqueueing complete: {enqueued_count} enqueued, {skipped_count} skipped")
+            if enqueued_count > 0:
+                add_scan_log("info", f"Screenshots will be generated in background. Queue size: {frame_extraction_queue.qsize()}")
+        else:
+            add_scan_log("info", "All movies already have screenshots")
+        
         return {"indexed": indexed, "updated": updated}
     finally:
         db.close()
