@@ -92,7 +92,6 @@ function handleRoute() {
      } else if (route === '/explore') {
          if (pageExplore) {
              pageExplore.classList.add('active');
-             exploreViewActive = true;
              loadExploreMovies();
          }
      } else if (route === '/history') {

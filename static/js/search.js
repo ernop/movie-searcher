@@ -6,6 +6,94 @@ const viewWatchedBtn = document.getElementById('viewWatchedBtn');
 const watchedSection = document.getElementById('watchedSection');
 const watchedList = document.getElementById('watchedList');
 
+let selectedIndex = -1;
+let currentResults = [];
+let searchTimeout = null;
+let searchAbortController = null;
+
+function scheduleSearch(query) {
+    // Clear existing timeout
+    if (searchTimeout) {
+        clearTimeout(searchTimeout);
+        searchTimeout = null;
+    }
+    
+    // If query is empty, clear results
+    if (!query || query.trim().length === 0) {
+        // Abort any pending search
+        if (searchAbortController) {
+            searchAbortController.abort();
+            searchAbortController = null;
+        }
+        if (autocomplete) autocomplete.style.display = 'none';
+        if (results) results.innerHTML = '';
+        currentResults = [];
+        return;
+    }
+    
+    // Debounce search by 300ms
+    searchTimeout = setTimeout(() => {
+        performSearch(query);
+    }, 300);
+}
+
+async function performSearch(query) {
+    // Abort previous request
+    if (searchAbortController) {
+        searchAbortController.abort();
+    }
+    searchAbortController = new AbortController();
+    
+    try {
+        const watchFilter = getWatchFilter();
+        const params = new URLSearchParams({
+            q: query,
+            filter_type: watchFilter,
+            language: 'all',
+            offset: '0',
+            limit: '50'
+        });
+        
+        const response = await fetch(`/api/search?${params}`, {
+            signal: searchAbortController.signal
+        });
+        
+        searchAbortController = null;
+        
+        if (!response.ok) {
+            console.error('Search failed:', response.status);
+            return;
+        }
+        
+        const data = await response.json();
+        currentResults = data.results || [];
+        
+        if (currentResults.length === 0) {
+            if (autocomplete) autocomplete.style.display = 'none';
+            if (results) results.innerHTML = '<div class="empty-state">No results found</div>';
+            return;
+        }
+        
+        // Show autocomplete with top 10 results
+        const autocompleteItems = currentResults.slice(0, 10);
+        if (autocomplete) {
+            autocomplete.innerHTML = autocompleteItems.map((item, index) => `
+                <div class="autocomplete-item" data-index="${index}">
+                    <strong>${escapeHtml(item.name || 'Unknown')}</strong>
+                    ${item.year ? `<span style="color: #999; margin-left: 8px;">(${item.year})</span>` : ''}
+                </div>
+            `).join('');
+            autocomplete.style.display = 'block';
+        }
+        selectedIndex = -1;
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            return;
+        }
+        console.error('Search error:', error);
+    }
+}
+
 function updateClearButtonVisibility() {
     const clearBtn = document.querySelector('.clear-search-btn');
     if (clearBtn) {

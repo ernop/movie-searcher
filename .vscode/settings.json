@@ -8,6 +8,8 @@
   "files.watcherExclude": {
     "screenshots": true
   },
+  "files.encoding": "utf8",
+  "files.autoGuessEncoding": false,
   "editor.fontFamily": "'Consolas', 'Courier New', monospace",
   "editor.fontSize": 14,
   "editor.fontWeight": "500",
