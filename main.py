@@ -153,57 +153,36 @@ def filter_existing_screenshots(screenshot_objs: list) -> list:
     """
     Filter screenshot objects to only include those where the file actually exists on disk.
     Returns list of Screenshot objects with existing files.
-    
-    Handles path normalization issues - paths in DB might be absolute, relative, or have different separators.
     """
     existing = []
+    from video_processing import SCREENSHOT_DIR
+    
     for screenshot in screenshot_objs:
         if not screenshot.shot_path:
-            logger.debug(f"Screenshot has no shot_path (will be filtered): screenshot_id={screenshot.id}")
             continue
         
-        # Try multiple path resolution strategies
+        path_obj = Path(screenshot.shot_path)
         path_exists = False
-        path_variants = [
-            screenshot.shot_path,  # Original path as stored
-            str(Path(screenshot.shot_path)),  # Path object conversion
-            str(Path(screenshot.shot_path).resolve()),  # Resolved absolute path
-        ]
         
-        # Also try relative to screenshot directory if it looks relative
-        from video_processing import SCREENSHOT_DIR
-        if SCREENSHOT_DIR:
-            # If path doesn't look absolute (no drive letter on Windows, no leading / on Unix)
-            if not (len(screenshot.shot_path) > 1 and screenshot.shot_path[1] == ':') and not screenshot.shot_path.startswith('/'):
-                path_variants.append(str(SCREENSHOT_DIR / screenshot.shot_path))
-            # Extract filename and try in screenshot dir
-            filename = Path(screenshot.shot_path).name
-            path_variants.append(str(SCREENSHOT_DIR / filename))
-        
-        for path_variant in path_variants:
-            try:
-                if Path(path_variant).exists():
-                    path_exists = True
-                    break
-            except Exception:
-                continue
+        # Check exact path
+        if path_obj.exists():
+            path_exists = True
+        # If relative, check in SCREENSHOT_DIR
+        elif SCREENSHOT_DIR and not path_obj.is_absolute():
+            if (SCREENSHOT_DIR / path_obj).exists():
+                path_exists = True
         
         if path_exists:
             existing.append(screenshot)
         else:
-            logger.info(f"Screenshot file missing (will be filtered): screenshot_id={screenshot.id}, shot_path={screenshot.shot_path}, movie_id={screenshot.movie_id}")
+            logger.debug(f"Screenshot file missing: {screenshot.shot_path}")
+            
     return existing
 
 def get_image_url_path(image_path: str) -> Optional[str]:
     """
     Convert absolute image path to relative URL path for static serving.
     Returns None if path is a screenshot (handled separately) or if movies folder not configured.
-    
-    Args:
-        image_path: Absolute path to image file
-        
-    Returns:
-        Relative path from movies folder root, or None if not in movies folder
     """
     if not image_path:
         return None
@@ -221,26 +200,17 @@ def get_image_url_path(image_path: str) -> Optional[str]:
         movies_folder_obj = Path(movies_folder).resolve()
         
         # Check if image is within movies folder
-        try:
-            relative_path = image_path_obj.relative_to(movies_folder_obj)
-            # Convert to forward slashes for URL
-            return str(relative_path).replace('\\', '/')
-        except ValueError:
-            # Image is not in movies folder
-            return None
-    except Exception:
+        relative_path = image_path_obj.relative_to(movies_folder_obj)
+        # Convert to forward slashes for URL
+        return str(relative_path).replace('\\', '/')
+    except (ValueError, OSError):
+        # Image is not in movies folder or path resolution failed
         return None
 
 def ensure_movie_has_screenshot(movie_id: int, movie_path: str, has_image: bool, screenshot_objs: list):
     """
     Ensure movie has at least one screenshot or image. If not, queue a screenshot at 5 minutes (300s).
     This is called when viewing movie details or cards to ensure every movie has visual content.
-    
-    Args:
-        movie_id: Movie ID
-        movie_path: Path to movie file
-        has_image: Whether movie has an image_path set and file exists
-        screenshot_objs: List of Screenshot objects (already filtered for existing files)
     """
     has_screenshots = len(screenshot_objs) > 0
     
@@ -523,12 +493,12 @@ def analyze_movie_names():
             
             # Look for common clutter strings (resolution, codec, etc.)
             clutter_patterns = [
-                r'\b\d{3,4}p\b',  # 1080p, 720p, etc.
-                r'\b\d{3,4}x\d{3,4}\b',  # 1920x1080, etc.
-                r'\b(BluRay|BRRip|DVDRip|WEBRip|HDTV|HDRip|BDRip)\b',
-                r'\b(x264|x265|HEVC|AVC|H\.264|H\.265)\b',
-                r'\b(AC3|DTS|AAC|MP3)\b',
-                r'\b(REPACK|PROPER|RERIP)\b',
+                r'\\b\\d{3,4}p\\b',  # 1080p, 720p, etc.
+                r'\\b\\d{3,4}x\\d{3,4}\\b',  # 1920x1080, etc.
+                r'\\b(BluRay|BRRip|DVDRip|WEBRip|HDTV|HDRip|BDRip)\\b',
+                r'\\b(x264|x265|HEVC|AVC|H\\.264|H\\.265)\\b',
+                r'\\b(AC3|DTS|AAC|MP3)\\b',
+                r'\\b(REPACK|PROPER|RERIP)\\b',
             ]
             
             for pattern in clutter_patterns:
@@ -1639,48 +1609,16 @@ async def set_config(request: ConfigRequest):
                 folder_path = folder_path.rstrip('\\')
         
         logger.info(f"Normalized path: '{folder_path}'")
-        logger.info(f"Path type: {type(folder_path)}")
-        logger.info(f"Path length: {len(folder_path)}")
-        logger.info(f"Path repr: {repr(folder_path)}")
         
-        # Try Path object approach
+        # Use pathlib for validation (No fallback to os.path)
         path_obj = Path(folder_path)
-        logger.info(f"Path object: {path_obj}")
-        logger.info(f"Path object absolute: {path_obj.absolute()}")
-        logger.info(f"Path object exists (Path): {path_obj.exists()}")
-        logger.info(f"Path object is_dir (Path): {path_obj.is_dir()}")
         
-        # Try os.path approach
-        logger.info(f"os.path.exists: {os.path.exists(folder_path)}")
-        logger.info(f"os.path.isdir: {os.path.isdir(folder_path)}")
-        logger.info(f"os.path.abspath: {os.path.abspath(folder_path)}")
-        
-        # Check if path exists using both methods
-        exists_pathlib = path_obj.exists()
-        exists_os = os.path.exists(folder_path)
-        
-        logger.info(f"Path exists check - pathlib: {exists_pathlib}, os.path: {exists_os}")
-        
-        if not exists_pathlib and not exists_os:
-            error_msg = f"Path not found: '{folder_path}' (checked with both pathlib and os.path)"
+        if not path_obj.exists():
+            error_msg = f"Path not found: '{folder_path}'"
             logger.error(error_msg)
-            # Try to list parent directory to help debug
-            parent = path_obj.parent
-            if parent.exists():
-                try:
-                    contents = list(parent.iterdir())
-                    logger.info(f"Parent directory exists. Contents: {[str(c) for c in contents[:10]]}")
-                except Exception as e:
-                    logger.error(f"Error listing parent directory: {e}")
             raise HTTPException(status_code=404, detail=error_msg)
         
-        # Check if it's a directory
-        is_dir_pathlib = path_obj.is_dir()
-        is_dir_os = os.path.isdir(folder_path)
-        
-        logger.info(f"Is directory check - pathlib: {is_dir_pathlib}, os.path: {is_dir_os}")
-        
-        if not is_dir_pathlib and not is_dir_os:
+        if not path_obj.is_dir():
             error_msg = f"Path is not a directory: '{folder_path}'"
             logger.error(error_msg)
             raise HTTPException(status_code=400, detail=error_msg)
@@ -2288,4 +2226,3 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
 if __name__ == "__main__":
     from server import run_server
     run_server()
-

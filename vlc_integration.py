@@ -40,47 +40,6 @@ from database import SessionLocal, Movie, LaunchHistory, MovieStatus
 
 logger = logging.getLogger(__name__)
 
-# Decision tracking for fallback analysis (shared with video_processing)
-_DECISION_LOG_FILE = None
-_DECISION_LOG_LOCK = threading.Lock()
-
-def _log_decision(decision_name: str, path_taken: str, context: dict = None):
-    """Log a decision point for later analysis to determine which paths are actually used"""
-    global _DECISION_LOG_FILE
-    if _DECISION_LOG_FILE is None:
-        # Try to get script dir from database module
-        try:
-            from database import SCRIPT_DIR
-            if SCRIPT_DIR:
-                _DECISION_LOG_FILE = SCRIPT_DIR / "decision_log.jsonl"
-        except:
-            pass
-    
-    if not _DECISION_LOG_FILE:
-        return
-    
-    try:
-        import json
-        from datetime import datetime
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "decision": decision_name,
-            "path": path_taken,
-        }
-        if context:
-            entry["context"] = context
-        
-        if _DECISION_LOG_LOCK:
-            with _DECISION_LOG_LOCK:
-                with open(_DECISION_LOG_FILE, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps(entry) + '\n')
-        else:
-            with open(_DECISION_LOG_FILE, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(entry) + '\n')
-    except Exception as e:
-        # Don't let decision logging break the app
-        logger.debug(f"Failed to log decision: {e}")
-
 # Video and subtitle extensions (matching main.py)
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
 SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.vtt', '.ass', '.ssa'}
@@ -599,18 +558,13 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     results = []
     
     # Load config to check launch_with_subtitles_on setting
-    config_load_path = None
     try:
-        from main import load_config
+        from config import load_config
         config = load_config()
         launch_with_subtitles_on = config.get("launch_with_subtitles_on", True)
-        config_load_path = "config_loaded"
-        _log_decision("vlc_config_loading", "config_loaded")
     except Exception as e:
         logger.warning(f"Failed to load config for launch_with_subtitles_on: {e}. Defaulting to True.")
         launch_with_subtitles_on = True
-        config_load_path = "default_true_on_error"
-        _log_decision("vlc_config_loading", "default_true_on_error", {"error": str(e)[:100]})
     
     # Step 1: Verify file exists
     steps.append("Step 1: Verifying movie file exists")
@@ -815,4 +769,3 @@ def get_currently_playing_movies():
         return playing
     finally:
         db.close()
-

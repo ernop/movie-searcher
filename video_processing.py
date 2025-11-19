@@ -38,45 +38,6 @@ SCREENSHOT_DIR = None
 # Cache for resolved tool paths
 _CACHED_FFMPEG_PATH = None
 
-# Decision tracking for fallback analysis
-_DECISION_LOG_FILE = None
-_DECISION_LOG_LOCK = threading.Lock()
-
-def _log_decision(decision_name: str, path_taken: str, context: dict = None):
-    """Log a decision point for later analysis to determine which paths are actually used
-    
-    Args:
-        decision_name: Unique name for this decision point (e.g., "srt_encoding", "font_loading")
-        path_taken: Which path was taken (e.g., "utf8", "latin1", "arial_font", "default_font")
-        context: Optional context dict with additional info
-    """
-    global _DECISION_LOG_FILE
-    if _DECISION_LOG_FILE is None:
-        # Initialize log file path when SCRIPT_DIR is available
-        if SCRIPT_DIR:
-            _DECISION_LOG_FILE = SCRIPT_DIR / "decision_log.jsonl"
-    
-    if not _DECISION_LOG_FILE:
-        return
-    
-    try:
-        import json
-        from datetime import datetime
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "decision": decision_name,
-            "path": path_taken,
-        }
-        if context:
-            entry["context"] = context
-        
-        with _DECISION_LOG_LOCK:
-            with open(_DECISION_LOG_FILE, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(entry) + '\n')
-    except Exception as e:
-        # Don't let decision logging break the app
-        logger.debug(f"Failed to log decision: {e}")
-
 def _parse_srt_at_timestamp(srt_path, timestamp_seconds):
     """Parse SRT file and return subtitle text at given timestamp
     
@@ -87,14 +48,11 @@ def _parse_srt_at_timestamp(srt_path, timestamp_seconds):
         # Try different encodings to read the SRT file
         content = None
         encodings = ['utf-8', 'latin-1', 'windows-1252', 'iso-8859-1', 'cp1252']
-        encoding_used = None
         
         for encoding in encodings:
             try:
                 with open(srt_path, 'r', encoding=encoding) as f:
                     content = f.read()
-                encoding_used = encoding
-                _log_decision("srt_encoding", encoding, {"srt_path": str(srt_path)})
                 break  # Successfully read with this encoding
             except (UnicodeDecodeError, LookupError):
                 continue
@@ -103,8 +61,6 @@ def _parse_srt_at_timestamp(srt_path, timestamp_seconds):
             # If all encodings fail, try with errors='ignore'
             with open(srt_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
-            encoding_used = "utf8_with_errors_ignore"
-            _log_decision("srt_encoding", "utf8_with_errors_ignore", {"srt_path": str(srt_path)})
         
         # Parse SRT format: 
         # Number
@@ -181,13 +137,10 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
         ]
         
         # Load font
-        font_path_used = None
         for font_path in font_paths:
             if os.path.exists(font_path):
                 try:
                     font = ImageFont.truetype(font_path, font_size)
-                    font_path_used = Path(font_path).name
-                    _log_decision("subtitle_font_loading", font_path_used, {"font_size": font_size})
                     break
                 except Exception as e:
                     logger.debug(f"Failed to load font {font_path}: {e}")
@@ -196,8 +149,6 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
         # Fallback to default font if no TrueType font found
         if not font:
             font = ImageFont.load_default()
-            font_path_used = "default_font"
-            _log_decision("subtitle_font_loading", "default_font", {"font_size": font_size})
         
         # Handle multiline text - split by newlines
         lines = subtitle_text.split('\n')
@@ -210,31 +161,17 @@ def _burn_subtitle_text_onto_image(image_path, subtitle_text):
         # Get text dimensions for each line
         line_heights = []
         line_widths = []
-        textsize_method_used = None
         for line in lines:
             try:
-                # Use textsize for compatibility (works in older PIL)
-                w, h = draw.textsize(line, font=font)
-                if textsize_method_used is None:
-                    textsize_method_used = "textsize"
+                # Use textbbox (modern PIL)
+                bbox = draw.textbbox((0, 0), line, font=font)
+                w = bbox[2] - bbox[0]
+                h = bbox[3] - bbox[1]
                 line_widths.append(w)
                 line_heights.append(h)
-            except AttributeError:
-                # Fallback for newer PIL versions that removed textsize
-                try:
-                    bbox = draw.textbbox((0, 0), line, font=font)
-                    w = bbox[2] - bbox[0]
-                    h = bbox[3] - bbox[1]
-                    if textsize_method_used is None:
-                        textsize_method_used = "textbbox"
-                    line_widths.append(w)
-                    line_heights.append(h)
-                except Exception as e:
-                    logger.error(f"Failed to measure text size: {e}")
-                    return False
-        
-        if textsize_method_used:
-            _log_decision("pil_textsize_method", textsize_method_used)
+            except Exception as e:
+                logger.error(f"Failed to measure text size: {e}")
+                return False
         
         # Calculate total height and max width
         # Line spacing also scales with resolution (proportional to font size)
@@ -394,10 +331,9 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
 
 def initialize_video_processing(script_dir):
     """Initialize video processing with script directory"""
-    global SCRIPT_DIR, SCREENSHOT_DIR, _DECISION_LOG_FILE
+    global SCRIPT_DIR, SCREENSHOT_DIR
     SCRIPT_DIR = Path(script_dir)
     SCREENSHOT_DIR = SCRIPT_DIR / "screenshots"
-    _DECISION_LOG_FILE = SCRIPT_DIR / "decision_log.jsonl"
 
 # Shutdown and process tracking
 shutdown_flag = threading.Event()
@@ -530,41 +466,20 @@ def _get_ffprobe_path_from_config() -> str:
         if not row or not row.value:
             logger.error("ffmpeg_path not configured in database; cannot determine ffprobe path for duration extraction.")
             return None
-        ffmpeg_path_parsing_method = None
+        
+        # Parse JSON value
         try:
             import json as _json
-            cfg = _json.loads(row.value) if isinstance(row.value, str) else row.value
-            if isinstance(cfg, str):
-                ffmpeg_path = cfg
-                ffmpeg_path_parsing_method = "direct_string"
-            else:
-                # Try multiple field names
-                if cfg.get("path"):
-                    ffmpeg_path = cfg.get("path")
-                    ffmpeg_path_parsing_method = "json_path_field"
-                elif cfg.get("ffmpeg_path"):
-                    ffmpeg_path = cfg.get("ffmpeg_path")
-                    ffmpeg_path_parsing_method = "json_ffmpeg_path_field"
-                elif cfg.get("value"):
-                    ffmpeg_path = cfg.get("value")
-                    ffmpeg_path_parsing_method = "json_value_field"
-                else:
-                    ffmpeg_path = None
+            # Config values are stored as JSON strings
+            ffmpeg_path = _json.loads(row.value)
+        except Exception as e:
+            logger.error(f"Failed to parse ffmpeg_path config: {e}")
+            return None
             
-            if not ffmpeg_path:
-                ffmpeg_path = row.value if isinstance(row.value, str) else None
-                if ffmpeg_path:
-                    ffmpeg_path_parsing_method = "raw_row_value"
-        except Exception:
-            ffmpeg_path = row.value if isinstance(row.value, str) else None
-            if ffmpeg_path:
-                ffmpeg_path_parsing_method = "exception_fallback_raw_value"
-        
-        if ffmpeg_path_parsing_method:
-            _log_decision("ffmpeg_path_parsing", ffmpeg_path_parsing_method)
         if not ffmpeg_path:
             logger.error("ffmpeg_path config present but empty/unusable.")
             return None
+            
         ffmpeg_path = str(ffmpeg_path)
         ffprobe_candidate = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe").replace("ffmpeg", "ffprobe")
         if os.path.exists(ffprobe_candidate):
@@ -890,31 +805,17 @@ def process_screenshot_extraction_worker(screenshot_info):
             workers = max(2, min(6, (os.cpu_count() or 4)))
             process_executor = ProcessPoolExecutor(max_workers=workers)
 
-        # Submit job; if the executor was previously shut down, recreate and retry once
+        # Submit job
         logger.info(f"Submitting ffmpeg job: video={Path(video_path).name}, timestamp={timestamp_seconds}s, subtitle_path={subtitle_path}, output={screenshot_path.name}")
-        submission_path = None
         try:
             future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path), subtitle_path)
-            submission_path = "first_attempt"
-            _log_decision("process_executor_submit", "first_attempt")
+            future.add_done_callback(_on_done)
+            # Do not block here; success indicates submission happened
+            return True
         except Exception as submit_err:
-            logger.error(f"Failed to submit ffmpeg job, will retry: {submit_err}", exc_info=True)
-            # Handle 'cannot schedule new futures after shutdown' and similar states
-            try:
-                # Shutdown in case it's a half-closed pool, then recreate
-                process_executor.shutdown(wait=False, cancel_futures=False)
-            except Exception:
-                pass
-            # Recreate a fresh executor and retry submission once
-            workers = max(2, min(6, (os.cpu_count() or 4)))
-            process_executor = ProcessPoolExecutor(max_workers=workers)
-            logger.info(f"Retrying ffmpeg job submission with subtitle_path={subtitle_path}")
-            future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path), subtitle_path)
-            submission_path = "retry_after_recreate"
-            _log_decision("process_executor_submit", "retry_after_recreate", {"error": str(submit_err)[:100]})
-        future.add_done_callback(_on_done)
-        # Do not block here; success indicates submission happened
-        return True
+            logger.error(f"Failed to submit ffmpeg job: {submit_err}", exc_info=True)
+            return False
+            
     except subprocess.TimeoutExpired:
         add_scan_log_func("error", f"Screenshot extraction timed out: {Path(video_path).name}")
         logger.warning(f"Screenshot extraction timed out for {video_path}")
