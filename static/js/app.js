@@ -1,8 +1,5 @@
 // Application initialization
 
-window.addEventListener('hashchange', handleRoute);
-window.addEventListener('popstate', handleRoute);
-window.addEventListener('load', handleRoute);
 window.addEventListener('load', startCurrentlyPlayingPolling);
 window.addEventListener('load', updateScreenshotProcessorStatus);
 

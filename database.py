@@ -14,6 +14,7 @@ from models import (
     Base,
     Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, 
     IndexedPath, Config, Screenshot, SchemaVersion, MovieAudio,
+    Playlist, PlaylistItem, ExternalMovie, Person, MovieCredit,
     CURRENT_SCHEMA_VERSION
 )
 
@@ -78,8 +79,33 @@ def init_db():
     if version is None:
         set_schema_version(CURRENT_SCHEMA_VERSION, "Initial schema version")
         logger.info(f"Database initialized with schema version {CURRENT_SCHEMA_VERSION}")
+        
+        # Populate default playlists if this is a fresh install
+        populate_default_playlists()
     else:
         logger.info(f"Database initialized (current schema version: {version})")
+
+def populate_default_playlists():
+    """Ensure default system playlists exist"""
+    db = SessionLocal()
+    try:
+        # Check/Create 'Favorites'
+        fav = db.query(Playlist).filter(Playlist.name == "Favorites").first()
+        if not fav:
+            fav = Playlist(name="Favorites", is_system=True)
+            db.add(fav)
+        
+        # Check/Create 'Want to Watch'
+        wtw = db.query(Playlist).filter(Playlist.name == "Want to Watch").first()
+        if not wtw:
+            wtw = Playlist(name="Want to Watch", is_system=True)
+            db.add(wtw)
+            
+        db.commit()
+    except Exception as e:
+        logger.error(f"Error populating default playlists: {e}")
+    finally:
+        db.close()
 
 def migrate_db_schema():
     """
@@ -500,6 +526,146 @@ def migrate_db_schema():
             set_schema_version(10, "Dropped images table (replaced by movie.image_path)")
             current_version = 10
         
+        if current_version < 11:
+            logger.info("Migrating to schema version 11: Add hidden column to movies table")
+            existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
+            if "hidden" not in existing_columns:
+                with engine.begin() as conn:
+                    logger.info("Adding 'hidden' column to movies table...")
+                    # SQLite uses 0/1 for boolean
+                    conn.execute(text("ALTER TABLE movies ADD COLUMN hidden BOOLEAN DEFAULT 0 NOT NULL"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_hidden ON movies (hidden)"))
+                    logger.info("Migration complete: added 'hidden' column")
+            
+            set_schema_version(11, "Added hidden column to movies table")
+            current_version = 11
+
+        if current_version < 12:
+            logger.info("Migrating to schema version 12: Add playlists and offline metadata tables")
+            
+            # Define table creation SQL
+            sql_commands = [
+                # Playlists
+                """
+                CREATE TABLE IF NOT EXISTS playlists (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name VARCHAR NOT NULL,
+                    is_system BOOLEAN DEFAULT 0 NOT NULL,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+                # Playlist Items
+                """
+                CREATE TABLE IF NOT EXISTS playlist_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    playlist_id INTEGER NOT NULL,
+                    movie_id INTEGER NOT NULL,
+                    "order" INTEGER DEFAULT 0 NOT NULL,
+                    added_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    FOREIGN KEY(playlist_id) REFERENCES playlists (id) ON DELETE CASCADE,
+                    FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS ix_playlist_items_playlist_id ON playlist_items (playlist_id)",
+                "CREATE INDEX IF NOT EXISTS ix_playlist_items_movie_id ON playlist_items (movie_id)",
+                
+                # External Movies (IMDb)
+                """
+                CREATE TABLE IF NOT EXISTS external_movies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    imdb_id VARCHAR NOT NULL UNIQUE,
+                    primary_title VARCHAR NOT NULL,
+                    original_title VARCHAR,
+                    year INTEGER,
+                    runtime_minutes INTEGER,
+                    genres VARCHAR,
+                    rating FLOAT,
+                    votes INTEGER,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS ix_external_movies_imdb_id ON external_movies (imdb_id)",
+                "CREATE INDEX IF NOT EXISTS ix_external_movies_primary_title ON external_movies (primary_title)",
+                "CREATE INDEX IF NOT EXISTS ix_external_movies_year ON external_movies (year)",
+
+                # People
+                """
+                CREATE TABLE IF NOT EXISTS people (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    imdb_id VARCHAR NOT NULL UNIQUE,
+                    primary_name VARCHAR NOT NULL,
+                    birth_year INTEGER,
+                    death_year INTEGER,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS ix_people_imdb_id ON people (imdb_id)",
+                "CREATE INDEX IF NOT EXISTS ix_people_primary_name ON people (primary_name)",
+
+                # Movie Credits
+                """
+                CREATE TABLE IF NOT EXISTS movie_credits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    movie_id INTEGER NOT NULL,
+                    person_id INTEGER NOT NULL,
+                    category VARCHAR NOT NULL,
+                    characters JSON,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    FOREIGN KEY(movie_id) REFERENCES external_movies (id) ON DELETE CASCADE,
+                    FOREIGN KEY(person_id) REFERENCES people (id) ON DELETE CASCADE
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS ix_movie_credits_movie_id ON movie_credits (movie_id)",
+                "CREATE INDEX IF NOT EXISTS ix_movie_credits_person_id ON movie_credits (person_id)"
+            ]
+
+            with engine.begin() as conn:
+                for cmd in sql_commands:
+                    conn.execute(text(cmd))
+                
+                # Create Default Playlists
+                logger.info("Creating default playlists...")
+                conn.execute(text("""
+                    INSERT OR IGNORE INTO playlists (name, is_system, created, updated) 
+                    VALUES ('Favorites', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """))
+                conn.execute(text("""
+                    INSERT OR IGNORE INTO playlists (name, is_system, created, updated) 
+                    VALUES ('Want to Watch', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """))
+                
+                # Migrate 'want_to_watch' status to playlist
+                logger.info("Migrating 'Want to Watch' status to playlist...")
+                
+                # Get 'Want to Watch' playlist ID
+                wtw_id = conn.execute(text("SELECT id FROM playlists WHERE name = 'Want to Watch'")).scalar()
+                
+                if wtw_id:
+                    conn.execute(text(f"""
+                        INSERT INTO playlist_items (playlist_id, movie_id, "order", added_at, created, updated)
+                        SELECT 
+                            {wtw_id},
+                            movie_id,
+                            0,
+                            updated,
+                            CURRENT_TIMESTAMP,
+                            CURRENT_TIMESTAMP
+                        FROM movie_status
+                        WHERE movieStatus = 'want_to_watch'
+                        AND movie_id NOT IN (
+                            SELECT movie_id FROM playlist_items WHERE playlist_id = {wtw_id}
+                        )
+                    """))
+            
+            set_schema_version(12, "Added playlists and offline metadata tables")
+            current_version = 12
+        
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "
@@ -578,6 +744,9 @@ def migrate_db_schema():
                 length FLOAT,
                 size INTEGER,
                 hash VARCHAR,
+                language VARCHAR,
+                image_path VARCHAR,
+                hidden BOOLEAN DEFAULT 0 NOT NULL,
                 created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                 updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
             )
@@ -585,6 +754,7 @@ def migrate_db_schema():
         conn.execute(text("CREATE INDEX ix_movies_path ON movies_new (path)"))
         conn.execute(text("CREATE INDEX ix_movies_name ON movies_new (name)"))
         conn.execute(text("CREATE INDEX ix_movies_hash ON movies_new (hash)"))
+        conn.execute(text("CREATE INDEX ix_movies_hidden ON movies_new (hidden)"))
         
         # Migrate movies data
         logger.info("Migrating movies data...")
@@ -594,40 +764,43 @@ def migrate_db_schema():
         has_old_images = "images" in old_movies_columns
         has_old_screenshots = "screenshots" in old_movies_columns
         
-        if has_old_images or has_old_screenshots:
-            conn.execute(text("""
-                INSERT INTO movies_new (path, name, year, length, size, hash, created, updated)
-                SELECT 
-                    path,
-                    name,
-                    year,
-                    length,
-                    size,
-                    hash,
-                    CASE 
-                        WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
-                        ELSE datetime(created)
-                    END,
-                    CURRENT_TIMESTAMP
-                FROM movies
-            """))
+        # Check for other columns that might exist in source but not in target schema definition above if we were strictly following v3
+        # But here we are creating v11 schema, so we should try to copy if they exist, or default
+        
+        # Construct the SELECT part dynamically based on what exists
+        select_cols = ["path", "name", "year", "length", "size", "hash"]
+        
+        # language
+        if "language" in old_movies_columns:
+            select_cols.append("language")
         else:
-            conn.execute(text("""
-                INSERT INTO movies_new (path, name, year, length, size, hash, created, updated)
-                SELECT 
-                    path,
-                    name,
-                    year,
-                    length,
-                    size,
-                    hash,
-                    CASE 
-                        WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
-                        ELSE datetime(created)
-                    END,
-                    CURRENT_TIMESTAMP
-                FROM movies
-            """))
+            select_cols.append("NULL as language")
+            
+        # image_path
+        if "image_path" in old_movies_columns:
+            select_cols.append("image_path")
+        else:
+            select_cols.append("NULL as image_path")
+            
+        # hidden
+        if "hidden" in old_movies_columns:
+            select_cols.append("hidden")
+        else:
+            select_cols.append("0 as hidden")
+
+        select_clause = ", ".join(select_cols)
+
+        conn.execute(text(f"""
+            INSERT INTO movies_new (path, name, year, length, size, hash, language, image_path, hidden, created, updated)
+            SELECT 
+                {select_clause},
+                CASE 
+                    WHEN created IS NULL OR created = '' THEN CURRENT_TIMESTAMP
+                    ELSE datetime(created)
+                END,
+                CURRENT_TIMESTAMP
+            FROM movies
+        """))
         
         # Create new ratings table
         conn.execute(text("""
@@ -814,6 +987,87 @@ def migrate_db_schema():
             )
         """))
         conn.execute(text("CREATE INDEX ix_images_movie_id ON images_new (movie_id)"))
+
+        # Create Playlists tables (New in v12 but including in full migration)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                name VARCHAR NOT NULL,
+                is_system BOOLEAN DEFAULT 0 NOT NULL,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+        
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS playlist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                playlist_id INTEGER NOT NULL,
+                movie_id INTEGER NOT NULL,
+                "order" INTEGER DEFAULT 0 NOT NULL,
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                FOREIGN KEY(playlist_id) REFERENCES playlists (id) ON DELETE CASCADE,
+                FOREIGN KEY(movie_id) REFERENCES movies_new (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_playlist_items_playlist_id ON playlist_items (playlist_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_playlist_items_movie_id ON playlist_items (movie_id)"))
+        
+        # Initialize default playlists
+        conn.execute(text("INSERT OR IGNORE INTO playlists (name, is_system, created, updated) VALUES ('Favorites', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+        conn.execute(text("INSERT OR IGNORE INTO playlists (name, is_system, created, updated) VALUES ('Want to Watch', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+        
+        # Create External Metadata tables
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS external_movies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                imdb_id VARCHAR NOT NULL UNIQUE,
+                primary_title VARCHAR NOT NULL,
+                original_title VARCHAR,
+                year INTEGER,
+                runtime_minutes INTEGER,
+                genres VARCHAR,
+                rating FLOAT,
+                votes INTEGER,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_external_movies_imdb_id ON external_movies (imdb_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_external_movies_primary_title ON external_movies (primary_title)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_external_movies_year ON external_movies (year)"))
+
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                imdb_id VARCHAR NOT NULL UNIQUE,
+                primary_name VARCHAR NOT NULL,
+                birth_year INTEGER,
+                death_year INTEGER,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_people_imdb_id ON people (imdb_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_people_primary_name ON people (primary_name)"))
+
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS movie_credits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                movie_id INTEGER NOT NULL,
+                person_id INTEGER NOT NULL,
+                category VARCHAR NOT NULL,
+                characters JSON,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                FOREIGN KEY(movie_id) REFERENCES external_movies (id) ON DELETE CASCADE,
+                FOREIGN KEY(person_id) REFERENCES people (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_credits_movie_id ON movie_credits (movie_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_credits_person_id ON movie_credits (person_id)"))
         
         # Step 3: Drop old tables
         logger.info("Dropping old tables...")
@@ -931,4 +1185,3 @@ def get_movie_screenshot_path(db: Session, movie_id: int):
     if screenshot and os.path.exists(screenshot.shot_path):
         return screenshot.shot_path
     return None
-

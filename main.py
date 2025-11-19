@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
 import json
@@ -93,6 +93,7 @@ logger = logging.getLogger(__name__)
 from database import (
     Base, SessionLocal, get_db,
     Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, IndexedPath, Config, Screenshot, SchemaVersion,
+    Playlist, PlaylistItem, ExternalMovie, Person, MovieCredit,
     init_db, migrate_db_schema, remove_sample_files,
     get_movie_id_by_path, get_indexed_paths_set, get_movie_screenshot_path
 )
@@ -310,26 +311,11 @@ async def lifespan(app):
     auto_detect_ffmpeg()
     logger.info("Startup: video processing ready.")
     
-    # Mount static files directory (favicon, etc.)
-    static_dir = SCRIPT_DIR / "static"
-    if static_dir.exists():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=False), name="static")
-        logger.info(f"Startup: mounted static directory at /")
-    
     # Screenshots are served via custom endpoint /screenshots/{filename} for proper URL encoding handling
     # StaticFiles mount removed - using custom endpoint handles spaces and special characters correctly
     from video_processing import SCREENSHOT_DIR
     if SCREENSHOT_DIR and SCREENSHOT_DIR.exists():
         logger.info(f"Startup: screenshots directory ready at {SCREENSHOT_DIR} (served via /screenshots/ endpoint)")
-    
-    # Mount movies folder as static files for image serving
-    movies_folder = get_movies_folder()
-    if movies_folder and os.path.exists(movies_folder):
-        try:
-            app.mount("/movies", StaticFiles(directory=movies_folder), name="movies")
-            logger.info(f"Startup: mounted movies directory at /movies")
-        except Exception as e:
-            logger.warning(f"Failed to mount movies directory: {e}")
 
     try:
         removed_count = remove_sample_files()
@@ -654,7 +640,8 @@ async def search_movies(
         # Build base query
         movie_query = db.query(Movie).filter(
             func.lower(Movie.name).contains(query_lower),
-            or_(Movie.length == None, Movie.length >= 60)
+            or_(Movie.length == None, Movie.length >= 60),
+            Movie.hidden == False
         )
 
         # Get watched movie IDs efficiently
@@ -750,6 +737,23 @@ async def search_movies(
             ).all()
             rating_dict = {movie_id: int(rating) for movie_id, rating in rating_rows}
 
+        # Batch load playlist membership
+        playlist_dict = {}  # movie_id -> list of playlist names
+        if result_ids:
+            playlist_rows = db.query(
+                PlaylistItem.movie_id,
+                Playlist.name
+            ).join(
+                Playlist, PlaylistItem.playlist_id == Playlist.id
+            ).filter(
+                PlaylistItem.movie_id.in_(result_ids)
+            ).order_by(Playlist.is_system.desc(), Playlist.name).all()
+
+            for movie_id, playlist_name in playlist_rows:
+                if movie_id not in playlist_dict:
+                    playlist_dict[movie_id] = []
+                playlist_dict[movie_id].append(playlist_name)
+
         # Build results
         for score, movie in page_slice:
             watch_info = watch_status_dict.get(movie.id, {})
@@ -772,6 +776,7 @@ async def search_movies(
             
             has_launched = movie.id in launched_set
             rating = rating_dict.get(movie.id)
+            playlists = playlist_dict.get(movie.id, [])
 
             results.append({
                 "id": movie.id,
@@ -791,12 +796,13 @@ async def search_movies(
                 "image_path_url": get_image_url_path(movie.image_path) if movie.image_path else None,
                 "year": movie.year,
                 "has_launched": has_launched,
-                "rating": rating
+                "rating": rating,
+                "playlists": playlists
             })
 
         # Save to history (count what we actually return)
         # Only add if the last entry is different (prevent duplicate consecutive entries)
-        last_search = db.query(SearchHistory).order_by(SearchHistory.created.desc()).first()
+        last_search = db.query(SearchHistory).order_by(SearchHistory.created.desc(), SearchHistory.id.desc()).first()
         if not last_search or last_search.query != q:
             search_entry = SearchHistory(
                 query=q,
@@ -832,10 +838,10 @@ async def get_movie_details_by_id(movie_id: int):
 
         # Get screenshots from table
         screenshot_objs_raw = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).order_by(Screenshot.timestamp_seconds.asc().nullslast()).all()
-        
+
         # Filter to only screenshots that actually exist on disk
         screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
-        
+
         screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
 
         # Get screenshot ID and path (for frame) - only from existing screenshots
@@ -845,16 +851,113 @@ async def get_movie_details_by_id(movie_id: int):
 
         year = movie.year
         has_launched = db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).count() > 0
-        
+
         # Get rating
         rating_entry = db.query(Rating).filter(Rating.movie_id == movie.id).first()
         rating = int(rating_entry.rating) if rating_entry and rating_entry.rating is not None else None
-        
+
+        # Get IMDb data if available
+        imdb_data = None
+        try:
+            # Try to find matching IMDb movie using fuzzy matching on title
+            from fuzzywuzzy import fuzz
+            from fuzzywuzzy.process import extractOne
+
+            search_title = movie.name.lower()
+            imdb_movies = db.query(ExternalMovie).all()
+
+            if imdb_movies:
+                # Create searchable titles
+                imdb_titles = {}
+                for imdb_movie in imdb_movies:
+                    title_key = imdb_movie.primary_title.lower()
+                    if imdb_movie.year:
+                        title_key += f" ({imdb_movie.year})"
+                    imdb_titles[title_key] = imdb_movie
+
+                # Try exact match first
+                if search_title in imdb_titles:
+                    imdb_movie = imdb_titles[search_title]
+                    match_score = 100
+                else:
+                    # Try fuzzy match
+                    best_match, match_score = extractOne(
+                        search_title,
+                        imdb_titles.keys(),
+                        scorer=fuzz.token_sort_ratio
+                    )
+
+                    if match_score >= 85:  # High confidence threshold
+                        imdb_movie = imdb_titles[best_match]
+                    else:
+                        imdb_movie = None
+
+                if imdb_movie:
+                    # Get cast/crew for this movie
+                    credits = db.query(MovieCredit, Person).join(
+                        Person, MovieCredit.person_id == Person.id
+                    ).filter(
+                        MovieCredit.movie_id == imdb_movie.id
+                    ).order_by(MovieCredit.category, Person.primary_name).all()
+
+                    # Organize by role
+                    directors = []
+                    actors = []
+                    writers = []
+
+                    for credit, person in credits:
+                        if credit.category == 'director':
+                            directors.append({
+                                "id": person.id,
+                                "imdb_id": person.imdb_id,
+                                "name": person.primary_name,
+                                "birth_year": person.birth_year,
+                                "death_year": person.death_year
+                            })
+                        elif credit.category in ['actor', 'actress']:
+                            actors.append({
+                                "id": person.id,
+                                "imdb_id": person.imdb_id,
+                                "name": person.primary_name,
+                                "character": credit.characters[0] if credit.characters else None,
+                                "birth_year": person.birth_year,
+                                "death_year": person.death_year
+                            })
+                        elif credit.category == 'writer':
+                            writers.append({
+                                "id": person.id,
+                                "imdb_id": person.imdb_id,
+                                "name": person.primary_name,
+                                "birth_year": person.birth_year,
+                                "death_year": person.death_year
+                            })
+
+                    imdb_data = {
+                        "imdb_id": imdb_movie.imdb_id,
+                        "primary_title": imdb_movie.primary_title,
+                        "original_title": imdb_movie.original_title,
+                        "year": imdb_movie.year,
+                        "runtime_minutes": imdb_movie.runtime_minutes,
+                        "genres": imdb_movie.genres,
+                        "rating": imdb_movie.rating,
+                        "votes": imdb_movie.votes,
+                        "directors": directors,
+                        "actors": actors[:10],  # Limit to top 10 actors
+                        "writers": writers,
+                        "match_score": match_score
+                    }
+
+        except ImportError:
+            # fuzzywuzzy not installed
+            pass
+        except Exception as e:
+            logger.warning(f"Error fetching IMDb data for movie {movie_id}: {e}")
+
         # Ensure movie has at least one screenshot/image - queue if missing
         # Check movie.image_path instead of Image table
         has_image = bool(movie.image_path and os.path.exists(movie.image_path))
         ensure_movie_has_screenshot(movie.id, movie.path, has_image, screenshot_objs)
-        
+
         return {
             "id": movie.id,
             "path": movie.path,
@@ -871,7 +974,8 @@ async def get_movie_details_by_id(movie_id: int):
             "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
             "year": year,
             "has_launched": has_launched,
-            "rating": rating
+            "rating": rating,
+            "imdb_data": imdb_data
         }
     finally:
         db.close()
@@ -1732,7 +1836,8 @@ async def get_language_counts():
             .filter(
                 MovieAudio.audio_type.isnot(None),
                 func.trim(MovieAudio.audio_type) != '',
-                or_(Movie.length == None, Movie.length >= 60)
+                or_(Movie.length == None, Movie.length >= 60),
+                Movie.hidden == False
             )
             .group_by(func.lower(func.trim(MovieAudio.audio_type)))
             .order_by(func.count(distinct(MovieAudio.movie_id)).desc())
@@ -1743,7 +1848,8 @@ async def get_language_counts():
         
         # Also get count for "all" (total movies)
         total_count = db.query(Movie).filter(
-            or_(Movie.length == None, Movie.length >= 60)
+            or_(Movie.length == None, Movie.length >= 60),
+            Movie.hidden == False
         ).count()
         counts_dict['all'] = total_count
         
@@ -1884,7 +1990,10 @@ async def explore_movies(
     try:
         # Base query for movies
         from sqlalchemy import or_
-        movie_q = db.query(Movie).filter(or_(Movie.length == None, Movie.length >= 60))
+        movie_q = db.query(Movie).filter(
+            or_(Movie.length == None, Movie.length >= 60),
+            Movie.hidden == False
+        )
 
         # Apply watched filter using EXISTS subquery for performance
         if filter_type == "watched":
@@ -1998,7 +2107,24 @@ async def explore_movies(
                 Rating.movie_id.in_(movie_ids)
             ).all()
             rating_map = {movie_id: int(rating) for movie_id, rating in rating_rows}
-        
+
+        # Get playlists for page ids
+        playlist_map = {}  # movie_id -> list of playlist names
+        if movie_ids:
+            playlist_rows = db.query(
+                PlaylistItem.movie_id,
+                Playlist.name
+            ).join(
+                Playlist, PlaylistItem.playlist_id == Playlist.id
+            ).filter(
+                PlaylistItem.movie_id.in_(movie_ids)
+            ).order_by(Playlist.is_system.desc(), Playlist.name).all()
+
+            for movie_id, playlist_name in playlist_rows:
+                if movie_id not in playlist_map:
+                    playlist_map[movie_id] = []
+                playlist_map[movie_id].append(playlist_name)
+
         # Build response items without heavy filesystem ops
         result_movies = []
         for m in rows:
@@ -2029,7 +2155,8 @@ async def explore_movies(
                 "has_launched": (m.id in launched_set),
                 "screenshot_id": screenshot_id,  # frontend will call /api/screenshot/{id}
                 "image_path": m.image_path if (m.image_path and os.path.exists(m.image_path)) else None,
-                "rating": rating_map.get(m.id)
+                "rating": rating_map.get(m.id),
+                "playlists": playlist_map.get(m.id, [])
             })
 
         # Letter counts across all movies respecting watched filter (but not letter/year/decade filters)
@@ -2087,7 +2214,10 @@ async def get_random_movie():
     try:
         from sqlalchemy import or_
         # Query movies with length >= 60 or null length
-        movie_q = db.query(Movie.id).filter(or_(Movie.length == None, Movie.length >= 60))
+        movie_q = db.query(Movie.id).filter(
+            or_(Movie.length == None, Movie.length >= 60),
+            Movie.hidden == False
+        )
         total = movie_q.count()
         
         if total == 0:
@@ -2117,7 +2247,10 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
     try:
         from sqlalchemy import or_
         # Query movies with length >= 60 or null length
-        movie_q = db.query(Movie).filter(or_(Movie.length == None, Movie.length >= 60))
+        movie_q = db.query(Movie).filter(
+            or_(Movie.length == None, Movie.length >= 60),
+            Movie.hidden == False
+        )
         total = movie_q.count()
         
         if total == 0:
@@ -2177,7 +2310,24 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
                 Rating.movie_id.in_(movie_ids)
             ).all()
             rating_map = {movie_id: int(rating) for movie_id, rating in rating_rows}
-        
+
+        # Get playlists
+        playlist_map = {}  # movie_id -> list of playlist names
+        if movie_ids:
+            playlist_rows = db.query(
+                PlaylistItem.movie_id,
+                Playlist.name
+            ).join(
+                Playlist, PlaylistItem.playlist_id == Playlist.id
+            ).filter(
+                PlaylistItem.movie_id.in_(movie_ids)
+            ).order_by(Playlist.is_system.desc(), Playlist.name).all()
+
+            for movie_id, playlist_name in playlist_rows:
+                if movie_id not in playlist_map:
+                    playlist_map[movie_id] = []
+                playlist_map[movie_id].append(playlist_name)
+
         # Build response items
         result_movies = []
         for m in random_movies:
@@ -2212,15 +2362,628 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
                 "image_path": m.image_path if (m.image_path and os.path.exists(m.image_path)) else None,
                 "image_path_url": get_image_url_path(m.image_path) if m.image_path else None,
                 "screenshots": screenshots,
-                "rating": rating_map.get(m.id)
+                "rating": rating_map.get(m.id),
+                "playlists": playlist_map.get(m.id, [])
             })
-        
+
         return {"results": result_movies}
     except Exception as e:
         logger.error(f"Error in random-movies endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
+
+@app.post("/api/movie/{movie_id}/hide")
+async def hide_movie(movie_id: int):
+    """Hide a movie from search and explore"""
+    db = SessionLocal()
+    try:
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        
+        movie.hidden = True
+        db.commit()
+        return {"status": "hidden", "movie_id": movie_id}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error hiding movie {movie_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.post("/api/movie/{movie_id}/unhide")
+async def unhide_movie(movie_id: int):
+    """Unhide a movie"""
+    db = SessionLocal()
+    try:
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        
+        movie.hidden = False
+        db.commit()
+        return {"status": "visible", "movie_id": movie_id}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error unhiding movie {movie_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.get("/api/hidden-movies")
+async def get_hidden_movies():
+    """Get list of hidden movies"""
+    db = SessionLocal()
+    try:
+        movies = db.query(Movie).filter(Movie.hidden == True).all()
+        movie_ids = [m.id for m in movies]
+
+        # Batch load screenshots for all hidden movies
+        screenshots_dict = {}  # movie_id -> list of Screenshot objects
+        if movie_ids:
+            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
+            for s in all_screenshots:
+                if s.movie_id not in screenshots_dict:
+                    screenshots_dict[s.movie_id] = []
+                screenshots_dict[s.movie_id].append(s)
+
+        return {
+            "movies": [
+                {
+                    "id": m.id,
+                    "name": m.name,
+                    "path": m.path,
+                    "year": m.year,
+                    "image_path": m.image_path,
+                    "image_path_url": get_image_url_path(m.image_path) if m.image_path else None,
+                    "screenshots": [
+                        {"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds}
+                        for s in screenshots_dict.get(m.id, [])
+                    ]
+                } for m in movies
+            ]
+        }
+    finally:
+        db.close()
+
+# --- Playlist API Endpoints ---
+
+class PlaylistCreateRequest(BaseModel):
+    name: str
+
+class PlaylistAddMovieRequest(BaseModel):
+    movie_id: int
+
+@app.get("/api/playlists")
+async def get_playlists():
+    """Get all playlists with movie counts"""
+    db = SessionLocal()
+    try:
+        # Get playlists with movie counts
+        playlists = []
+        for playlist in db.query(Playlist).order_by(Playlist.is_system.desc(), Playlist.name.asc()).all():
+            movie_count = db.query(PlaylistItem).filter(PlaylistItem.playlist_id == playlist.id).count()
+            playlists.append({
+                "id": playlist.id,
+                "name": playlist.name,
+                "is_system": playlist.is_system,
+                "movie_count": movie_count,
+                "created": playlist.created.isoformat() if playlist.created else None
+            })
+
+        return {"playlists": playlists}
+    finally:
+        db.close()
+
+@app.post("/api/playlists")
+async def create_playlist(request: PlaylistCreateRequest):
+    """Create a new playlist"""
+    db = SessionLocal()
+    try:
+        # Check if playlist name already exists
+        existing = db.query(Playlist).filter(Playlist.name == request.name).first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Playlist '{request.name}' already exists")
+
+        playlist = Playlist(name=request.name, is_system=False)
+        db.add(playlist)
+        db.commit()
+        db.refresh(playlist)
+
+        return {
+            "id": playlist.id,
+            "name": playlist.name,
+            "is_system": playlist.is_system,
+            "movie_count": 0,
+            "created": playlist.created.isoformat() if playlist.created else None
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating playlist: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.delete("/api/playlists/{playlist_id}")
+async def delete_playlist(playlist_id: int):
+    """Delete a playlist (not system playlists)"""
+    db = SessionLocal()
+    try:
+        playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        if playlist.is_system:
+            raise HTTPException(status_code=400, detail="Cannot delete system playlists")
+
+        # Delete playlist items first (cascade should handle this, but be explicit)
+        db.query(PlaylistItem).filter(PlaylistItem.playlist_id == playlist_id).delete()
+        db.delete(playlist)
+        db.commit()
+
+        return {"status": "deleted", "playlist_id": playlist_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting playlist {playlist_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.get("/api/playlists/{playlist_id}")
+async def get_playlist_movies(
+    playlist_id: int,
+    sort: str = Query("date_added", pattern="^(date_added|name|year)$"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200)
+):
+    """Get movies in a playlist with sorting and pagination"""
+    db = SessionLocal()
+    try:
+        playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        # Base query for playlist items
+        item_query = db.query(PlaylistItem, Movie).join(
+            Movie, PlaylistItem.movie_id == Movie.id
+        ).filter(
+            PlaylistItem.playlist_id == playlist_id,
+            Movie.hidden == False
+        )
+
+        # Apply sorting
+        if sort == "name":
+            item_query = item_query.order_by(Movie.name.asc())
+        elif sort == "year":
+            # Handle null years by putting them at the end
+            from sqlalchemy import case
+            item_query = item_query.order_by(
+                case((Movie.year.is_(None), 1), else_=0),  # Nulls last
+                Movie.year.desc()
+            )
+        else:  # date_added
+            item_query = item_query.order_by(PlaylistItem.added_at.desc())
+
+        # Get total count
+        total = item_query.count()
+
+        # Apply pagination
+        items = item_query.offset((page - 1) * per_page).limit(per_page).all()
+
+        # Extract movie IDs for batch loading
+        movie_ids = [movie.id for _, movie in items]
+
+        # Batch load additional data
+        watch_status_dict = {}
+        screenshots_dict = {}
+        launched_set = set()
+        rating_dict = {}
+
+        if movie_ids:
+            # Watch status
+            movie_statuses = db.query(MovieStatus).filter(MovieStatus.movie_id.in_(movie_ids)).all()
+            for ms in movie_statuses:
+                watch_status_dict[ms.movie_id] = {
+                    "watch_status": ms.movieStatus,
+                    "watched_date": ms.updated.isoformat() if ms.updated else None
+                }
+
+            # Screenshots
+            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
+            for s in all_screenshots:
+                if s.movie_id not in screenshots_dict:
+                    screenshots_dict[s.movie_id] = []
+                screenshots_dict[s.movie_id].append(s)
+
+            # Launch history
+            launched_rows = db.query(LaunchHistory.movie_id).filter(
+                LaunchHistory.movie_id.in_(movie_ids)
+            ).distinct().all()
+            launched_set = {r.movie_id for r in launched_rows}
+
+            # Ratings
+            rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
+                Rating.movie_id.in_(movie_ids)
+            ).all()
+            rating_dict = {movie_id: int(rating) for movie_id, rating in rating_rows}
+
+        # Build response
+        movies = []
+        for item, movie in items:
+            # Get screenshots
+            screenshot_objs_raw = screenshots_dict.get(movie.id, [])
+            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
+            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
+
+            # Watch status
+            info = watch_status_dict.get(movie.id, {})
+
+            movies.append({
+                "id": movie.id,
+                "name": movie.name,
+                "year": movie.year,
+                "length": movie.length,
+                "size": movie.size,
+                "watch_status": info.get("watch_status"),
+                "watched_date": info.get("watched_date"),
+                "has_launched": movie.id in launched_set,
+                "rating": rating_dict.get(movie.id),
+                "screenshot_id": screenshot_obj.id if screenshot_obj else None,
+                "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
+                "added_at": item.added_at.isoformat() if item.added_at else None
+            })
+
+        return {
+            "playlist": {
+                "id": playlist.id,
+                "name": playlist.name,
+                "is_system": playlist.is_system
+            },
+            "movies": movies,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "pages": (total + per_page - 1) // per_page if total > 0 else 0
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting playlist {playlist_id} movies: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.post("/api/playlists/{playlist_id}/add")
+async def add_movie_to_playlist(playlist_id: int, request: PlaylistAddMovieRequest):
+    """Add a movie to a playlist"""
+    db = SessionLocal()
+    try:
+        # Verify playlist exists
+        playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        # Verify movie exists
+        movie = db.query(Movie).filter(Movie.id == request.movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail="Movie not found")
+
+        # Check if already in playlist
+        existing = db.query(PlaylistItem).filter(
+            PlaylistItem.playlist_id == playlist_id,
+            PlaylistItem.movie_id == request.movie_id
+        ).first()
+
+        if existing:
+            raise HTTPException(status_code=400, detail="Movie already in playlist")
+
+        # Add to playlist
+        item = PlaylistItem(playlist_id=playlist_id, movie_id=request.movie_id)
+        db.add(item)
+        db.commit()
+
+        return {"status": "added", "playlist_id": playlist_id, "movie_id": request.movie_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error adding movie {request.movie_id} to playlist {playlist_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.delete("/api/playlists/{playlist_id}/remove/{movie_id}")
+async def remove_movie_from_playlist(playlist_id: int, movie_id: int):
+    """Remove a movie from a playlist"""
+    db = SessionLocal()
+    try:
+        item = db.query(PlaylistItem).filter(
+            PlaylistItem.playlist_id == playlist_id,
+            PlaylistItem.movie_id == movie_id
+        ).first()
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Movie not found in playlist")
+
+        db.delete(item)
+        db.commit()
+
+        return {"status": "removed", "playlist_id": playlist_id, "movie_id": movie_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error removing movie {movie_id} from playlist {playlist_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.post("/api/movies/{movie_id}/add-to-playlist")
+async def add_movie_to_playlist_by_name(movie_id: int, playlist_name: str = Query(..., description="Name of playlist to add to")):
+    """Quick add movie to playlist by name (creates playlist if it doesn't exist, except for system playlists)"""
+    db = SessionLocal()
+    try:
+        # Verify movie exists
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail="Movie not found")
+
+        # Find or create playlist
+        playlist = db.query(Playlist).filter(Playlist.name == playlist_name).first()
+
+        if not playlist:
+            # Only create non-system playlists
+            if playlist_name.lower() in ["favorites", "want to watch"]:
+                raise HTTPException(status_code=400, detail=f"Cannot create system playlist '{playlist_name}'")
+
+            playlist = Playlist(name=playlist_name, is_system=False)
+            db.add(playlist)
+            db.commit()
+            db.refresh(playlist)
+
+        # Check if already in playlist
+        existing = db.query(PlaylistItem).filter(
+            PlaylistItem.playlist_id == playlist.id,
+            PlaylistItem.movie_id == movie_id
+        ).first()
+
+        if existing:
+            return {"status": "already_in_playlist", "playlist_id": playlist.id, "playlist_name": playlist.name}
+
+        # Add to playlist
+        item = PlaylistItem(playlist_id=playlist.id, movie_id=movie_id)
+        db.add(item)
+        db.commit()
+
+        return {
+            "status": "added",
+            "playlist_id": playlist.id,
+            "playlist_name": playlist.name,
+            "movie_id": movie_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error adding movie {movie_id} to playlist '{playlist_name}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.get("/api/movies/{movie_id}/playlists")
+async def get_movie_playlists(movie_id: int):
+    """Get all playlists containing a specific movie"""
+    db = SessionLocal()
+    try:
+        playlists = db.query(Playlist).join(
+            PlaylistItem, Playlist.id == PlaylistItem.playlist_id
+        ).filter(
+            PlaylistItem.movie_id == movie_id
+        ).order_by(Playlist.is_system.desc(), Playlist.name.asc()).all()
+
+        return {
+            "movie_id": movie_id,
+            "playlists": [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "is_system": p.is_system
+                } for p in playlists
+            ]
+        }
+    finally:
+        db.close()
+
+# --- IMDb/Person Endpoints ---
+
+@app.get("/api/person/{person_id}")
+async def get_person_details(person_id: int):
+    """Get detailed information about a person (director/actor)"""
+    db = SessionLocal()
+    try:
+        person = db.query(Person).filter(Person.id == person_id).first()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        # Get all movies this person worked on
+        credits = db.query(MovieCredit, ExternalMovie).join(
+            ExternalMovie, MovieCredit.movie_id == ExternalMovie.id
+        ).filter(
+            MovieCredit.person_id == person_id
+        ).order_by(ExternalMovie.year.desc().nullslast()).all()
+
+        # Group by role
+        movies_by_role = {}
+        for credit, movie in credits:
+            role = credit.category
+            if role not in movies_by_role:
+                movies_by_role[role] = []
+
+            movies_by_role[role].append({
+                "imdb_id": movie.imdb_id,
+                "title": movie.primary_title,
+                "year": movie.year,
+                "rating": movie.rating,
+                "genres": movie.genres,
+                "character": credit.characters[0] if credit.characters else None
+            })
+
+        # Limit to top movies per role to keep response manageable
+        for role in movies_by_role:
+            movies_by_role[role] = movies_by_role[role][:20]  # Top 20 movies per role
+
+        return {
+            "id": person.id,
+            "imdb_id": person.imdb_id,
+            "name": person.primary_name,
+            "birth_year": person.birth_year,
+            "death_year": person.death_year,
+            "movies": movies_by_role,
+            "total_movies": len(credits)
+        }
+    finally:
+        db.close()
+
+@app.get("/api/person/{person_id}/movies")
+async def get_person_movies(person_id: int, role: Optional[str] = Query(None, pattern="^(director|actor|actress|writer)$")):
+    """Get all movies for a person, optionally filtered by role"""
+    db = SessionLocal()
+    try:
+        person = db.query(Person).filter(Person.id == person_id).first()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        # Build query
+        query = db.query(MovieCredit, ExternalMovie).join(
+            ExternalMovie, MovieCredit.movie_id == ExternalMovie.id
+        ).filter(MovieCredit.person_id == person_id)
+
+        if role:
+            query = query.filter(MovieCredit.category == role)
+
+        credits = query.order_by(ExternalMovie.year.desc().nullslast()).all()
+
+        movies = []
+        for credit, movie in credits:
+            movies.append({
+                "imdb_id": movie.imdb_id,
+                "title": movie.primary_title,
+                "year": movie.year,
+                "rating": movie.rating,
+                "genres": movie.genres,
+                "role": credit.category,
+                "character": credit.characters[0] if credit.characters else None
+            })
+
+        return {
+            "person": {
+                "id": person.id,
+                "imdb_id": person.imdb_id,
+                "name": person.primary_name
+            },
+            "movies": movies,
+            "total": len(movies)
+        }
+    finally:
+        db.close()
+
+@app.get("/api/search-people")
+async def search_people(q: str, limit: int = Query(20, ge=1, le=100)):
+    """Search for people by name"""
+    if not q or len(q) < 2:
+        return {"results": []}
+
+    db = SessionLocal()
+    try:
+        query_lower = q.lower()
+
+        # Search people with fuzzy matching
+        people = db.query(Person).filter(
+            Person.primary_name.ilike(f"%{q}%")
+        ).order_by(Person.primary_name).limit(limit).all()
+
+        results = []
+        for person in people:
+            # Get movie count
+            movie_count = db.query(MovieCredit).filter(
+                MovieCredit.person_id == person.id
+            ).count()
+
+            results.append({
+                "id": person.id,
+                "imdb_id": person.imdb_id,
+                "name": person.primary_name,
+                "birth_year": person.birth_year,
+                "death_year": person.death_year,
+                "movie_count": movie_count
+            })
+
+        return {"results": results}
+    finally:
+        db.close()
+
+@app.get("/api/imdb-stats")
+async def get_imdb_stats():
+    """Get statistics about imported IMDb data"""
+    db = SessionLocal()
+    try:
+        movie_count = db.query(ExternalMovie).count()
+        person_count = db.query(Person).count()
+        credit_count = db.query(MovieCredit).count()
+
+        # Get year distribution
+        year_stats = db.query(
+            ExternalMovie.year,
+            func.count(ExternalMovie.id)
+        ).filter(
+            ExternalMovie.year.isnot(None)
+        ).group_by(ExternalMovie.year).order_by(ExternalMovie.year).all()
+
+        year_distribution = {year: count for year, count in year_stats}
+
+        # Get genre distribution
+        genre_counts = {}
+        for movie in db.query(ExternalMovie).filter(ExternalMovie.genres.isnot(None)).all():
+            if movie.genres:
+                for genre in movie.genres.split(','):
+                    genre = genre.strip()
+                    genre_counts[genre] = genre_counts.get(genre, 0) + 1
+
+        top_genres = sorted(genre_counts.items(), key=lambda x: x[1], reverse=True)[:20]
+
+        return {
+            "movies": movie_count,
+            "people": person_count,
+            "credits": credit_count,
+            "year_distribution": year_distribution,
+            "top_genres": [{"genre": g, "count": c} for g, c in top_genres]
+        }
+    finally:
+        db.close()
+
+# Mount static files directory (favicon, etc.)
+# Must be mounted AFTER specific routes to avoid shadowing root path
+static_dir = SCRIPT_DIR / "static"
+if static_dir.exists():
+    app.mount("/", StaticFiles(directory=str(static_dir), html=False), name="static")
+    logger.info(f"Startup: mounted static directory at /")
+
+# Mount movies folder as static files for image serving
+movies_folder = get_movies_folder()
+if movies_folder and os.path.exists(movies_folder):
+    try:
+        app.mount("/movies", StaticFiles(directory=movies_folder), name="movies")
+        logger.info(f"Startup: mounted movies directory at /movies")
+    except Exception as e:
+        logger.warning(f"Failed to mount movies directory: {e}")
 
 
 if __name__ == "__main__":

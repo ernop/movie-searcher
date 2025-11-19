@@ -75,6 +75,55 @@ function initAllStarRatings() {
     document.querySelectorAll('.star-rating').forEach(initStarRating);
 }
 
+// Global click listener to close menus
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.movie-card-menu-btn') && !e.target.closest('.movie-card-menu-dropdown') && !e.target.closest('.btn-secondary')) {
+        document.querySelectorAll('.movie-card-menu-dropdown.active').forEach(el => {
+            el.classList.remove('active');
+        });
+    }
+});
+
+function toggleCardMenu(btn, menuId) {
+    // If menuId is a number, assume it's a movie ID and construct the ID
+    // If it's a string, use it as is
+    const id = typeof menuId === 'number' ? `menu-${menuId}` : menuId;
+    const menu = document.getElementById(id);
+    if (!menu) return;
+
+    // Close other menus
+    document.querySelectorAll('.movie-card-menu-dropdown.active').forEach(el => {
+        if (el !== menu) el.classList.remove('active');
+    });
+    menu.classList.toggle('active');
+}
+
+function hideMovie(movieId) {
+    fetch(`/api/movie/${movieId}/hide`, {
+        method: 'POST'
+    })
+    .then(response => {
+        if (response.ok) {
+            showStatus('Movie hidden', 'success');
+            // Remove card from UI if present
+            const card = document.querySelector(`.movie-card[data-movie-id="${movieId}"]`);
+            if (card) {
+                card.remove();
+            }
+            // If in details view, go back
+            if (window.location.hash.includes(`/movie/${movieId}`)) {
+                historyBack();
+            }
+        } else {
+            showStatus('Failed to hide movie', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error hiding movie:', error);
+        showStatus('Error hiding movie', 'error');
+    });
+}
+
 // Movie Card Component
 function createMovieCard(movie) {
     // Helper to extract filename from path
@@ -147,7 +196,16 @@ function createMovieCard(movie) {
                 ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" loading="lazy" onerror="this.parentElement.innerHTML='No Image'" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; }">` : 'No Image'}
             </div>
             <div class="movie-card-body">
-                <div class="movie-card-title">${escapeHtml(movie.name)}</div>
+                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div class="movie-card-title">${escapeHtml(movie.name)}</div>
+                    <div style="position: relative;">
+                        <button class="movie-card-menu-btn" onclick="event.stopPropagation(); toggleCardMenu(this, ${movie.id})">⋮</button>
+                        <div class="movie-card-menu-dropdown" id="menu-${movie.id}">
+                            <button class="movie-card-menu-item" onclick="event.stopPropagation(); showAddToPlaylistMenu(${movie.id})">Add to playlist</button>
+                            <button class="movie-card-menu-item" onclick="event.stopPropagation(); hideMovie(${movie.id})">Don't show this anymore</button>
+                        </div>
+                    </div>
+                </div>
                 <div class="movie-card-meta">
                     ${year ? `<span class="year-link" onclick="event.stopPropagation(); navigateToExploreWithYear(${year}, ${movie.id || 'null'});" title="Filter by ${year}">${year}</span>` : ''}
                     ${length ? `<span>${length}</span>` : ''}

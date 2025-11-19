@@ -621,23 +621,18 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     
     # Step 4: Handle subtitles
     steps.append("Step 4: Checking for subtitles")
-    if not subtitle_path:
-        if launch_with_subtitles_on:
-            steps.append("  No subtitle provided, attempting auto-detection (launch with subtitles enabled)")
-            subtitle_path = find_subtitle_file(movie_path)
-            if subtitle_path:
-                steps.append(f"  Auto-detected subtitle: {subtitle_path}")
-            else:
-                steps.append("  No subtitle file found")
-        else:
-            steps.append("  No subtitle provided and launch with subtitles disabled")
-            subtitle_path = None
+    if subtitle_path is None or subtitle_path == "":
+        # User explicitly chose "No subtitle" - don't load any
+        steps.append("  User chose 'No subtitle' - not loading any subtitle")
+        subtitle_path = None
     else:
-        steps.append(f"  Subtitle provided: {subtitle_path}")
+        # User selected a specific subtitle
+        steps.append(f"  User selected subtitle: {subtitle_path}")
     
     if subtitle_path and os.path.exists(subtitle_path):
-        vlc_cmd.extend(["--sub-file", subtitle_path])
-        steps.append(f"  Added subtitle to command: {subtitle_path}")
+        # Load the specified subtitle file and make it active
+        vlc_cmd.extend(["--sub-file", subtitle_path, "--sub-track", "1"])
+        steps.append(f"  Added subtitle and set as active: {subtitle_path}")
         results.append({"step": 4, "status": "success", "message": f"Subtitle loaded: {subtitle_path}"})
     else:
         if subtitle_path:
@@ -691,7 +686,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
             raise HTTPException(status_code=404, detail=f"Movie not found in database: {movie_path}")
         
         # Only add if the last entry is different (prevent duplicate consecutive entries)
-        last_launch = db.query(LaunchHistory).order_by(LaunchHistory.created.desc()).first()
+        last_launch = db.query(LaunchHistory).order_by(LaunchHistory.created.desc(), LaunchHistory.id.desc()).first()
         if not last_launch or last_launch.movie_id != movie.id:
             launch_entry = LaunchHistory(
                 movie_id=movie.id,

@@ -72,6 +72,7 @@ function handleRoute() {
     const pageSetup = document.getElementById('pageSetup');
     const pageMovieDetails = document.getElementById('pageMovieDetails');
     const pageHistory = document.getElementById('pageHistory');
+    const pagePlaylists = document.getElementById('pagePlaylists');
 
     // Detail routes (hash-based)
     if (route.startsWith('/movie/')) {
@@ -81,6 +82,19 @@ function handleRoute() {
             if (pageMovieDetails && !Number.isNaN(movieId)) {
                 pageMovieDetails.classList.add('active');
                 loadMovieDetailsById(movieId);
+                return;
+            }
+        }
+    }
+
+    // Direct playlist routes
+    if (route.startsWith('/playlist/')) {
+        const parts = route.split('/').filter(Boolean); // ["playlist", "{id}"]
+        if (parts.length >= 2) {
+            const playlistId = parseInt(parts[1], 10);
+            if (pagePlaylists && !Number.isNaN(playlistId)) {
+                pagePlaylists.classList.add('active');
+                handlePlaylistRoute(playlistId);
                 return;
             }
         }
@@ -98,6 +112,11 @@ function handleRoute() {
          if (pageHistory) {
              pageHistory.classList.add('active');
              loadHistory();
+         }
+     } else if (route === '/playlists') {
+         if (pagePlaylists) {
+             pagePlaylists.classList.add('active');
+             loadPlaylistsPage();
          }
      } else if (route === '/setup') {
          if (pageSetup) {

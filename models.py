@@ -2,7 +2,7 @@
 SQLAlchemy database models (table definitions) for Movie Searcher.
 """
 from enum import Enum
-from sqlalchemy import Column, String, Float, Integer, DateTime, Boolean, Text, ForeignKey
+from sqlalchemy import Column, String, Float, Integer, DateTime, Boolean, Text, ForeignKey, JSON
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 
@@ -26,6 +26,7 @@ class Movie(Base):
     hash = Column(String, nullable=True, index=True)
     language = Column(String, nullable=True, index=True)  # Primary audio language code (e.g., 'en', 'es', 'fr')
     image_path = Column(String, nullable=True)  # Path to movie's image (poster/cover) or fallback screenshot
+    hidden = Column(Boolean, default=False, nullable=False, index=True)
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -103,6 +104,72 @@ class MovieAudio(Base):
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
+# --- Playlist Models ---
+
+class Playlist(Base):
+    """User and system playlists"""
+    __tablename__ = "playlists"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    name = Column(String, nullable=False)
+    is_system = Column(Boolean, default=False, nullable=False)  # True for 'Favorites', 'Want to Watch'
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+class PlaylistItem(Base):
+    """Movies in playlists"""
+    __tablename__ = "playlist_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    playlist_id = Column(Integer, ForeignKey('playlists.id', ondelete='CASCADE'), nullable=False, index=True)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
+    order = Column(Integer, default=0, nullable=False)
+    added_at = Column(DateTime, default=func.now(), nullable=False)
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+# --- Offline Metadata Models (IMDb subset) ---
+
+class ExternalMovie(Base):
+    """Subset of IMDb movie data (title.basics)"""
+    __tablename__ = "external_movies"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    imdb_id = Column(String, unique=True, nullable=False, index=True)  # tt1234567
+    primary_title = Column(String, nullable=False, index=True)
+    original_title = Column(String, nullable=True)
+    year = Column(Integer, nullable=True, index=True)
+    runtime_minutes = Column(Integer, nullable=True)
+    genres = Column(String, nullable=True)  # Comma-separated string
+    rating = Column(Float, nullable=True)   # IMDb rating
+    votes = Column(Integer, nullable=True)  # Number of votes
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+class Person(Base):
+    """Subset of IMDb person data (name.basics)"""
+    __tablename__ = "people"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    imdb_id = Column(String, unique=True, nullable=False, index=True)  # nm1234567
+    primary_name = Column(String, nullable=False, index=True)
+    birth_year = Column(Integer, nullable=True)
+    death_year = Column(Integer, nullable=True)
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+class MovieCredit(Base):
+    """Joins ExternalMovie and Person (title.principals)"""
+    __tablename__ = "movie_credits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('external_movies.id', ondelete='CASCADE'), nullable=False, index=True)
+    person_id = Column(Integer, ForeignKey('people.id', ondelete='CASCADE'), nullable=False, index=True)
+    category = Column(String, nullable=False)  # director, actor, actress, writer
+    characters = Column(JSON, nullable=True)   # JSON array of character names
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
 class SchemaVersion(Base):
     """Tracks database schema version to avoid unnecessary migration checks"""
     __tablename__ = "schema_version"
@@ -113,5 +180,4 @@ class SchemaVersion(Base):
     applied_at = Column(DateTime, default=func.now(), nullable=False)
 
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 10
-
+CURRENT_SCHEMA_VERSION = 12

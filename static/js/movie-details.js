@@ -91,27 +91,158 @@ async function toggleWatched(movieId, currentStatus) {
     const currentIdx = cycleOrder.indexOf(currentStatus === 'null' ? null : currentStatus);
     const nextIdx = (currentIdx + 1) % cycleOrder.length;
     const nextStatus = cycleOrder[nextIdx];
-    
+
+    // Show loading state
+    const button = document.querySelector(`[data-movie-id="${movieId}"] .movie-card-btn`);
+    if (button) {
+        button.style.opacity = '0.6';
+        button.disabled = true;
+    }
+
     try {
-        const response = await fetch('/api/watched', {
+        const response = await fetch('/api/change-status', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 movie_id: movieId,
-                watch_status: nextStatus
+                movieStatus: nextStatus
             })
         });
-        
+
         if (response.ok) {
-            const route = getRoute();
-            if (route === '/explore') {
-                loadExploreMovies();
-            } else if (route.startsWith('/movie/')) {
-                loadMovieDetailsById(movieId);
+            // Update UI immediately without page reload
+            updateMovieStatusUI(movieId, nextStatus);
+
+            // Add brief success highlight
+            if (button) {
+                button.style.transition = 'background-color 0.3s ease';
+                button.style.backgroundColor = '#e8f5e8';
+                setTimeout(() => {
+                    button.style.backgroundColor = '';
+                }, 500);
             }
+        } else {
+            throw new Error(`HTTP ${response.status}`);
         }
     } catch (error) {
         console.error('Error updating watched status:', error);
+        showStatus('Failed to update watch status', 'error');
+    } finally {
+        // Restore button state
+        if (button) {
+            button.style.opacity = '';
+            button.disabled = false;
+        }
+    }
+}
+
+// Update just the status UI elements without reloading the page
+function updateMovieStatusUI(movieId, newStatus) {
+    // Handle movie cards in explore/search views
+    const movieCard = document.querySelector(`[data-movie-id="${movieId}"]`);
+    if (movieCard) {
+        // Update movie card button
+        const button = movieCard.querySelector('.movie-card-btn');
+        const checkbox = movieCard.querySelector('.watched-checkbox');
+
+        if (button && checkbox) {
+            // Update checkbox class
+            let checkboxClass = 'unset';
+            if (newStatus === 'watched') {
+                checkboxClass = 'watched';
+            } else if (newStatus === 'unwatched') {
+                checkboxClass = 'unwatched';
+            } else if (newStatus === 'want_to_watch') {
+                checkboxClass = 'want-to-watch';
+            }
+
+            checkbox.className = `watched-checkbox ${checkboxClass}`;
+
+            // Update button text
+            let buttonText = '-';
+            if (newStatus === 'watched') {
+                buttonText = 'watched';
+            } else if (newStatus === 'unwatched') {
+                buttonText = 'not watched';
+            } else if (newStatus === 'want_to_watch') {
+                buttonText = 'want to see';
+            }
+
+            // Update the text content (preserve the checkbox span)
+            const textSpan = button.querySelector('span.watched-checkbox + *') || button.lastChild;
+            if (textSpan && textSpan.nodeType === Node.TEXT_NODE) {
+                textSpan.textContent = buttonText;
+            } else {
+                // Fallback: recreate the button content
+                button.innerHTML = `<span class="watched-checkbox ${checkboxClass}"></span>${buttonText}`;
+            }
+        }
+
+        // Update movie card class (add/remove 'watched' class)
+        if (newStatus === 'watched') {
+            movieCard.classList.add('watched');
+        } else {
+            movieCard.classList.remove('watched');
+        }
+    }
+
+    // Handle movie detail view
+    const detailView = document.querySelector('.movie-details');
+    if (detailView && detailView.dataset.movieId == movieId) {
+        // Update detail view button
+        const button = detailView.querySelector('.watched-btn');
+
+        if (button) {
+            // Update button class
+            let buttonClass = '';
+            if (newStatus === 'watched') {
+                buttonClass = 'watched';
+            } else if (newStatus === 'unwatched') {
+                buttonClass = 'unwatched';
+            } else if (newStatus === 'want_to_watch') {
+                buttonClass = 'want-to-watch';
+            }
+
+            button.className = `watched-btn ${buttonClass}`;
+
+            // Update button text
+            let buttonText = '-';
+            if (newStatus === 'watched') {
+                buttonText = 'watched';
+            } else if (newStatus === 'unwatched') {
+                buttonText = 'not watched';
+            } else if (newStatus === 'want_to_watch') {
+                buttonText = 'want to see';
+            }
+
+            button.textContent = buttonText;
+        }
+
+        // Update the meta information (watched date)
+        const metaDiv = detailView.querySelector('.movie-details-meta');
+        if (metaDiv) {
+            // Remove existing watched date spans
+            const spans = metaDiv.querySelectorAll('span');
+            spans.forEach(span => {
+                if (span.textContent && span.textContent.startsWith('Watched:')) {
+                    span.remove();
+                }
+            });
+
+            // Add new watched date if applicable
+            if (newStatus === 'watched') {
+                const watchedSpan = document.createElement('span');
+                watchedSpan.textContent = `Watched: ${formatDate(new Date().toISOString())}`;
+                metaDiv.appendChild(watchedSpan);
+            }
+        }
+    }
+
+    // Update playlists display if present
+    const playlistsContainer = document.querySelector('.movie-playlists');
+    if (playlistsContainer) {
+        // If "Want to Watch" status changed, we might need to update playlists
+        // But for now, we'll handle this in the playlist functions
     }
 }
 
@@ -124,7 +255,7 @@ async function launchMovie(movieId) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 movie_id: movieId,
-                subtitle_file: selectedSubtitle
+                subtitle_path: selectedSubtitle
             })
         });
         
@@ -234,7 +365,8 @@ async function loadMovieDetailsById(id) {
         }
 
         container.innerHTML = `
-            <div class="movie-details-header">
+            <div class="movie-details" data-movie-id="${movie.id}">
+                <div class="movie-details-header">
                 <div class="movie-details-poster">
                     ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; container.style.height = 'auto'; }">` : 'No Image'}
                 </div>
@@ -253,6 +385,12 @@ async function loadMovieDetailsById(id) {
                         </button>
                         ${subtitleSelect}
                         <button class="launch-btn" onclick="launchMovie(${movie.id})">Launch</button>
+                        <div style="position: relative; display: inline-block;">
+                            <button class="btn btn-secondary" onclick="event.stopPropagation(); toggleCardMenu(this, 'menu-details-${movie.id}')">...</button>
+                            <div class="movie-card-menu-dropdown" id="menu-details-${movie.id}" style="right: auto; left: 0;">
+                                <button class="movie-card-menu-item" onclick="event.stopPropagation(); hideMovie(${movie.id})">Don't show this anymore</button>
+                            </div>
+                        </div>
                     </div>
                     <div class="external-links" style="margin-top: 20px;">
                         <a href="${externalLinks.letterboxd}" target="_blank" class="external-link">Letterboxd</a>
@@ -268,6 +406,7 @@ async function loadMovieDetailsById(id) {
                 </div>
             </div>
             ${mediaGallery}
+            </div>
         `;
         initAllStarRatings();
     } catch (error) {

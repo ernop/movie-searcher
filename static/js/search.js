@@ -8,16 +8,10 @@ const watchedList = document.getElementById('watchedList');
 
 let selectedIndex = -1;
 let currentResults = [];
-let searchTimeout = null;
 let searchAbortController = null;
+let currentSearchRequestId = 0;
 
 function scheduleSearch(query) {
-    // Clear existing timeout
-    if (searchTimeout) {
-        clearTimeout(searchTimeout);
-        searchTimeout = null;
-    }
-    
     // If query is empty, clear results
     if (!query || query.trim().length === 0) {
         // Abort any pending search
@@ -25,19 +19,23 @@ function scheduleSearch(query) {
             searchAbortController.abort();
             searchAbortController = null;
         }
+        // Increment request ID to invalidate any pending completions
+        currentSearchRequestId++;
+        
         if (autocomplete) autocomplete.style.display = 'none';
         if (results) results.innerHTML = '';
         currentResults = [];
         return;
     }
     
-    // Debounce search by 300ms
-    searchTimeout = setTimeout(() => {
-        performSearch(query);
-    }, 300);
+    // Perform search immediately (no debounce)
+    performSearch(query);
 }
 
 async function performSearch(query) {
+    // Increment request ID for this new search
+    const requestId = ++currentSearchRequestId;
+    
     // Abort previous request
     if (searchAbortController) {
         searchAbortController.abort();
@@ -58,7 +56,10 @@ async function performSearch(query) {
             signal: searchAbortController.signal
         });
         
-        searchAbortController = null;
+        // Note: We don't null out searchAbortController here because
+        // we want to keep it active until the next request replaces it,
+        // or if we want to support manual cancellation later.
+        // But mainly, the requestId check below is the ultimate guard.
         
         if (!response.ok) {
             console.error('Search failed:', response.status);
@@ -66,6 +67,12 @@ async function performSearch(query) {
         }
         
         const data = await response.json();
+        
+        // CRITICAL: Check if this is still the latest request
+        if (requestId !== currentSearchRequestId) {
+            return;
+        }
+        
         currentResults = data.results || [];
         
         if (currentResults.length === 0) {
