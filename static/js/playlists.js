@@ -30,6 +30,11 @@ async function loadPlaylistsOverview() {
 
         const data = await response.json();
         overview.innerHTML = renderPlaylistsOverview(data.playlists);
+        
+        // Restore scroll position if available
+        if (typeof restoreScrollPosition === 'function') {
+            restoreScrollPosition();
+        }
     } catch (error) {
         console.error('Error loading playlists:', error);
         overview.innerHTML = '<div class="empty-state">Error loading playlists</div>';
@@ -114,6 +119,11 @@ async function viewPlaylist(playlistId, sort = 'date_added', page = 1) {
 
         const data = await response.json();
         renderPlaylistView(data);
+        
+        // Restore scroll position if available
+        if (typeof restoreScrollPosition === 'function') {
+            restoreScrollPosition();
+        }
     } catch (error) {
         console.error('Error loading playlist:', error);
         document.getElementById('playlistMovies').innerHTML = '<div class="empty-state">Error loading playlist</div>';
@@ -151,6 +161,11 @@ function renderPlaylistView(data) {
         paginationContainer.style.display = 'flex';
     } else {
         paginationContainer.style.display = 'none';
+    }
+    
+    // Restore scroll position
+    if (typeof restoreScrollPosition === 'function') {
+        restoreScrollPosition();
     }
 }
 
@@ -318,7 +333,19 @@ async function showAddToPlaylistMenu(movieId) {
     // Close any existing submenu first
     closeAddToPlaylistMenu();
 
-    const menuBtn = document.querySelector(`[data-movie-id="${movieId}"] .movie-card-menu-btn`);
+    // Try to find menu button for movie cards first
+    let menuBtn = document.querySelector(`[data-movie-id="${movieId}"] .movie-card-menu-btn`);
+
+    // If not found, try to find menu button for movie details page
+    if (!menuBtn) {
+        // Look for active movie card menu dropdown and find its corresponding button
+        const activeMenu = document.querySelector('.movie-card-menu-dropdown.active');
+        if (activeMenu && activeMenu.id.startsWith('menu-details-')) {
+            // For movie details, find the button that triggered this menu
+            menuBtn = document.querySelector(`button[onclick*="${activeMenu.id}"]`);
+        }
+    }
+
     if (!menuBtn) return;
 
     try {
@@ -333,8 +360,12 @@ async function showAddToPlaylistMenu(movieId) {
         const submenu = document.createElement('div');
         submenu.className = 'movie-card-submenu';
         submenu.id = 'playlist-submenu';
+        // Determine the menu ID to close (movie card or movie details)
+        const activeMenu = document.querySelector('.movie-card-menu-dropdown.active');
+        const menuIdToClose = activeMenu ? activeMenu.id : movieId;
+
         submenu.innerHTML = playlists.map(playlist => `
-            <button class="movie-card-menu-item" onclick="event.stopPropagation(); addMovieToPlaylist(${movieId}, '${playlist.name.replace(/'/g, "\\'")}'); closeAddToPlaylistMenu(); toggleCardMenu(null, ${movieId})">
+            <button class="movie-card-menu-item" onclick="event.stopPropagation(); addMovieToPlaylist(${movieId}, '${playlist.name.replace(/'/g, "\\'")}'); closeAddToPlaylistMenu(); toggleCardMenu(null, '${menuIdToClose}')">
                 ${escapeHtml(playlist.name)}
             </button>
         `).join('');
@@ -342,7 +373,7 @@ async function showAddToPlaylistMenu(movieId) {
         // Add "Create new playlist" option
         submenu.innerHTML += `
             <hr style="margin: 5px 0; border: none; border-top: 1px solid #555;">
-            <button class="movie-card-menu-item" onclick="event.stopPropagation(); showQuickCreatePlaylist(${movieId}); closeAddToPlaylistMenu(); toggleCardMenu(null, ${movieId})">
+            <button class="movie-card-menu-item" onclick="event.stopPropagation(); showQuickCreatePlaylist(${movieId}); closeAddToPlaylistMenu(); toggleCardMenu(null, '${menuIdToClose}')">
                 + Create new playlist
             </button>
         `;

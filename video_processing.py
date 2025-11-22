@@ -351,6 +351,24 @@ frame_processing_active = False
 screenshot_completion_times = []
 screenshot_completion_lock = threading.Lock()
 
+# Track active extractions to prevent premature shutdown
+active_extractions_count = 0
+active_extractions_lock = threading.Lock()
+
+def increment_active_extractions():
+    global active_extractions_count
+    with active_extractions_lock:
+        active_extractions_count += 1
+
+def decrement_active_extractions():
+    global active_extractions_count
+    with active_extractions_lock:
+        active_extractions_count = max(0, active_extractions_count - 1)
+
+def get_active_extractions():
+    with active_extractions_lock:
+        return active_extractions_count
+
 def register_subprocess(proc: subprocess.Popen):
     """Register a subprocess so it can be killed on shutdown"""
     with active_subprocesses_lock:
@@ -525,6 +543,32 @@ def get_video_length(file_path):
     except Exception as e:
         logger.error(f"Error running ffprobe for {file_path}: {e}")
         return None
+
+def has_video_stream(file_path):
+    """
+    Check if file has a video stream using ffprobe.
+    Returns True if a video stream is present, False otherwise.
+    """
+    ffprobe = _get_ffprobe_path_from_config()
+    if not ffprobe:
+        return False
+        
+    try:
+        cmd = [
+            ffprobe,
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "default=nw=1:nk=1",
+            str(file_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return False
+        return result.stdout.strip() == "video"
+    except Exception as e:
+        logger.error(f"Error checking video stream for {file_path}: {e}")
+        return False
 
 def validate_ffmpeg_path(ffmpeg_path):
     """Validate that an ffmpeg path exists and is executable"""
@@ -703,6 +747,14 @@ def process_screenshot_extraction_worker(screenshot_info):
         
         logger.info(f"process_screenshot_extraction_worker: {Path(video_path).name} at {timestamp_seconds}s, subtitle_path={subtitle_path}")
 
+        # Check if video stream exists before proceeding
+        # This prevents "Output file #0 does not contain any stream" errors for audio files
+        if not has_video_stream(video_path):
+            logger.info(f"No video stream found in {video_path}, skipping screenshot extraction")
+            # We return True to indicate "success" in handling this item (by skipping it)
+            # rather than failing and potentially retrying or logging errors.
+            return True
+
         # Get (or compute) screenshot output path
         if "screenshot_path" in screenshot_info:
             screenshot_path = Path(screenshot_info["screenshot_path"])
@@ -736,64 +788,69 @@ def process_screenshot_extraction_worker(screenshot_info):
 
         def _on_done(fut: Future):
             try:
-                result = fut.result()
-            except Exception as e:
-                add_scan_log_func("error", f"Screenshot extraction error callback: {e}")
-                return
-
-            out_path = Path(result.get("out_path", ""))
-            vid_path = result.get("video_path", video_path)
-            rc = result.get("returncode", -99)
-            elapsed = result.get("elapsed", 0.0)
-
-            if elapsed > 1:
-                add_scan_log_func("warning", f"Screenshot extraction took {elapsed:.1f}s (expected <1s)")
-
-            if rc == 0 and out_path.exists():
-                # Save screenshot to database (no retries - failures are bugs, not transient errors)
-                movie_id_to_use = screenshot_info.get("movie_id")
-                if not movie_id_to_use:
-                    logger.error(f"movie_id not provided when saving screenshot {out_path.name}. This is a programming error - movie_id must be passed.")
-                    add_scan_log_func("error", f"Programming error: movie_id missing when saving screenshot")
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    add_scan_log_func("error", f"Screenshot extraction error callback: {e}")
                     return
-                
-                if save_screenshot_to_db(movie_id_to_use, out_path, timestamp_seconds):
-                    # Success - update progress
-                    scan_progress_dict["frames_processed"] = scan_progress_dict.get("frames_processed", 0) + 1
-                    scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
-                    # Track completion time
-                    with screenshot_completion_lock:
-                        screenshot_completion_times.append(time.time())
-                        if len(screenshot_completion_times) > 1000:
-                            screenshot_completion_times.pop(0)
-                    si = screenshot_info.get("screenshot_index", None)
-                    ts = screenshot_info.get("total_screenshots", None)
-                    if si and ts:
-                        add_scan_log_func("success", f"Screenshot {si}/{ts} extracted: {Path(vid_path).name}")
-                    else:
-                        add_scan_log_func("success", f"Screenshot extracted: {Path(vid_path).name}")
-                else:
-                    logger.error(f"Failed to save screenshot to database: movie_id={movie_id_to_use}, path={out_path.name}. This is a bug, not a transient error. File exists on disk but will not be displayed.")
-                    add_scan_log_func("error", f"Database save failed: {out_path.name}")
-                    # File exists but not in DB - will be caught by sync function if called
-            else:
-                rc = result.get("returncode", -99)
-                stderr_msg = result.get("stderr", "") or ""
-                stdout_msg = result.get("stdout", "") or ""
+
                 out_path = Path(result.get("out_path", ""))
-                stderr_preview = (stderr_msg[:200] + "...") if len(stderr_msg) > 200 else stderr_msg
-                stdout_preview = (stdout_msg[:200] + "...") if len(stdout_msg) > 200 else stdout_msg
-                error_detail = f"exit={rc}"
-                if stderr_preview:
-                    error_detail += f", stderr={stderr_preview}"
-                if stdout_preview:
-                    error_detail += f", stdout={stdout_preview}"
-                file_exists = out_path.exists() if out_path else False
-                error_msg = f"Screenshot extraction failed: {Path(vid_path).name} at {timestamp_seconds}s - {error_detail}"
-                if file_exists:
-                    error_msg += f" (output file exists: {out_path.name})"
-                logger.error(error_msg)
-                add_scan_log_func("error", f"Screenshot extraction failed: {Path(vid_path).name} at {timestamp_seconds}s - exit={rc}")
+                vid_path = result.get("video_path", video_path)
+                rc = result.get("returncode", -99)
+                elapsed = result.get("elapsed", 0.0)
+
+                if elapsed > 1:
+                    add_scan_log_func("warning", f"Screenshot extraction took {elapsed:.1f}s (expected <1s)")
+
+                if rc == 0 and out_path.exists():
+                    # Save screenshot to database (no retries - failures are bugs, not transient errors)
+                    movie_id_to_use = screenshot_info.get("movie_id")
+                    if not movie_id_to_use:
+                        logger.error(f"movie_id not provided when saving screenshot {out_path.name}. This is a programming error - movie_id must be passed.")
+                        add_scan_log_func("error", f"Programming error: movie_id missing when saving screenshot")
+                        return
+                    
+                    if save_screenshot_to_db(movie_id_to_use, out_path, timestamp_seconds):
+                        # Success - update progress
+                        scan_progress_dict["frames_processed"] = scan_progress_dict.get("frames_processed", 0) + 1
+                        scan_progress_dict["frame_queue_size"] = frame_extraction_queue.qsize()
+                        # Track completion time
+                        with screenshot_completion_lock:
+                            screenshot_completion_times.append(time.time())
+                            if len(screenshot_completion_times) > 1000:
+                                screenshot_completion_times.pop(0)
+                        si = screenshot_info.get("screenshot_index", None)
+                        ts = screenshot_info.get("total_screenshots", None)
+                        if si and ts:
+                            add_scan_log_func("success", f"Screenshot {si}/{ts} extracted: {Path(vid_path).name}")
+                        else:
+                            add_scan_log_func("success", f"Screenshot extracted: {Path(vid_path).name}")
+                    else:
+                        logger.error(f"Failed to save screenshot to database: movie_id={movie_id_to_use}, path={out_path.name}. This is a bug, not a transient error. File exists on disk but will not be displayed.")
+                        add_scan_log_func("error", f"Database save failed: {out_path.name}")
+                        # File exists but not in DB - will be caught by sync function if called
+                else:
+                    rc = result.get("returncode", -99)
+                    stderr_msg = result.get("stderr", "") or ""
+                    stdout_msg = result.get("stdout", "") or ""
+                    out_path = Path(result.get("out_path", ""))
+                    stderr_preview = (stderr_msg[:200] + "...") if len(stderr_msg) > 200 else stderr_msg
+                    stdout_preview = (stdout_msg[:200] + "...") if len(stdout_msg) > 200 else stdout_msg
+                    error_detail = f"exit={rc}"
+                    if stderr_preview:
+                        error_detail += f", stderr={stderr_preview}"
+                    if stdout_preview:
+                        error_detail += f", stdout={stdout_preview}"
+                    file_exists = out_path.exists() if out_path else False
+                    error_msg = f"Screenshot extraction failed: {Path(vid_path).name} at {timestamp_seconds}s - {error_detail}"
+                    if file_exists:
+                        error_msg += f" (output file exists: {out_path.name})"
+                    logger.error(error_msg)
+                    add_scan_log_func("error", f"Screenshot extraction failed: {Path(vid_path).name} at {timestamp_seconds}s - exit={rc}")
+            except Exception as e:
+                logger.error(f"Error in _on_done callback: {e}", exc_info=True)
+            finally:
+                decrement_active_extractions()
 
         if shutdown_flag.is_set():
             return False
@@ -807,12 +864,14 @@ def process_screenshot_extraction_worker(screenshot_info):
 
         # Submit job
         logger.info(f"Submitting ffmpeg job: video={Path(video_path).name}, timestamp={timestamp_seconds}s, subtitle_path={subtitle_path}, output={screenshot_path.name}")
+        increment_active_extractions()
         try:
             future = process_executor.submit(_ffmpeg_job, str(video_path), float(timestamp_seconds), ffmpeg_exe, str(screenshot_path), subtitle_path)
             future.add_done_callback(_on_done)
             # Do not block here; success indicates submission happened
             return True
         except Exception as submit_err:
+            decrement_active_extractions()
             logger.error(f"Failed to submit ffmpeg job: {submit_err}", exc_info=True)
             return False
             
@@ -873,7 +932,14 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
                         logger.info("Shutdown flag set, breaking worker loop")
                         break
                     if not is_scanning and frame_extraction_queue.empty():
-                        logger.info(f"Queue empty and scan not running, breaking worker loop (processed: {processed_count})")
+                        # Wait for active extractions to complete before shutting down
+                        active_count = get_active_extractions()
+                        if active_count > 0:
+                            logger.debug(f"Queue empty and scan done, but {active_count} extractions active. Waiting...")
+                            time.sleep(0.5)
+                            continue
+                            
+                        logger.info(f"Queue empty, scan not running, and no active extractions. Breaking worker loop (processed: {processed_count})")
                         break
                     continue
 
@@ -901,9 +967,13 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
         # Shutdown executor with timeout (interruptible)
         if frame_executor:
             frame_executor.shutdown(wait=False)  # Don't wait, allow interruption
-            # Give a short time for tasks to finish, then kill subprocesses
+            # Give a short time for tasks to finish
             time.sleep(0.5)
-            kill_all_active_subprocesses()
+            
+            # Only kill subprocesses on forced shutdown
+            if shutdown_flag.is_set():
+                kill_all_active_subprocesses()
+                
             # Allow clean recreation on next start
             frame_executor = None
         if process_executor:
@@ -950,6 +1020,12 @@ def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmp
             add_scan_log_func("info", f"  All {num_screenshots} screenshots already exist")
         return existing_screenshots
     
+    # Check if video stream exists
+    if not has_video_stream(video_path):
+        if add_scan_log_func:
+            add_scan_log_func("info", f"  Skipping audio-only file (no video stream)")
+        return existing_screenshots if existing_screenshots else []
+
     # Try to get video length
     if add_scan_log_func:
         add_scan_log_func("info", f"  Getting video length...")

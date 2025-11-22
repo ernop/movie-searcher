@@ -1,129 +1,99 @@
-async function loadStats() {
+// Setup Page Functions
+
+async function loadCurrentFolder() {
+    const setupCurrentFolderEl = document.getElementById('setupCurrentFolder');
+    if (setupCurrentFolderEl) {
+        setupCurrentFolderEl.textContent = 'Loading...';
+    }
+    
     try {
-        const response = await fetch('/api/stats');
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({})  // Empty body to get current config
+        });
+        
         const data = await response.json();
-        const pathCount = Array.isArray(data.indexed_paths) ? data.indexed_paths.length : 0;
-        if (stats) {
-            stats.innerHTML = `
-                <div>${data.total_movies} movies indexed total</div>
-            `;
+        
+        if (response.ok) {
+            const folderPath = data.movies_folder || 'Not set';
+            if (setupCurrentFolderEl) {
+                setupCurrentFolderEl.textContent = folderPath;
+            }
+            
+            // Also update setup checkboxes if present
+            if (data.settings) {
+                const closeVlcEl = document.getElementById('setupCloseExistingVlc');
+                const launchSubsEl = document.getElementById('setupLaunchWithSubtitlesOn');
+                
+                if (closeVlcEl && data.settings.close_existing_vlc !== undefined) {
+                    closeVlcEl.checked = data.settings.close_existing_vlc;
+                }
+                if (launchSubsEl && data.settings.launch_with_subtitles_on !== undefined) {
+                    launchSubsEl.checked = data.settings.launch_with_subtitles_on;
+                }
+            }
+            
+            return folderPath;
+        } else {
+            if (setupCurrentFolderEl) {
+                setupCurrentFolderEl.textContent = 'Error loading';
+            }
+            return null;
         }
-        return data;
     } catch (error) {
-        console.error('Stats error:', error);
+        if (setupCurrentFolderEl) {
+            setupCurrentFolderEl.textContent = 'Error loading';
+        }
         return null;
     }
 }
 
-async function loadCurrentFolder() {
-    try {
-        const response = await fetch('/api/config');
-        const data = await response.json();
-        const folderPath = data.movies_folder || data.default_folder || 'Not set';
-        const currentFolderEl = document.getElementById('currentFolder');
-        const setupCurrentFolderEl = document.getElementById('setupCurrentFolder');
-        if (currentFolderEl) currentFolderEl.textContent = folderPath;
-        if (setupCurrentFolderEl) setupCurrentFolderEl.textContent = folderPath;
-    } catch (error) {
-        console.error('Config error:', error);
-        const currentFolderEl = document.getElementById('currentFolder');
-        const setupCurrentFolderEl = document.getElementById('setupCurrentFolder');
-        if (currentFolderEl) currentFolderEl.textContent = 'Error loading';
-        if (setupCurrentFolderEl) setupCurrentFolderEl.textContent = 'Error loading';
-    }
-}
-
-async function loadSetupPage() {
-    await loadCurrentFolder();
-    const statsData = await loadStats();
+async function loadStats() {
     const setupStatsEl = document.getElementById('setupStats');
-    if (setupStatsEl && statsData) {
-        const pathCount = Array.isArray(statsData.indexed_paths) ? statsData.indexed_paths.length : 0;
-        setupStatsEl.innerHTML = `
-            <div style="color: #e0e0e0; margin-bottom: 10px;">
-                <div style="margin-bottom: 5px;"><strong>${statsData.total_movies}</strong> movies indexed total</div>
+    const statsEl = document.getElementById('stats');
+    
+    try {
+        const response = await fetch('/api/stats');
+        const data = await response.json();
+        
+        if (!response.ok) {
+            console.error('Failed to load stats');
+            return;
+        }
+        
+        // Format numbers
+        const totalMovies = data.total_movies || 0;
+        const watchedCount = data.watched_count || 0;
+        const watchedPercent = totalMovies > 0 ? Math.round((watchedCount / totalMovies) * 100) : 0;
+        
+        const statsHtml = `
+            <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
+                <div class="stat-card" style="background: #1a1a1a; padding: 15px; border-radius: 6px; border: 1px solid #3a3a3a;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px;">Total Movies</div>
+                    <div style="font-size: 24px; font-weight: 500; color: #fff;">${totalMovies}</div>
+                </div>
+                <div class="stat-card" style="background: #1a1a1a; padding: 15px; border-radius: 6px; border: 1px solid #3a3a3a;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px;">Watched</div>
+                    <div style="font-size: 24px; font-weight: 500; color: #4caf50;">${watchedCount} <span style="font-size: 14px; color: #666;">(${watchedPercent}%)</span></div>
+                </div>
             </div>
         `;
-    }
-    
-    // Load VLC settings
-    try {
-        const response = await fetch('/api/config');
-        const data = await response.json();
-        const settings = data.settings || {};
         
-        // Load close existing VLC setting (default to true if not set)
-        const closeExistingVlcEl = document.getElementById('setupCloseExistingVlc');
-        if (closeExistingVlcEl) {
-            // This setting is not saved to config currently, keep default checked state
-            // In future, can be saved like: closeExistingVlcEl.checked = settings.close_existing_vlc !== false;
+        if (setupStatsEl) {
+            setupStatsEl.innerHTML = statsHtml;
         }
         
-        // Load launch with subtitles setting (default to true if not set)
-        const launchWithSubtitlesOnEl = document.getElementById('setupLaunchWithSubtitlesOn');
-        if (launchWithSubtitlesOnEl) {
-            launchWithSubtitlesOnEl.checked = settings.launch_with_subtitles_on !== false;
+        if (statsEl) {
+            statsEl.innerHTML = `
+                <div>Total Movies: <span style="color: #fff;">${totalMovies}</span></div>
+                <div>Watched: <span style="color: #4caf50;">${watchedCount}</span> (${watchedPercent}%)</div>
+            `;
         }
+        
     } catch (error) {
-        console.error('Error loading VLC settings:', error);
+        console.error('Error loading stats:', error);
     }
-}
-
-function normalizePath(path) {
-    // Normalize path separators for Windows
-    // Convert forward slashes to backslashes, handle double backslashes
-    if (!path) return path;
-    
-    // Replace forward slashes with backslashes
-    path = path.replace(/\//g, '\\');
-    
-    // Normalize double backslashes (but preserve UNC paths like \\server\share)
-    // Only normalize if it's not at the start (UNC path)
-    if (path.startsWith('\\\\') && path.length > 2) {
-        // UNC path - keep the first two backslashes, normalize the rest
-        const rest = path.substring(2).replace(/\\\\+/g, '\\');
-        path = '\\\\' + rest;
-    } else {
-        // Regular path - normalize all double+ backslashes
-        path = path.replace(/\\\\+/g, '\\');
-    }
-    
-    // Remove trailing backslash (unless it's a root like C:\)
-    if (path.length > 3 && path.endsWith('\\') && path.match(/^[A-Za-z]:\\$/)) {
-        // Keep it - it's a drive root
-    } else if (path.endsWith('\\')) {
-        path = path.slice(0, -1);
-    }
-    
-    return path;
-}
-
-function showFolderDialog() {
-    const dialog = document.getElementById('folderDialog');
-    const input = document.getElementById('folderPathInput');
-    
-    // Load current path into input
-    loadCurrentFolder().then(() => {
-        const setupCurrentFolderEl = document.getElementById('setupCurrentFolder');
-        const currentPath = setupCurrentFolderEl ? setupCurrentFolderEl.textContent : '';
-        if (currentPath && currentPath !== 'Loading...' && currentPath !== 'Error loading' && currentPath !== 'Not set') {
-            input.value = currentPath;
-        } else {
-            input.value = '';
-        }
-    });
-    
-    dialog.classList.add('active');
-    // Focus the input after a short delay to ensure dialog is visible
-    setTimeout(() => {
-        input.focus();
-        input.select();
-    }, 100);
-}
-
-function hideFolderDialog() {
-    const dialog = document.getElementById('folderDialog');
-    dialog.classList.remove('active');
 }
 
 async function saveFolderPath() {
@@ -179,84 +149,26 @@ async function loadHiddenMovies() {
 
         let html = '<div class="movie-grid">';
         movies.forEach(movie => {
-            html += createHiddenMovieCard(movie);
+            html += createMovieCard(movie, {
+                showMenu: false,
+                showRating: true,
+                watchStatusControl: false, // Don't show watch status for hidden movies
+                customButtons: `<button class="btn btn-success" style="width:100%" onclick="event.stopPropagation(); unhideMovie(${movie.id})">Unhide</button>`
+            });
         });
         html += '</div>';
         container.innerHTML = html;
 
         // Initialize star ratings
         initAllStarRatings();
+        
+        // Restore scroll position if available
+        if (typeof restoreScrollPosition === 'function') {
+            restoreScrollPosition();
+        }
     } catch (error) {
         container.innerHTML = `<div class="status-message error">Error: ${error.message}</div>`;
     }
-}
-
-function createHiddenMovieCard(movie) {
-    // Helper to extract filename from path
-    function getFilename(path) {
-        if (!path) return null;
-        const parts = path.replace(/\\/g, '/').split('/');
-        return parts[parts.length - 1];
-    }
-
-    // Prefer API endpoint by screenshot_id for reliability, fallback to image_path, then first screenshot
-    let imageUrl = '';
-    if (movie.screenshot_id) {
-        // Use API endpoint - most reliable, handles path issues correctly
-        imageUrl = `/api/screenshot/${movie.screenshot_id}`;
-    } else if (movie.image_path) {
-        // Use movie.image_path directly - check if it's a screenshot or movie image
-        const filename = getFilename(movie.image_path);
-        if (filename && movie.image_path.includes('screenshots')) {
-            // Screenshot: use /screenshots/ endpoint
-            imageUrl = `/screenshots/${encodeURIComponent(filename)}`;
-        } else {
-            // Movie image: use image_path_url if available (relative path from backend), otherwise extract from absolute path
-            if (movie.image_path_url) {
-                imageUrl = `/movies/${encodeURIComponent(movie.image_path_url)}`;
-            } else {
-                // Fallback: extract relative path manually (shouldn't happen if backend is correct)
-                const pathParts = movie.image_path.replace(/\\/g, '/').split('/');
-                const moviesIndex = pathParts.findIndex(p => p.toLowerCase().includes('movies') || p.toLowerCase().includes('movie'));
-                if (moviesIndex >= 0 && moviesIndex < pathParts.length - 1) {
-                    const relativePath = pathParts.slice(moviesIndex + 1).join('/');
-                    imageUrl = `/movies/${encodeURIComponent(relativePath)}`;
-                } else {
-                    imageUrl = `/movies/${encodeURIComponent(filename)}`;
-                }
-            }
-        }
-    } else if (movie.screenshots && movie.screenshots.length > 0) {
-        // Fallback to first screenshot if no image_path
-        const firstScreenshot = movie.screenshots[0];
-        if (firstScreenshot && firstScreenshot.id) {
-            imageUrl = `/api/screenshot/${firstScreenshot.id}`;
-        }
-    }
-
-    // Create slug for URL
-    const slug = (movie.name || '').toString()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-    const cardClick = `openMovieHash(${movie.id}, '${encodeURIComponent(slug)}')`;
-
-    return `
-        <div class="movie-card" data-movie-id="${movie.id || ''}" onclick="${cardClick}">
-            <div class="movie-card-image">
-                ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" loading="lazy" onerror="this.parentElement.innerHTML='No Image'" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; }">` : 'No Image'}
-            </div>
-            <div class="movie-card-body">
-                <div class="movie-card-title">${escapeHtml(movie.name)}</div>
-                <div class="movie-card-meta">
-                    ${movie.year ? `<span class="year-link" onclick="event.stopPropagation(); navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
-                </div>
-                <div class="movie-card-buttons">
-                    <button class="btn btn-success" onclick="event.stopPropagation(); unhideMovie(${movie.id})">Unhide</button>
-                </div>
-            </div>
-        </div>
-    `;
 }
 
 async function unhideMovie(movieId) {
@@ -277,3 +189,60 @@ async function unhideMovie(movieId) {
     }
 }
 
+async function loadDuplicateMovies() {
+    const container = document.getElementById('duplicateMoviesList');
+    container.style.display = 'block';
+    container.innerHTML = '<div class="loading">Searching for duplicates...</div>';
+
+    try {
+        const response = await fetch('/api/duplicates');
+        if (!response.ok) throw new Error('Failed to load duplicates');
+
+        const data = await response.json();
+        const duplicates = data.duplicates || [];
+
+        if (duplicates.length === 0) {
+            container.innerHTML = '<div class="empty-state" style="padding: 20px;">No duplicate movies found</div>';
+            return;
+        }
+
+        let html = '<div class="duplicates-list">';
+        duplicates.forEach(group => {
+            html += `
+                <div class="duplicate-group" style="margin-bottom: 30px; border-bottom: 1px solid #3a3a3a; padding-bottom: 20px;">
+                    <h4 style="color: #fff; margin-bottom: 15px;">${escapeHtml(group.name)} (${group.count})</h4>
+                    <div class="movie-grid">
+                        ${group.movies.map(movie => createMovieCard(movie)).join('')}
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+        
+        // Initialize star ratings for the new cards
+        if (typeof initAllStarRatings === 'function') {
+            initAllStarRatings();
+        }
+        
+        // Restore scroll position if available
+        if (typeof restoreScrollPosition === 'function') {
+            restoreScrollPosition();
+        }
+        
+    } catch (error) {
+        container.innerHTML = `<div class="status-message error">Error: ${error.message}</div>`;
+    }
+}
+
+function loadSetupPage() {
+    loadCurrentFolder();
+    loadStats();
+    
+    // Clear dynamic lists to avoid staleness
+    const hiddenContainer = document.getElementById('hiddenMoviesList');
+    if (hiddenContainer) hiddenContainer.style.display = 'none';
+    
+    const recleanStatus = document.getElementById('recleanStatus');
+    if (recleanStatus) recleanStatus.style.display = 'none';
+}

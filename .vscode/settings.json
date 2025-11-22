@@ -1,12 +1,15 @@
 {
   "files.exclude": {
-    "screenshots": true
+    "screenshots": true,
+    "**/movie_searcher.log": true
   },
   "search.exclude": {
-    "screenshots": true
+    "screenshots": true,
+    "**/movie_searcher.log": true
   },
   "files.watcherExclude": {
-    "screenshots": true
+    "screenshots": true,
+    "**/movie_searcher.log": true
   },
   "files.encoding": "utf8",
   "files.autoGuessEncoding": false,

@@ -56,10 +56,9 @@ async function loadHistory() {
         historyList.innerHTML = html;
         initAllStarRatings();
 
-        // Restore prior scroll position, if any
-        if (savedHistoryScroll !== null) {
-            historyList.scrollTop = savedHistoryScroll;
-            savedHistoryScroll = null;
+        // Restore scroll position if available
+        if (typeof restoreScrollPosition === 'function') {
+            restoreScrollPosition();
         }
     } catch (error) {
         historyList.innerHTML = '<div class="empty-state">Error loading history: ' + error.message + '</div>';

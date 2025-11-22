@@ -248,6 +248,118 @@ def ensure_movie_has_screenshot(movie_id: int, movie_path: str, has_image: bool,
         logger.debug(f"Movie movie_id={movie_id} already has image={has_image} or screenshots={has_screenshots}, skipping auto-queue")
 
 
+def build_movie_cards(db, movies: List[Movie]) -> dict:
+    """
+    Build standardized movie card dictionaries for a list of movies.
+    Performs batch fetching of related data (screenshots, ratings, etc.) for performance.
+    Returns a dictionary mapping movie_id -> movie_card_dict.
+    """
+    if not movies:
+        return {}
+    
+    movie_ids = [m.id for m in movies]
+    
+    # 1. Batch load screenshots
+    screenshots_dict = {}
+    if movie_ids:
+        all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
+        for s in all_screenshots:
+            if s.movie_id not in screenshots_dict:
+                screenshots_dict[s.movie_id] = []
+            screenshots_dict[s.movie_id].append(s)
+
+    # 2. Batch load ratings
+    rating_map = {}
+    if movie_ids:
+        rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
+            Rating.movie_id.in_(movie_ids)
+        ).all()
+        rating_map = {movie_id: int(rating) for movie_id, rating in rating_rows}
+
+    # 3. Batch load watch status and watched_date
+    status_map = {}
+    if movie_ids:
+        statuses = db.query(MovieStatus).filter(MovieStatus.movie_id.in_(movie_ids)).all()
+        for s in statuses:
+            status_map[s.movie_id] = {
+                "watch_status": s.movieStatus,
+                "watched": s.movieStatus == MovieStatusEnum.WATCHED.value,
+                "watched_date": s.updated.isoformat() if s.updated else None
+            }
+
+    # 4. Batch load LaunchHistory for has_launched
+    launched_set = set()
+    if movie_ids:
+        launched_rows = db.query(LaunchHistory.movie_id).filter(
+            LaunchHistory.movie_id.in_(movie_ids)
+        ).distinct().all()
+        launched_set = {r.movie_id for r in launched_rows}
+        
+    # 5. Batch load playlists
+    playlist_map = {}
+    if movie_ids:
+        playlist_rows = db.query(
+            PlaylistItem.movie_id,
+            Playlist.name
+        ).join(
+            Playlist, PlaylistItem.playlist_id == Playlist.id
+        ).filter(
+            PlaylistItem.movie_id.in_(movie_ids)
+        ).order_by(Playlist.is_system.desc(), Playlist.name).all()
+
+        for movie_id, playlist_name in playlist_rows:
+            if movie_id not in playlist_map:
+                playlist_map[movie_id] = []
+            playlist_map[movie_id].append(playlist_name)
+
+    # Build result
+    results = {}
+    for m in movies:
+        # Screenshot logic
+        screenshot_objs_raw = screenshots_dict.get(m.id, [])
+        screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
+        
+        # Check image path existence
+        has_image = bool(m.image_path and os.path.exists(m.image_path))
+        
+        # Queue generation if needed (side effect!)
+        ensure_movie_has_screenshot(m.id, m.path, has_image, screenshot_objs)
+        
+        # Pick screenshot
+        screenshot_obj = screenshot_objs[0] if screenshot_objs else None
+        screenshot_id = screenshot_obj.id if screenshot_obj else None
+        
+        # Status info
+        status_info = status_map.get(m.id, {})
+        watch_status = status_info.get("watch_status")
+        
+        results[m.id] = {
+            "id": m.id,
+            "path": m.path,
+            "name": m.name,
+            "length": m.length,
+            "created": m.created,
+            "size": m.size,
+            "watch_status": watch_status,
+            "watched": status_info.get("watched", False),
+            "watched_date": status_info.get("watched_date"),
+            "year": m.year,
+            "has_launched": (m.id in launched_set),
+            "screenshot_id": screenshot_id,
+            "image_path": m.image_path if has_image else None,
+            "image_path_url": get_image_url_path(m.image_path) if m.image_path else None,
+            "rating": rating_map.get(m.id),
+            "playlists": playlist_map.get(m.id, []),
+            # Include filtered screenshots list
+            "screenshots": [
+                {"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds}
+                for s in screenshot_objs
+            ]
+        }
+        
+    return results
+
+
 # Auto-detect and save ffmpeg if not configured (called during startup)
 def auto_detect_ffmpeg():
     """Auto-detect ffmpeg and save to config if found"""
@@ -368,6 +480,9 @@ class RatingRequest(BaseModel):
 class ConfigRequest(BaseModel):
     movies_folder: Optional[str] = None
     settings: Optional[dict] = None
+
+class FolderRequest(BaseModel):
+    path: str
 
 class CleanNameTestRequest(BaseModel):
     text: str
@@ -581,6 +696,28 @@ async def get_scan_progress():
         "frames_total": scan_progress.get("frames_total", 0)
     }
 
+@app.get("/api/scan-logs")
+async def get_scan_logs(lines: int = Query(500, description="Number of lines to return from end of log")):
+    """Get complete scan logs from file"""
+    try:
+        scan_log_file = Path(__file__).parent / "scan_log.txt"
+        if not scan_log_file.exists():
+            return {"logs": [], "message": "No scan log file found"}
+
+        with open(scan_log_file, "r", encoding="utf-8") as f:
+            all_lines = f.readlines()
+
+        # Return last N lines to avoid overwhelming the frontend
+        lines_to_return = all_lines[-lines:] if lines > 0 else all_lines
+
+        return {
+            "logs": [line.strip() for line in lines_to_return],
+            "total_lines": len(all_lines),
+            "returned_lines": len(lines_to_return)
+        }
+    except Exception as e:
+        return {"error": str(e), "logs": []}
+
 @app.post("/api/admin/reindex")
 async def admin_reindex(root_path: str = Query(None)):
     """Admin endpoint to reindex - uses same code as frontend"""
@@ -636,7 +773,7 @@ async def search_movies(
     try:
         query_lower = q.lower()
 
-        from sqlalchemy import or_, and_, case
+        from sqlalchemy import or_, and_, case, func
         # Build base query
         movie_query = db.query(Movie).filter(
             func.lower(Movie.name).contains(query_lower),
@@ -693,117 +830,31 @@ async def search_movies(
         else:
             page_slice = scored_movies[offset:offset + limit]
         
-        # Extract result IDs for batch loading
-        result_ids = [movie.id for _, movie in page_slice]
+        # Build movie cards
+        movies_list = [m for _, m in page_slice]
+        movie_cards = build_movie_cards(db, movies_list)
+        
         results = []
-
-        # Preload watch status info (latest watch_status for each movie)
-        watch_status_dict = {}
-        if result_ids:
-            # Get movie status for each movie (one-to-one relationship)
-            movie_statuses = db.query(MovieStatus).filter(
-                MovieStatus.movie_id.in_(result_ids)
-            ).all()
-            for movie_status in movie_statuses:
-                watch_status_dict[movie_status.movie_id] = {
-                    "watch_status": movie_status.movieStatus,
-                    "watched_date": movie_status.updated.isoformat() if movie_status.updated else None,
-                }
-
-        # Batch load all screenshots for all movies in result set
-        screenshots_dict = {}  # movie_id -> list of Screenshot objects
-        first_screenshot_dict = {}  # movie_id -> first Screenshot object
-        if result_ids:
-            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(result_ids)).all()
-            for s in all_screenshots:
-                if s.movie_id not in screenshots_dict:
-                    screenshots_dict[s.movie_id] = []
-                    first_screenshot_dict[s.movie_id] = s
-                screenshots_dict[s.movie_id].append(s)
-
-        # Batch load launch history flags
-        launched_set = set()
-        if result_ids:
-            launched_rows = db.query(LaunchHistory.movie_id).filter(
-                LaunchHistory.movie_id.in_(result_ids)
-            ).distinct().all()
-            launched_set = {r.movie_id for r in launched_rows}
-
-        # Batch load ratings
-        rating_dict = {}
-        if result_ids:
-            rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
-                Rating.movie_id.in_(result_ids)
-            ).all()
-            rating_dict = {movie_id: int(rating) for movie_id, rating in rating_rows}
-
-        # Batch load playlist membership
-        playlist_dict = {}  # movie_id -> list of playlist names
-        if result_ids:
-            playlist_rows = db.query(
-                PlaylistItem.movie_id,
-                Playlist.name
-            ).join(
-                Playlist, PlaylistItem.playlist_id == Playlist.id
-            ).filter(
-                PlaylistItem.movie_id.in_(result_ids)
-            ).order_by(Playlist.is_system.desc(), Playlist.name).all()
-
-            for movie_id, playlist_name in playlist_rows:
-                if movie_id not in playlist_dict:
-                    playlist_dict[movie_id] = []
-                playlist_dict[movie_id].append(playlist_name)
-
-        # Build results
         for score, movie in page_slice:
-            watch_info = watch_status_dict.get(movie.id, {})
-            watch_status = watch_info.get("watch_status")
-            is_watched = watch_status == MovieStatusEnum.WATCHED.value  # For backward compatibility
-            
-            # Get screenshots from preloaded dictionary
-            screenshot_objs_raw = screenshots_dict.get(movie.id, [])
-            
-            # Filter to only screenshots that actually exist on disk
-            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
-            
-            # Ensure movie has at least one screenshot/image - queue if missing
-            has_image = bool(movie.image_path and os.path.exists(movie.image_path))
-            ensure_movie_has_screenshot(movie.id, movie.path, has_image, screenshot_objs)
-            
-            screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
-            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
-            screenshot_path = screenshot_obj.shot_path if screenshot_obj else None
-            
-            has_launched = movie.id in launched_set
-            rating = rating_dict.get(movie.id)
-            playlists = playlist_dict.get(movie.id, [])
-
-            results.append({
-                "id": movie.id,
-                "path": movie.path,
-                "name": movie.name,
-                "length": movie.length,
-                "created": movie.created,
-                "size": movie.size,
-                "watch_status": watch_status,
-                "watched": is_watched,  # Keep for backward compatibility
-                "watched_date": watch_info.get("watched_date"),
-                "score": score,
-                "screenshots": screenshots,
-                "screenshot_id": screenshot_obj.id if screenshot_obj else None,
-                "screenshot_path": screenshot_path,
-                "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
-                "image_path_url": get_image_url_path(movie.image_path) if movie.image_path else None,
-                "year": movie.year,
-                "has_launched": has_launched,
-                "rating": rating,
-                "playlists": playlists
-            })
+            card = movie_cards.get(movie.id)
+            if card:
+                # Create a copy to add search-specific fields without mutating shared cache
+                card_copy = dict(card)
+                card_copy["score"] = score
+                # Search endpoint legacy fields (if any consumers rely on them)
+                # screenshot_path was returned previously but createMovieCard doesn't seem to use it.
+                # We'll skip it unless needed.
+                results.append(card_copy)
 
         # Save to history (count what we actually return)
-        # Only add if the last entry is different (prevent duplicate consecutive entries)
+        # Prevent duplicate consecutive entries
         last_search = db.query(SearchHistory).order_by(SearchHistory.created.desc(), SearchHistory.id.desc()).first()
-        if not last_search or last_search.query != q:
+        
+        if last_search and last_search.query == q:
+            # Same query as last time - do nothing (no update timestamp, no new entry)
+            pass
+        else:
+            # New query
             search_entry = SearchHistory(
                 query=q,
                 results_count=len(results)
@@ -1238,21 +1289,24 @@ async def launch_movie(request: LaunchRequest):
     """Launch movie in VLC with optional subtitle"""
     logger.info(f"POST /api/launch - Request data: movie_id={request.movie_id}, subtitle_path={request.subtitle_path}, close_existing_vlc={request.close_existing_vlc}, start_time={request.start_time}")
     # Validate movie exists in index before launching
+    movie_path = None
     db = SessionLocal()
     try:
         movie = db.query(Movie).filter(Movie.id == request.movie_id).first()
         if not movie:
             raise HTTPException(status_code=404, detail=f"Movie not found: {request.movie_id}")
+        movie_path = movie.path
     finally:
         db.close()
     
     # Delegate to VLC integration module
     try:
         result = launch_movie_in_vlc(
-            movie_path=movie.path,
+            movie_path=movie_path,
             subtitle_path=request.subtitle_path,
             close_existing=request.close_existing_vlc,
-            start_time=request.start_time
+            start_time=request.start_time,
+            movie_id=request.movie_id
         )
         return result
     except HTTPException:
@@ -1762,34 +1816,53 @@ async def set_config(request: ConfigRequest):
     return {"status": "updated", "movies_folder": config.get("movies_folder", ""), "settings": config}
 
 @app.post("/api/open-folder")
-async def open_folder(path: str = Query(...)):
+async def open_folder(request: FolderRequest):
     """Open file explorer at the folder containing the movie file"""
     try:
-        path_obj = Path(path)
-        if not path_obj.exists():
-            raise HTTPException(status_code=404, detail="File not found")
-        
+        path_obj = Path(request.path)
         folder_path = path_obj.parent
         
-        if os.name == 'nt':  # Windows
-            subprocess.Popen(f'explorer.exe /select,"{path_obj}"', shell=True)
-        elif os.name == 'posix':  # Linux/Mac
-            if os.uname().sysname == 'Darwin':  # macOS
-                subprocess.Popen(['open', '-R', str(path_obj)])
-            else:  # Linux
-                # Try various file managers
-                for cmd in ['xdg-open', 'nautilus', 'dolphin', 'thunar']:
-                    try:
-                        subprocess.Popen([cmd, str(folder_path)])
-                        break
-                    except FileNotFoundError:
-                        continue
-                else:
-                    raise HTTPException(status_code=500, detail="No file manager found")
-        else:
-            raise HTTPException(status_code=500, detail="Unsupported operating system")
+        # 1. Try to open with file selected (if file exists)
+        if path_obj.exists() and path_obj.is_file():
+            if os.name == 'nt':  # Windows
+                subprocess.Popen(f'explorer.exe /select,"{path_obj}"', shell=True)
+            elif os.name == 'posix':  # Linux/Mac
+                if sys.platform == 'darwin':  # macOS
+                    subprocess.Popen(['open', '-R', str(path_obj)])
+                else:  # Linux
+                    # Try various file managers to open folder (most don't support selecting file via command line easily)
+                    for cmd in ['xdg-open', 'nautilus', 'dolphin', 'thunar']:
+                        try:
+                            subprocess.Popen([cmd, str(folder_path)])
+                            break
+                        except FileNotFoundError:
+                            continue
+                    else:
+                         raise HTTPException(status_code=500, detail="No file manager found")
+            return {"status": "opened", "folder": str(folder_path)}
+
+        # 2. Fallback: Try to open folder only (if file missing but folder exists)
+        if folder_path.exists() and folder_path.is_dir():
+            if os.name == 'nt':  # Windows
+                subprocess.Popen(f'explorer.exe "{folder_path}"', shell=True)
+            elif os.name == 'posix':  # Linux/Mac
+                if sys.platform == 'darwin':  # macOS
+                    subprocess.Popen(['open', str(folder_path)])
+                else:  # Linux
+                    for cmd in ['xdg-open', 'nautilus', 'dolphin', 'thunar']:
+                        try:
+                            subprocess.Popen([cmd, str(folder_path)])
+                            break
+                        except FileNotFoundError:
+                            continue
+                    else:
+                         raise HTTPException(status_code=500, detail="No file manager found")
+            
+            return {"status": "opened_folder", "folder": str(folder_path), "detail": "File not found, opened folder"}
+
+        # 3. Neither exists
+        raise HTTPException(status_code=404, detail=f"Folder not found: {folder_path}")
         
-        return {"status": "opened", "folder": str(folder_path)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1971,7 +2044,7 @@ async def explore_movies(
     request: Request,
     page: int = Query(1, ge=1),
     per_page: int = Query(15, ge=1, le=100),
-    filter_type: str = Query("all", pattern="^(all|watched|unwatched)$"),
+    filter_type: str = Query("all", pattern="^(all|watched|unwatched|newest)$"),
     letter: Optional[str] = Query(None, pattern="^[A-Z#]$"),
     year: Optional[int] = Query(None, ge=1900, le=2035),
     decade: Optional[int] = Query(None, ge=1900, le=2030),
@@ -1990,10 +2063,23 @@ async def explore_movies(
     try:
         # Base query for movies
         from sqlalchemy import or_
-        movie_q = db.query(Movie).filter(
-            or_(Movie.length == None, Movie.length >= 60),
-            Movie.hidden == False
-        )
+        
+        # If newest filter is active, restrict the base set to the 100 newest movies
+        newest_ids_subq = None
+        if filter_type == "newest":
+            # Subquery for IDs of top 100 newest movies
+            newest_ids_subq = db.query(Movie.id).filter(
+                or_(Movie.length == None, Movie.length >= 60),
+                Movie.hidden == False
+            ).order_by(Movie.created.desc()).limit(100).subquery()
+            
+            # Base query restricted to these IDs
+            movie_q = db.query(Movie).filter(Movie.id.in_(newest_ids_subq))
+        else:
+            movie_q = db.query(Movie).filter(
+                or_(Movie.length == None, Movie.length >= 60),
+                Movie.hidden == False
+            )
 
         # Apply watched filter using EXISTS subquery for performance
         if filter_type == "watched":
@@ -2006,6 +2092,7 @@ async def explore_movies(
                 (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
             ).exists()
             movie_q = movie_q.filter(~exists_watch)
+        # 'newest' filter does not filter by status, implies 'all' status-wise
 
         # Letter filter (SQL-side for A-Z; '#' handled client-like is tricky)
         if letter and letter != "#" and len(letter) == 1 and letter.isalpha():
@@ -2065,99 +2152,17 @@ async def explore_movies(
 
         # Use normal pagination
         total = movie_q.count()
-        rows = movie_q.order_by(Movie.name.asc()).offset((page - 1) * per_page).limit(per_page).all()
         
-        movie_ids = [m.id for m in rows]
-
-        # Batched fetch for watch status info (one-to-one relationship)
-        watch_status_info = {}
-        if movie_ids:
-            movie_statuses = db.query(MovieStatus).filter(
-                MovieStatus.movie_id.in_(movie_ids)
-            ).all()
-            for ms in movie_statuses:
-                watch_status_info[ms.movie_id] = {
-                    "watch_status": ms.movieStatus,
-                    "watched": ms.movieStatus == MovieStatusEnum.WATCHED.value,  # Keep for backward compatibility
-                    "watched_date": ms.updated.isoformat() if ms.updated else None
-                }
-
-
-        # Batch load screenshots for auto-enqueue check
-        screenshots_dict = {}  # movie_id -> list of Screenshot objects
-        if movie_ids:
-            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
-            for s in all_screenshots:
-                if s.movie_id not in screenshots_dict:
-                    screenshots_dict[s.movie_id] = []
-                screenshots_dict[s.movie_id].append(s)
-        
-        # Has launched flags for page ids
-        launched_set = set()
-        if movie_ids:
-            launched_rows = db.query(LaunchHistory.movie_id).filter(
-                LaunchHistory.movie_id.in_(movie_ids)
-            ).distinct().all()
-            launched_set = {r.movie_id for r in launched_rows}
-        
-        # Get ratings for page ids
-        rating_map = {}
-        if movie_ids:
-            rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
-                Rating.movie_id.in_(movie_ids)
-            ).all()
-            rating_map = {movie_id: int(rating) for movie_id, rating in rating_rows}
-
-        # Get playlists for page ids
-        playlist_map = {}  # movie_id -> list of playlist names
-        if movie_ids:
-            playlist_rows = db.query(
-                PlaylistItem.movie_id,
-                Playlist.name
-            ).join(
-                Playlist, PlaylistItem.playlist_id == Playlist.id
-            ).filter(
-                PlaylistItem.movie_id.in_(movie_ids)
-            ).order_by(Playlist.is_system.desc(), Playlist.name).all()
-
-            for movie_id, playlist_name in playlist_rows:
-                if movie_id not in playlist_map:
-                    playlist_map[movie_id] = []
-                playlist_map[movie_id].append(playlist_name)
-
-        # Build response items without heavy filesystem ops
-        result_movies = []
-        for m in rows:
-            # Ensure movie has at least one screenshot/image - queue if missing
-            screenshot_objs_raw = screenshots_dict.get(m.id, [])
-            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
-            # Check movie.image_path instead of Image table
-            has_image = bool(m.image_path and os.path.exists(m.image_path))
-            ensure_movie_has_screenshot(m.id, m.path, has_image, screenshot_objs)
+        if filter_type == "newest":
+            movie_q = movie_q.order_by(Movie.created.desc())
+        else:
+            movie_q = movie_q.order_by(Movie.name.asc())
             
-            # Get screenshot_id from filtered existing screenshots (first one)
-            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
-            screenshot_id = screenshot_obj.id if screenshot_obj else None
-            
-            info = watch_status_info.get(m.id, {})
-            watch_status = info.get("watch_status")
-            result_movies.append({
-                "id": m.id,
-                "path": m.path,
-                "name": m.name,
-                "length": m.length,
-                "created": m.created,
-                "size": m.size,
-                "watch_status": watch_status,
-                "watched": bool(info.get("watched", False)),  # Keep for backward compatibility
-                "watched_date": info.get("watched_date"),
-                "year": m.year,
-                "has_launched": (m.id in launched_set),
-                "screenshot_id": screenshot_id,  # frontend will call /api/screenshot/{id}
-                "image_path": m.image_path if (m.image_path and os.path.exists(m.image_path)) else None,
-                "rating": rating_map.get(m.id),
-                "playlists": playlist_map.get(m.id, [])
-            })
+        rows = movie_q.offset((page - 1) * per_page).limit(per_page).all()
+        
+        # Build movie cards
+        movie_cards = build_movie_cards(db, rows)
+        result_movies = [movie_cards[m.id] for m in rows]
 
         # Letter counts across all movies respecting watched filter (but not letter/year/decade filters)
         # Fetch only needed columns for speed
@@ -2172,6 +2177,10 @@ async def explore_movies(
                 (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
             ).exists()
             counts_q = counts_q.filter(~exists_watch)
+        elif filter_type == "newest":
+            if newest_ids_subq is not None:
+                counts_q = counts_q.filter(Movie.id.in_(newest_ids_subq))
+            
         letter_counts = {}
         year_counts = {}
         decade_counts = {}
@@ -2374,6 +2383,40 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
         db.close()
 
 
+@app.get("/api/all-movies")
+async def get_all_movies():
+    """Get all movies as a simple list"""
+    db = SessionLocal()
+    try:
+        from sqlalchemy import or_
+        # Query all non-hidden movies with length >= 60 or null length
+        movies = db.query(Movie).filter(
+            or_(Movie.length == None, Movie.length >= 60),
+            Movie.hidden == False
+        ).order_by(Movie.name.asc()).all()
+        
+        # Return simplified list with just id, name, year, path
+        result = [
+            {
+                "id": m.id,
+                "name": m.name,
+                "year": m.year,
+                "path": m.path
+            }
+            for m in movies
+        ]
+        
+        return {
+            "movies": result,
+            "total": len(result)
+        }
+    except Exception as e:
+        logger.error(f"Error in all-movies endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
 @app.post("/api/movie/{movie_id}/hide")
 async def hide_movie(movie_id: int):
     """Hide a movie from search and explore"""
@@ -2418,33 +2461,55 @@ async def get_hidden_movies():
     db = SessionLocal()
     try:
         movies = db.query(Movie).filter(Movie.hidden == True).all()
-        movie_ids = [m.id for m in movies]
-
-        # Batch load screenshots for all hidden movies
-        screenshots_dict = {}  # movie_id -> list of Screenshot objects
-        if movie_ids:
-            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
-            for s in all_screenshots:
-                if s.movie_id not in screenshots_dict:
-                    screenshots_dict[s.movie_id] = []
-                screenshots_dict[s.movie_id].append(s)
-
+        
+        # Build movie cards
+        movie_cards = build_movie_cards(db, movies)
+        
         return {
-            "movies": [
-                {
-                    "id": m.id,
-                    "name": m.name,
-                    "path": m.path,
-                    "year": m.year,
-                    "image_path": m.image_path,
-                    "image_path_url": get_image_url_path(m.image_path) if m.image_path else None,
-                    "screenshots": [
-                        {"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds}
-                        for s in screenshots_dict.get(m.id, [])
-                    ]
-                } for m in movies
-            ]
+            "movies": list(movie_cards.values())
         }
+    finally:
+        db.close()
+
+@app.get("/api/duplicates")
+async def get_duplicate_movies():
+    """Get list of duplicate movies (same name)"""
+    db = SessionLocal()
+    try:
+        # Find names that appear more than once and are not hidden
+        subquery = (
+            db.query(Movie.name)
+            .filter(Movie.hidden == False)
+            .group_by(Movie.name)
+            .having(func.count(Movie.name) > 1)
+            .subquery()
+        )
+        
+        # Get all movies with those names
+        movies = (
+            db.query(Movie)
+            .filter(Movie.name.in_(subquery))
+            .filter(Movie.hidden == False)
+            .order_by(Movie.name)
+            .all()
+        )
+        
+        # Build movie cards
+        movie_cards = build_movie_cards(db, movies)
+        
+        # Group by name
+        from itertools import groupby
+        duplicates = []
+        for name, group in groupby(movies, key=lambda x: x.name):
+            movie_group = list(group)
+            if len(movie_group) > 1:
+                duplicates.append({
+                    "name": name,
+                    "count": len(movie_group),
+                    "movies": [movie_cards[m.id] for m in movie_group]
+                })
+        
+        return {"duplicates": duplicates}
     finally:
         db.close()
 
@@ -2579,65 +2644,18 @@ async def get_playlist_movies(
         # Extract movie IDs for batch loading
         movie_ids = [movie.id for _, movie in items]
 
-        # Batch load additional data
-        watch_status_dict = {}
-        screenshots_dict = {}
-        launched_set = set()
-        rating_dict = {}
-
-        if movie_ids:
-            # Watch status
-            movie_statuses = db.query(MovieStatus).filter(MovieStatus.movie_id.in_(movie_ids)).all()
-            for ms in movie_statuses:
-                watch_status_dict[ms.movie_id] = {
-                    "watch_status": ms.movieStatus,
-                    "watched_date": ms.updated.isoformat() if ms.updated else None
-                }
-
-            # Screenshots
-            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
-            for s in all_screenshots:
-                if s.movie_id not in screenshots_dict:
-                    screenshots_dict[s.movie_id] = []
-                screenshots_dict[s.movie_id].append(s)
-
-            # Launch history
-            launched_rows = db.query(LaunchHistory.movie_id).filter(
-                LaunchHistory.movie_id.in_(movie_ids)
-            ).distinct().all()
-            launched_set = {r.movie_id for r in launched_rows}
-
-            # Ratings
-            rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
-                Rating.movie_id.in_(movie_ids)
-            ).all()
-            rating_dict = {movie_id: int(rating) for movie_id, rating in rating_rows}
+        # Build movie cards
+        movies_list = [movie for _, movie in items]
+        movie_cards = build_movie_cards(db, movies_list)
 
         # Build response
         movies = []
         for item, movie in items:
-            # Get screenshots
-            screenshot_objs_raw = screenshots_dict.get(movie.id, [])
-            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
-            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
-
-            # Watch status
-            info = watch_status_dict.get(movie.id, {})
-
-            movies.append({
-                "id": movie.id,
-                "name": movie.name,
-                "year": movie.year,
-                "length": movie.length,
-                "size": movie.size,
-                "watch_status": info.get("watch_status"),
-                "watched_date": info.get("watched_date"),
-                "has_launched": movie.id in launched_set,
-                "rating": rating_dict.get(movie.id),
-                "screenshot_id": screenshot_obj.id if screenshot_obj else None,
-                "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
-                "added_at": item.added_at.isoformat() if item.added_at else None
-            })
+            card = dict(movie_cards.get(movie.id, {}))
+            if card:
+                # Add playlist specific info
+                card["added_at"] = item.added_at.isoformat() if item.added_at else None
+                movies.append(card)
 
         return {
             "playlist": {

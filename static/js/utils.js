@@ -68,6 +68,44 @@ function getFilename(path) {
     return parts[parts.length - 1];
 }
 
+function getMovieSlug(movie) {
+    return (movie.name || '').toString()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
+function getMovieImageUrl(movie) {
+    let imageUrl = '';
+    if (movie.screenshot_id) {
+        // Use API endpoint - most reliable, handles path issues correctly
+        imageUrl = `/api/screenshot/${movie.screenshot_id}`;
+    } else if (movie.image_path) {
+        // Use movie.image_path directly - check if it's a screenshot or movie image
+        const filename = getFilename(movie.image_path);
+        if (filename && movie.image_path.includes('screenshots')) {
+            // Screenshot: use /screenshots/ endpoint
+            imageUrl = `/screenshots/${encodeURIComponent(filename)}`;
+        } else {
+            // Movie image: use image_path_url if available (relative path from backend), otherwise extract from absolute path
+            if (movie.image_path_url) {
+                imageUrl = `/movies/${encodeURIComponent(movie.image_path_url)}`;
+            } else {
+                // Fallback: extract relative path manually (shouldn't happen if backend is correct)
+                const pathParts = movie.image_path.replace(/\\/g, '/').split('/');
+                const moviesIndex = pathParts.findIndex(p => p.toLowerCase().includes('movies') || p.toLowerCase().includes('movie'));
+                if (moviesIndex >= 0 && moviesIndex < pathParts.length - 1) {
+                    const relativePath = pathParts.slice(moviesIndex + 1).join('/');
+                    imageUrl = `/movies/${encodeURIComponent(relativePath)}`;
+                } else {
+                    imageUrl = `/movies/${encodeURIComponent(filename)}`;
+                }
+            }
+        }
+    }
+    return imageUrl;
+}
+
 function formatDate(dateString) {
     if (!dateString) return '';
     const date = new Date(dateString);
@@ -110,7 +148,11 @@ async function openFolder(path) {
             showStatus('Folder opened', 'success');
         } else {
             const data = await response.json();
-            showStatus('Failed to open folder: ' + (data.detail || 'Unknown error'), 'error');
+            let errorMsg = data.detail || 'Unknown error';
+            if (typeof errorMsg === 'object') {
+                errorMsg = JSON.stringify(errorMsg);
+            }
+            showStatus('Failed to open folder: ' + errorMsg, 'error');
         }
     } catch (error) {
         showStatus('Error opening folder: ' + error.message, 'error');

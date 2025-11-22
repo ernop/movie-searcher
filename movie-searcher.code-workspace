@@ -9,18 +9,21 @@
 			"**/venv": true,
 			"**/venv/**": true,
 			"**/movie_index.json": true,
-			"**/movie_searcher.db": true
+			"**/movie_searcher.db": true,
+			"**/movie_searcher.log": true
 		},
 		"search.exclude": {
 			"**/venv": true,
 			"**/venv/**": true,
 			"**/movie_index.json": true,
-			"**/movie_searcher.db": true
+			"**/movie_searcher.db": true,
+			"**/movie_searcher.log": true
 		},
 		"files.watcherExclude": {
 			"**/venv/**": true,
 			"**/movie_index.json": true,
-			"**/movie_searcher.db": true
+			"**/movie_searcher.db": true,
+			"**/movie_searcher.log": true
 		}
 	}
 }

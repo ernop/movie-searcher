@@ -1,13 +1,10 @@
 // Movie Navigation
 
-let savedHistoryScroll = null;
-
 function openMovieHash(id, slug) {
     const safeSlug = (slug || '').toString();
-    const current = getRoute();
-    if (current === '/history') {
-        const list = document.getElementById('historyList');
-        if (list) savedHistoryScroll = list.scrollTop;
+    // Save scroll position of current route before navigating
+    if (typeof saveScrollPosition === 'function') {
+        saveScrollPosition();
     }
     navigateTo(`/movie/${id}/${safeSlug}`);
 }
@@ -248,51 +245,76 @@ function updateMovieStatusUI(movieId, newStatus) {
 
 async function launchMovie(movieId) {
     try {
-        const selectedSubtitle = currentSubtitles[movieId] || null;
-        
+        const selectedSubtitle = selectedSubtitles[movieId] || null;
+        const closeExistingVlc = document.getElementById('setupCloseExistingVlc').checked;
+
+        // Validate subtitle path if one is selected
+        if (selectedSubtitle && typeof selectedSubtitle !== 'string') {
+            showStatus('Invalid subtitle selection', 'error');
+            return;
+        }
+
         const response = await fetch('/api/launch', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 movie_id: movieId,
-                subtitle_path: selectedSubtitle
+                subtitle_path: selectedSubtitle,
+                close_existing_vlc: closeExistingVlc
             })
         });
-        
+
         if (response.ok) {
             showStatus('Movie launched', 'success');
             updateCurrentlyPlaying();
         } else {
-            const data = await response.json();
-            showStatus('Failed to launch: ' + (data.detail || 'Unknown error'), 'error');
+            let errorMessage = 'Unknown error';
+            try {
+                const data = await response.json();
+                if (data.detail) {
+                    errorMessage = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+                } else if (data.message) {
+                    errorMessage = data.message;
+                } else if (data.error) {
+                    errorMessage = data.error;
+                }
+            } catch (jsonError) {
+                // If JSON parsing fails, use status text
+                errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                console.error('Failed to parse error response:', jsonError);
+            }
+            console.error('Launch failed with response:', response.status, errorMessage);
+            showStatus('Failed to launch: ' + errorMessage, 'error');
         }
     } catch (error) {
+        console.error('Launch error:', error);
         showStatus('Error launching movie: ' + error.message, 'error');
     }
 }
 
-let currentSubtitles = {};
+let availableSubtitles = {};
+let selectedSubtitles = {};
 
 async function loadSubtitles(movieId) {
     try {
         const response = await fetch(`/api/subtitles?movie_id=${movieId}`);
         if (!response.ok) {
             console.error('Failed to load subtitles:', response.status);
-            currentSubtitles[movieId] = [];
+            availableSubtitles[movieId] = [];
             return [];
         }
         const data = await response.json();
-        currentSubtitles[movieId] = data.subtitles || [];
-        return currentSubtitles[movieId];
+        availableSubtitles[movieId] = data.subtitles || [];
+        return availableSubtitles[movieId];
     } catch (error) {
         console.error('Error loading subtitles:', error);
-        currentSubtitles[movieId] = [];
+        availableSubtitles[movieId] = [];
         return [];
     }
 }
 
 function updateSubtitle(movieId, subtitlePath) {
-    currentSubtitles[movieId] = subtitlePath || null;
+    selectedSubtitles[movieId] = subtitlePath || null;
 }
 
 async function loadMovieDetailsById(id) {
@@ -345,7 +367,7 @@ async function loadMovieDetailsById(id) {
 
         // Load subtitles
         await loadSubtitles(movie.id);
-        const subtitles = currentSubtitles[movie.id] || [];
+        const subtitles = availableSubtitles[movie.id] || [];
         let subtitleSelect = '';
         if (subtitles.length > 0) {
             subtitleSelect = `
@@ -388,6 +410,7 @@ async function loadMovieDetailsById(id) {
                         <div style="position: relative; display: inline-block;">
                             <button class="btn btn-secondary" onclick="event.stopPropagation(); toggleCardMenu(this, 'menu-details-${movie.id}')">...</button>
                             <div class="movie-card-menu-dropdown" id="menu-details-${movie.id}" style="right: auto; left: 0;">
+                                <button class="movie-card-menu-item" onclick="event.stopPropagation(); showAddToPlaylistMenu(${movie.id})">Add to playlist</button>
                                 <button class="movie-card-menu-item" onclick="event.stopPropagation(); hideMovie(${movie.id})">Don't show this anymore</button>
                             </div>
                         </div>

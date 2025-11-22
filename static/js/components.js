@@ -125,42 +125,21 @@ function hideMovie(movieId) {
 }
 
 // Movie Card Component
-function createMovieCard(movie) {
-    // Helper to extract filename from path
-    function getFilename(path) {
-        if (!path) return null;
-        const parts = path.replace(/\\/g, '/').split('/');
-        return parts[parts.length - 1];
-    }
+function createMovieCard(movie, options = {}) {
+    // Default options
+    const {
+        showMenu = true,
+        showRating = true,
+        showMeta = true,
+        showPath = false,
+        primaryAction = 'launch', // 'launch', 'none'
+        watchStatusControl = true,
+        customButtons = null // HTML string for custom buttons
+    } = options;
+
+    // Use helper for image URL
+    const imageUrl = getMovieImageUrl(movie);
     
-    // Prefer API endpoint by screenshot_id for reliability, fallback to image_path
-    let imageUrl = '';
-    if (movie.screenshot_id) {
-        // Use API endpoint - most reliable, handles path issues correctly
-        imageUrl = `/api/screenshot/${movie.screenshot_id}`;
-    } else if (movie.image_path) {
-        // Use movie.image_path directly - check if it's a screenshot or movie image
-        const filename = getFilename(movie.image_path);
-        if (filename && movie.image_path.includes('screenshots')) {
-            // Screenshot: use /screenshots/ endpoint
-            imageUrl = `/screenshots/${encodeURIComponent(filename)}`;
-        } else {
-            // Movie image: use image_path_url if available (relative path from backend), otherwise extract from absolute path
-            if (movie.image_path_url) {
-                imageUrl = `/movies/${encodeURIComponent(movie.image_path_url)}`;
-            } else {
-                // Fallback: extract relative path manually (shouldn't happen if backend is correct)
-                const pathParts = movie.image_path.replace(/\\/g, '/').split('/');
-                const moviesIndex = pathParts.findIndex(p => p.toLowerCase().includes('movies') || p.toLowerCase().includes('movie'));
-                if (moviesIndex >= 0 && moviesIndex < pathParts.length - 1) {
-                    const relativePath = pathParts.slice(moviesIndex + 1).join('/');
-                    imageUrl = `/movies/${encodeURIComponent(relativePath)}`;
-                } else {
-                    imageUrl = `/movies/${encodeURIComponent(filename)}`;
-                }
-            }
-        }
-    }
     // Use watch_status if available (can be string enum or boolean for backward compat), fallback to watched boolean
     let watchStatus = movie.watch_status !== undefined ? movie.watch_status : (movie.watched ? 'watched' : null);
     // Normalize: convert boolean to string enum for backward compatibility
@@ -180,47 +159,94 @@ function createMovieCard(movie) {
     } else if (watchStatus === 'unwatched') {
         checkboxClass = 'unwatched';
     } else if (watchStatus === 'want_to_watch') {
-        checkboxClass = 'want-to-watch';  // Add CSS class for want_to_watch if needed
+        checkboxClass = 'want-to-watch';
     }
     
-    // Prefer hash-based ID route if we have an id
-    const slug = (movie.name || '').toString()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-    const cardClick = `openMovieHash(${movie.id}, '${encodeURIComponent(slug)}')`;
+    // Use helper for slug
+    const slug = getMovieSlug(movie);
+    // No longer using onclick for the card, using <a> overlay instead
+    // const cardClick = `openMovieHash(${movie.id}, '${encodeURIComponent(slug)}')`;
+
+    let metaHtml = '';
+    if (showMeta) {
+        // Added pointer-events logic to allow clicks on text to fall through to the card link, 
+        // but kept year-link and checkbox interactive.
+        metaHtml = `
+            <div class="movie-card-meta" style="position: relative; z-index: 2; pointer-events: none;">
+                ${year ? `<span class="year-link" onclick="event.stopPropagation(); navigateToExploreWithYear(${year}, ${movie.id || 'null'});" title="Filter by ${year}" style="pointer-events: auto;">${year}</span>` : ''}
+                ${length ? `<span>${length}</span>` : ''}
+                ${fileSize ? `<span>${fileSize}</span>` : ''}
+                ${hasLaunched ? '<div class="launch-status-checkbox launched" onclick="event.stopPropagation();" style="pointer-events: auto;"></div>' : ''}
+            </div>
+        `;
+    } else if (showPath && movie.path) {
+        // Minimal meta showing path (e.g. for duplicates)
+        metaHtml = `
+            <div class="movie-card-meta" style="position: relative; z-index: 2; pointer-events: none;">
+                ${year ? `<span class="year-link" onclick="event.stopPropagation();" style="pointer-events: auto;">${year}</span>` : ''}
+                <span style="margin-left: auto; font-size: 11px; color: #666;">${formatSize(movie.size)}</span>
+            </div>
+            <div class="result-path" style="margin-bottom: 10px; font-size: 10px; color: #666; word-break: break-all; line-height: 1.2; position: relative; z-index: 2; pointer-events: auto; user-select: text;">
+                ${escapeHtml(movie.path)}
+            </div>
+        `;
+    }
+
+    let menuHtml = '';
+    if (showMenu) {
+        menuHtml = `
+            <div style="position: relative; z-index: 2;">
+                <button class="movie-card-menu-btn" onclick="event.stopPropagation(); toggleCardMenu(this, ${movie.id})">⋮</button>
+                <div class="movie-card-menu-dropdown" id="menu-${movie.id}">
+                    <button class="movie-card-menu-item" onclick="event.stopPropagation(); openFolder('${escapeJsString(movie.path || '').replace(/"/g, '&quot;')}')">Open Folder</button>
+                    <button class="movie-card-menu-item" onclick="event.stopPropagation(); showAddToPlaylistMenu(${movie.id})">Add to playlist</button>
+                    <button class="movie-card-menu-item" onclick="event.stopPropagation(); hideMovie(${movie.id})">Don't show this anymore</button>
+                </div>
+            </div>
+        `;
+    }
+
+    let buttonsHtml = '';
+    if (customButtons) {
+        buttonsHtml = customButtons;
+    } else {
+        const watchBtn = watchStatusControl ? `
+            <button class="movie-card-btn" onclick="event.stopPropagation(); toggleWatched(${movie.id}, ${watchStatus === null ? 'null' : `'${watchStatus}'`})">
+                <span class="watched-checkbox ${checkboxClass}"></span>${watchStatus === 'watched' ? 'watched' : watchStatus === 'unwatched' ? 'not watched' : watchStatus === 'want_to_watch' ? 'want to see' : '-'}
+            </button>
+        ` : '';
+        
+        const launchBtn = primaryAction === 'launch' ? `
+            <button class="movie-card-launch" onclick="event.stopPropagation(); launchMovie(${movie.id})">▶</button>
+        ` : '';
+        
+        buttonsHtml = watchBtn + launchBtn;
+    }
 
     return `
-        <div class="movie-card ${watchedClass}" data-movie-id="${movie.id || ''}" onclick="${cardClick}">
+        <div class="movie-card ${watchedClass}" data-movie-id="${movie.id || ''}" style="position: relative;">
+            <a href="#/movie/${movie.id}/${slug}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; text-decoration: none; outline: none;" aria-label="${escapeHtml(movie.name)}"></a>
+            
             <div class="movie-card-image">
                 ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" loading="lazy" onerror="this.parentElement.innerHTML='No Image'" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; }">` : 'No Image'}
             </div>
             <div class="movie-card-body">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                     <div class="movie-card-title">${escapeHtml(movie.name)}</div>
-                    <div style="position: relative;">
-                        <button class="movie-card-menu-btn" onclick="event.stopPropagation(); toggleCardMenu(this, ${movie.id})">⋮</button>
-                        <div class="movie-card-menu-dropdown" id="menu-${movie.id}">
-                            <button class="movie-card-menu-item" onclick="event.stopPropagation(); showAddToPlaylistMenu(${movie.id})">Add to playlist</button>
-                            <button class="movie-card-menu-item" onclick="event.stopPropagation(); hideMovie(${movie.id})">Don't show this anymore</button>
-                        </div>
-                    </div>
+                    ${menuHtml}
                 </div>
-                <div class="movie-card-meta">
-                    ${year ? `<span class="year-link" onclick="event.stopPropagation(); navigateToExploreWithYear(${year}, ${movie.id || 'null'});" title="Filter by ${year}">${year}</span>` : ''}
-                    ${length ? `<span>${length}</span>` : ''}
-                    ${fileSize ? `<span>${fileSize}</span>` : ''}
-                    ${hasLaunched ? '<div class="launch-status-checkbox launched" onclick="event.stopPropagation();"></div>' : ''}
+                ${metaHtml}
+                <div style="position: relative; z-index: 2; pointer-events: none;">
+                    ${showRating ? createStarRating(movie.id || 0, movie.rating || null, 'movie-card-rating').replace('class="star-rating', 'style="pointer-events: auto;" class="star-rating') : ''}
                 </div>
-                ${createStarRating(movie.id || 0, movie.rating || null, 'movie-card-rating')}
-                <div class="movie-card-buttons">
-                    <button class="movie-card-btn" onclick="event.stopPropagation(); toggleWatched(${movie.id}, ${watchStatus === null ? 'null' : `'${watchStatus}'`})">
-                        <span class="watched-checkbox ${checkboxClass}"></span>${watchStatus === 'watched' ? 'watched' : watchStatus === 'unwatched' ? 'not watched' : watchStatus === 'want_to_watch' ? 'want to see' : '-'}
-                    </button>
-                    <button class="movie-card-launch" onclick="event.stopPropagation(); launchMovie(${movie.id})">▶</button>
+                <div class="movie-card-buttons" style="position: relative; z-index: 2; pointer-events: none;">
+                    <!-- Inject pointer-events: auto into buttons via replacement or assume they have it? -->
+                    <!-- Buttons are interactive elements, they usually have pointer-events: auto by default, but if parent is none... -->
+                    <!-- Inherited pointer-events: none makes children none unless overridden. -->
+                    <!-- So I must override on children. -->
+                    ${buttonsHtml.replace(/<button/g, '<button style="pointer-events: auto;"')}
                 </div>
             </div>
         </div>
     `;
 }
-

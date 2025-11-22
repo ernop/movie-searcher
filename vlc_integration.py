@@ -17,6 +17,10 @@ from fastapi.responses import JSONResponse
 import time
 import json
 
+# In-memory debounce for launch history
+_last_launch_movie_id = None
+_last_launch_time = 0.0
+
 if os.name == 'nt':
 	# Windows-specific imports via ctypes to avoid extra dependencies
 	import ctypes
@@ -180,7 +184,7 @@ def get_vlc_window_titles():
                     [DllImport("user32.dll")]
                     public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
                 }
-"@
+            "@
             $hwnd = $proc.MainWindowHandle
             if ($hwnd -ne [IntPtr]::Zero) {
                 $title = New-Object System.Text.StringBuilder 256
@@ -320,8 +324,10 @@ def get_vlc_command_lines():
         logger.warning(f"Error getting VLC command lines via PowerShell: {e}")
         return []
 
-def _find_vlc_window_handle():
+def _find_vlc_window_handle(target_pid=None):
 	"""Locate a VLC window handle on Windows by enumerating top-level windows.
+	If target_pid is provided, looks for a visible window belonging to that process.
+	Otherwise, looks for the first visible window with 'vlc' in the title.
 	Returns the first matching HWND or 0 if none found.
 	"""
 	if os.name != 'nt':
@@ -335,12 +341,25 @@ def _find_vlc_window_handle():
 	IsWindowVisible = user32.IsWindowVisible
 	GetWindowTextW = user32.GetWindowTextW
 	GetWindowTextLengthW = user32.GetWindowTextLengthW
+	GetWindowThreadProcessId = user32.GetWindowThreadProcessId
 
 	found_hwnd = ctypes.c_void_p(0)
 
 	def _callback(hwnd, lParam):
 		if not IsWindowVisible(hwnd):
 			return True
+			
+		# Check PID if requested
+		if target_pid:
+			pid = ctypes.c_ulong()
+			GetWindowThreadProcessId(hwnd, byref(pid))
+			if pid.value != target_pid:
+				return True
+			# If PID matches and is visible, we assume it's the one
+			found_hwnd.value = hwnd
+			return False
+
+		# Fallback to title search
 		length = GetWindowTextLengthW(hwnd)
 		if length == 0:
 			return True
@@ -356,6 +375,35 @@ def _find_vlc_window_handle():
 
 	EnumWindows(EnumWindowsProc(_callback), 0)
 	return found_hwnd.value or 0
+
+def _set_window_rect(hwnd, rect):
+	"""Set window position and size on Windows."""
+	if os.name != 'nt' or not hwnd or not rect:
+		return False
+	
+	try:
+		user32 = ctypes.windll.user32
+		width = rect.right - rect.left
+		height = rect.bottom - rect.top
+		
+		# SWP_NOZORDER = 0x0004 keeps z-order unchanged
+		# SWP_SHOWWINDOW = 0x0040 shows window
+		SWP_NOZORDER = 0x0004
+		SWP_SHOWWINDOW = 0x0040
+		
+		result = user32.SetWindowPos(
+			hwnd,
+			0,  # hWndInsertAfter
+			rect.left,
+			rect.top,
+			width,
+			height,
+			SWP_NOZORDER | SWP_SHOWWINDOW
+		)
+		return bool(result)
+	except Exception as e:
+		logger.warning(f"Error setting window rect: {e}")
+		return False
 
 def _bring_window_to_foreground(hwnd):
 	"""Bring a given window to the foreground on Windows."""
@@ -517,9 +565,11 @@ def _ensure_window_in_single_monitor(hwnd):
 		logger.warning(f"Error ensuring window in single monitor: {e}")
 		return False
 
-def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1):
+def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1, target_pid=None, target_rect=None):
 	"""Attempt to bring a VLC window to the foreground on Windows.
 	Will poll for up to wait_timeout_seconds to allow VLC to create its window.
+	If target_pid is provided, waits for window belonging to that process.
+	If target_rect is provided, applies that position and size to the window.
 	Also ensures the window is contained within a single monitor.
 	"""
 	if os.name != 'nt':
@@ -529,23 +579,34 @@ def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1)
 	last_result = False
 	hwnd_found = None
 	while time.time() < end_time:
-		hwnd = _find_vlc_window_handle()
+		hwnd = _find_vlc_window_handle(target_pid)
 		if hwnd:
 			hwnd_found = hwnd
+			# If we have a target rect, apply it first
+			if target_rect:
+				_set_window_rect(hwnd, target_rect)
+				# Give it a tiny moment to apply
+				time.sleep(0.05)
+				
 			last_result = _bring_window_to_foreground(hwnd)
 			if last_result:
 				break
 		time.sleep(poll_interval_seconds)
 	
 	# Ensure window is in single monitor after bringing to foreground
+	# (If we set target_rect, it should be fine, but this is a safety check)
 	if hwnd_found:
 		# Small delay to let window finish positioning
 		time.sleep(0.2)
+		# If we explicitly set the rect, we trust it fits (as it came from a previous window)
+		# unless it's gone off-screen. Let's run the safety check anyway,
+		# but maybe we should check if it actually needs adjustment.
+		# _ensure_window_in_single_monitor only changes if needed.
 		_ensure_window_in_single_monitor(hwnd_found)
 	
 	return last_result
 
-def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, start_time=None):
+def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, start_time=None, movie_id=None):
     """Launch movie in VLC with optional subtitle and start time
     
     Args:
@@ -553,6 +614,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         subtitle_path: Optional path to subtitle file
         close_existing: Whether to close existing VLC windows
         start_time: Optional start time in seconds
+        movie_id: Optional ID of the movie (for history tracking)
     """
     steps = []
     results = []
@@ -595,6 +657,20 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     results.append({"step": 2, "status": "success", "message": f"VLC found at: {vlc_exe}"})
     steps.append(f"  Found VLC at: {vlc_exe}")
     
+    # Step 2.4: Capture existing VLC window geometry if replacing
+    existing_rect = None
+    if close_existing and os.name == 'nt':
+        try:
+            # Find ANY VLC window to capture geometry
+            # We don't have a PID yet, so finding any VLC window is fine as we are about to close them all
+            hwnd_existing = _find_vlc_window_handle()
+            if hwnd_existing:
+                existing_rect = _get_window_rect(hwnd_existing)
+                if existing_rect:
+                    steps.append(f"  Captured existing window geometry: {existing_rect.right-existing_rect.left}x{existing_rect.bottom-existing_rect.top} at ({existing_rect.left}, {existing_rect.top})")
+        except Exception as e:
+            logger.warning(f"Failed to capture existing window geometry: {e}")
+
     # Step 2.5: Close existing VLC windows if requested
     if close_existing:
         steps.append("Step 2.5: Closing existing VLC windows")
@@ -621,16 +697,27 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     
     # Step 4: Handle subtitles
     steps.append("Step 4: Checking for subtitles")
-    if subtitle_path is None or subtitle_path == "":
-        # User explicitly chose "No subtitle" - don't load any
-        steps.append("  User chose 'No subtitle' - not loading any subtitle")
+
+    # Check if user explicitly selected a subtitle vs automatic loading
+    user_selected_subtitle = subtitle_path is not None and subtitle_path != ""
+
+    if user_selected_subtitle:
+        # User explicitly selected a subtitle - use it regardless of global setting
+        steps.append(f"  User selected subtitle: {subtitle_path}")
+    elif not launch_with_subtitles_on:
+        # Global subtitle setting is off and no explicit selection
+        steps.append("  Global subtitle setting is disabled - not loading any subtitle")
         subtitle_path = None
     else:
-        # User selected a specific subtitle
-        steps.append(f"  User selected subtitle: {subtitle_path}")
-    
+        # Global setting allows subtitles - look for subtitle file automatically
+        subtitle_path = find_subtitle_file(movie_path)
+        if subtitle_path:
+            steps.append(f"  Found subtitle automatically: {subtitle_path}")
+        else:
+            steps.append("  No subtitle file found automatically")
+
     if subtitle_path and os.path.exists(subtitle_path):
-        # Load the specified subtitle file and make it active
+        # Load the subtitle file and make it active
         vlc_cmd.extend(["--sub-file", subtitle_path, "--sub-track", "1"])
         steps.append(f"  Added subtitle and set as active: {subtitle_path}")
         results.append({"step": 4, "status": "success", "message": f"Subtitle loaded: {subtitle_path}"})
@@ -665,7 +752,12 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     if os.name == 'nt':
         steps.append("Step 5.1: Bringing VLC window to foreground (Windows)")
         try:
-            focused = bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1)
+            focused = bring_vlc_to_foreground(
+                wait_timeout_seconds=3.0, 
+                poll_interval_seconds=0.1,
+                target_pid=process.pid,
+                target_rect=existing_rect
+            )
             if focused:
                 steps.append("  VLC window brought to foreground")
                 results.append({"step": 5.1, "status": "success", "message": "Foreground set"})
@@ -677,31 +769,72 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
             results.append({"step": 5.1, "status": "warning", "message": f"Foreground error: {str(e)}"})
     
     # Step 6: Save to history
-    steps.append("Step 6: Saving to history")
-    db = SessionLocal()
-    try:
-        # Get movie ID from path
-        movie = db.query(Movie).filter(Movie.path == movie_path).first()
-        if not movie:
-            raise HTTPException(status_code=404, detail=f"Movie not found in database: {movie_path}")
+    # To prevent "spamming" history with consecutive duplicates (e.g. accidental double-clicks),
+    # we check if the movie was launched very recently or is the same as the last entry.
+    
+    # Use a module-level variable for simple in-memory debouncing across threads/requests
+    global _last_launch_movie_id, _last_launch_time
+    current_time = time.time()
+    
+    # Check in-memory debounce (catch rapid-fire requests)
+    is_debounce_duplicate = False
+    if movie_id is not None and _last_launch_movie_id == movie_id and (current_time - _last_launch_time) < 5.0:
+        is_debounce_duplicate = True
         
-        # Only add if the last entry is different (prevent duplicate consecutive entries)
-        last_launch = db.query(LaunchHistory).order_by(LaunchHistory.created.desc(), LaunchHistory.id.desc()).first()
-        if not last_launch or last_launch.movie_id != movie.id:
-            launch_entry = LaunchHistory(
-                movie_id=movie.id,
-                subtitle=subtitle_path
-            )
-            db.add(launch_entry)
-        
-        # Note: Movie status is only set when user explicitly marks as watched/unwatched
-        # Launching a movie does not automatically create a status entry
-        
-        db.commit()
-        steps.append("  History saved successfully")
-        results.append({"step": 6, "status": "success", "message": "Launch saved to history"})
-    finally:
-        db.close()
+    if is_debounce_duplicate:
+         steps.append("  Skipping history save: Duplicate launch detected (debounce)")
+         results.append({"step": 6, "status": "info", "message": "Launch history skipped (debounce)"})
+         # Update time to extend debounce window
+         _last_launch_time = current_time
+    else:
+         # Check persistent history
+         db = SessionLocal()
+         try:
+             # Get movie object if needed
+             movie = None
+             if movie_id:
+                 movie = db.query(Movie).filter(Movie.id == movie_id).first()
+             
+             if not movie:
+                 # Fallback to path lookup
+                 movie = db.query(Movie).filter(Movie.path == movie_path).first()
+             
+             if not movie:
+                 # Should not happen as we checked existence
+                 steps.append("  WARNING: Movie not found in database, cannot save history")
+             else:
+                 # Check if the last entry is the same movie
+                 last_launch = db.query(LaunchHistory).order_by(LaunchHistory.created.desc(), LaunchHistory.id.desc()).first()
+                 
+                 # Always create a new entry
+                 # If the previous entry is the same movie, we leave it as is (do NOT update timestamp)
+                 # BUT we also check to ensure we aren't spamming: if the last entry is the same movie,
+                 # we ONLY add a new one if some time has passed or if the user explicitly wants it.
+                 # Per user instruction: "just create a history entry every time. and before you do so, 
+                 # insist that the db not have the previous entry pointing to the exact same movie."
+                 
+                 if last_launch and last_launch.movie_id == movie.id:
+                     steps.append("  Skipping history save: Consecutive duplicate detected")
+                     results.append({"step": 6, "status": "info", "message": "Launch history skipped (consecutive duplicate)"})
+                 else:
+                     # New entry
+                     launch_entry = LaunchHistory(
+                         movie_id=movie.id,
+                         subtitle=subtitle_path
+                     )
+                     db.add(launch_entry)
+                     db.commit()
+                     steps.append("  Added new history entry")
+                     results.append({"step": 6, "status": "success", "message": "Launch saved to history"})
+                 
+                 # Update in-memory debounce
+                 _last_launch_movie_id = movie.id
+                 _last_launch_time = current_time
+         except Exception as e:
+             steps.append(f"  WARNING: Error saving history: {e}")
+             results.append({"step": 6, "status": "warning", "message": f"History error: {e}"})
+         finally:
+             db.close()
     
     # Final summary
     steps.append("=" * 50)

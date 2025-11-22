@@ -83,7 +83,8 @@ async function performSearch(query) {
         
         // Show autocomplete with top 10 results
         const autocompleteItems = currentResults.slice(0, 10);
-        if (autocomplete) {
+        // Only show autocomplete if input is focused
+        if (autocomplete && document.activeElement === searchInput) {
             autocomplete.innerHTML = autocompleteItems.map((item, index) => `
                 <div class="autocomplete-item" data-index="${index}">
                     <strong>${escapeHtml(item.name || 'Unknown')}</strong>
@@ -239,7 +240,7 @@ async function loadLanguageFilters() {
             const count = mergedCounts[code];
             const displayName = languageNames[code] || (code ? code : 'unknown');
             const isActive = code === 'all' ? 'active' : '';
-            html += `<button type=\"button\" class=\"btn ${isActive}\" style=\"white-space:nowrap;margin:0;border-radius:0;\" data-language=\"${code}\" onclick=\"setExploreLanguageFilter('${code}', this)\">${displayName} (${count})</button>`;
+            html += `<button type="button" class="btn ${isActive}" style="white-space:nowrap;margin:0;border-radius:0;" data-language="${code}" onclick="setExploreLanguageFilter('${code}', this)">${displayName} (${count})</button>`;
         }
         
         languageGroup.innerHTML = html;
@@ -560,4 +561,23 @@ autocomplete.addEventListener('click', (e) => {
         displayResults([movie]);
         updateClearButtonVisibility();
     }
+});
+
+// Hide autocomplete when clicking outside
+document.addEventListener('click', (e) => {
+    if (autocomplete && autocomplete.style.display === 'block') {
+        if (!searchInput.contains(e.target) && !autocomplete.contains(e.target)) {
+            autocomplete.style.display = 'none';
+        }
+    }
+});
+
+// Hide autocomplete when tabbing out (blur)
+searchInput.addEventListener('blur', () => {
+    // Small delay to allow click events on autocomplete items to register
+    setTimeout(() => {
+        if (autocomplete) {
+            autocomplete.style.display = 'none';
+        }
+    }, 200);
 });

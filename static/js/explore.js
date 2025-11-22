@@ -64,6 +64,8 @@ function getCurrentExploreFilters() {
     return { filterType, letter, decade, year, language, noYear };
 }
 
+let lastFetchedUrl = '';
+
 async function fetchExploreMovies(page, filterType, letter, decade, year) {
     try {
         const params = new URLSearchParams({
@@ -93,6 +95,19 @@ async function fetchExploreMovies(page, filterType, letter, decade, year) {
         }
         
         const url = `/api/explore?${params}`;
+        
+        // Optimization: If URL is same as last fetched, and grid has content, skip fetch and just restore scroll
+        // This preserves scroll position perfectly when navigating back
+        const movieGrid = document.getElementById('movieGrid');
+        if (url === lastFetchedUrl && movieGrid && movieGrid.children.length > 0) {
+            if (typeof restoreScrollPosition === 'function') {
+                restoreScrollPosition();
+            }
+            return;
+        }
+        
+        lastFetchedUrl = url;
+        
         const response = await fetch(url);
         
         if (!response.ok) {
@@ -122,6 +137,11 @@ async function fetchExploreMovies(page, filterType, letter, decade, year) {
         
         // Render pagination
         renderPagination(data.pagination, filterType, letter, decade, year);
+        
+        // Restore scroll position
+        if (typeof restoreScrollPosition === 'function') {
+            restoreScrollPosition();
+        }
         
     } catch (error) {
         showStatus('Error loading movies: ' + error.message, 'error');
