@@ -1,8 +1,8 @@
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Literal
 import os
 import json
 import subprocess
@@ -17,6 +17,13 @@ from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 import atexit
+import uuid
+from decimal import Decimal, ROUND_HALF_UP
+
+# AI Search imports
+import openai
+import anthropic
+from fuzzywuzzy import fuzz, process
 
 # Setup logging
 import sys
@@ -492,6 +499,10 @@ class ScreenshotsIntervalRequest(BaseModel):
     every_minutes: float = 3
     subtitle_path: Optional[str] = None  # Path to subtitle file to burn in (if any)
 
+class AiSearchRequest(BaseModel):
+    query: str
+    provider: Literal["openai", "anthropic"] = "openai"
+
 @app.post("/api/frames/start")
 async def start_frame_worker():
     """Force-start the background screenshot extraction worker."""
@@ -757,9 +768,33 @@ async def admin_reindex(root_path: str = Query(None)):
     
     return {"status": "started", "message": "Reindex started in background"}
 
+def update_search_history_bg(q: str, results_count: int):
+    """Background task to update search history. No auto-deletion."""
+    db = SessionLocal()
+    try:
+        # Prevent duplicate consecutive entries
+        last_search = db.query(SearchHistory).order_by(SearchHistory.created.desc(), SearchHistory.id.desc()).first()
+        
+        if last_search and last_search.query == q:
+            # Same query as last time - do nothing
+            return
+
+        # New query
+        search_entry = SearchHistory(
+            query=q,
+            results_count=results_count
+        )
+        db.add(search_entry)
+        db.commit()
+    except Exception as e:
+        logging.error(f"Error updating search history: {e}")
+    finally:
+        db.close()
+
 @app.get("/api/search")
 async def search_movies(
     q: str,
+    background_tasks: BackgroundTasks,
     filter_type: str = Query("all", pattern="^(all|watched|unwatched)$"),
     language: Optional[str] = Query("all"),
     offset: int = Query(0, ge=0),
@@ -846,29 +881,8 @@ async def search_movies(
                 # We'll skip it unless needed.
                 results.append(card_copy)
 
-        # Save to history (count what we actually return)
-        # Prevent duplicate consecutive entries
-        last_search = db.query(SearchHistory).order_by(SearchHistory.created.desc(), SearchHistory.id.desc()).first()
-        
-        if last_search and last_search.query == q:
-            # Same query as last time - do nothing (no update timestamp, no new entry)
-            pass
-        else:
-            # New query
-            search_entry = SearchHistory(
-                query=q,
-                results_count=len(results)
-            )
-            db.add(search_entry)
-
-        # Keep last 100 searches
-        search_count = db.query(SearchHistory).count()
-        if search_count > 100:
-            oldest = db.query(SearchHistory).order_by(SearchHistory.created.asc()).limit(search_count - 100).all()
-            for old_search in oldest:
-                db.delete(old_search)
-
-        db.commit()
+        # Offload history update to background task
+        background_tasks.add_task(update_search_history_bg, q, len(results))
 
         return {"results": results, "total": total_count, "offset": offset, "limit": limit}
     finally:
@@ -1369,75 +1383,31 @@ async def get_launch_history():
     """Get launch history with movie information"""
     db = SessionLocal()
     try:
-        # Single query with JOINs to get all data at once
-        results = db.query(
-            LaunchHistory,
-            Movie,
-            MovieStatus,
-            Screenshot
-        ).join(
-            Movie, LaunchHistory.movie_id == Movie.id
-        ).outerjoin(
-            MovieStatus, Movie.id == MovieStatus.movie_id
-        ).outerjoin(
-            Screenshot, Movie.id == Screenshot.movie_id
-        ).order_by(
+        # Query recent launches
+        launches = db.query(LaunchHistory).order_by(
             LaunchHistory.created.desc()
         ).limit(100).all()
         
-        # Extract movie IDs for batch loading
-        launch_movie_ids = [movie.id for _, movie, _, _ in results if movie]
+        if not launches:
+            return {"launches": []}
+            
+        # Get associated movies
+        movie_ids = {l.movie_id for l in launches}
+        movies = db.query(Movie).filter(Movie.id.in_(movie_ids)).all()
         
-        # Batch load all screenshots for all movies in launch history
-        screenshots_dict = {}  # movie_id -> list of Screenshot objects
-        if launch_movie_ids:
-            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(launch_movie_ids)).all()
-            for s in all_screenshots:
-                if s.movie_id not in screenshots_dict:
-                    screenshots_dict[s.movie_id] = []
-                screenshots_dict[s.movie_id].append(s)
+        # Build standardized movie cards
+        movie_cards = build_movie_cards(db, movies)
         
         launches_with_info = []
-        for launch, movie, movie_status, screenshot in results:
-            if not movie:
-                continue
-            
-            # Get screenshots from preloaded dictionary
-            screenshot_objs_raw = screenshots_dict.get(movie.id, [])
-            
-            # Filter to only screenshots that actually exist on disk
-            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
-            
-            # Ensure movie has at least one screenshot/image - queue if missing
-            has_image = bool(movie.image_path and os.path.exists(movie.image_path))
-            ensure_movie_has_screenshot(movie.id, movie.path, has_image, screenshot_objs)
-            
-            screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
-            
-            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
-            screenshot_path = screenshot_obj.shot_path if screenshot_obj and Path(screenshot_obj.shot_path).exists() else None
-            
-            movie_info = {
-                "id": movie.id,
-                "path": movie.path,
-                "name": movie.name,
-                "length": movie.length,
-                "created": movie.created,
-                "size": movie.size,
-                "watched": movie_status is not None and movie_status.movieStatus == MovieStatusEnum.WATCHED.value,
-                "watched_date": movie_status.updated.isoformat() if movie_status and movie_status.updated else None,
-                "screenshots": screenshots,
-                "screenshot_id": screenshot_obj.id if screenshot_obj else None,
-                "screenshot_path": screenshot_path,
-                "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
-                "year": movie.year
-            }
-            
-            launches_with_info.append({
-                "movie": movie_info,
-                "timestamp": launch.created.isoformat(),
-                "subtitle": launch.subtitle
-            })
+        for launch in launches:
+            # Get the movie card for this launch
+            card = movie_cards.get(launch.movie_id)
+            if card:
+                launches_with_info.append({
+                    "movie": card,
+                    "timestamp": launch.created.isoformat(),
+                    "subtitle": launch.subtitle
+                })
         
         return {"launches": launches_with_info}
     finally:
@@ -1500,80 +1470,24 @@ async def get_watched():
     """Get list of watched movies"""
     db = SessionLocal()
     try:
-        watched_movies_list = []
-        
-        # Get all movies with "watched" status (one-to-one relationship, no need for deduplication)
+        # Get all movies with "watched" status
         movie_statuses = db.query(MovieStatus).filter(
             MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value
         ).order_by(MovieStatus.updated.desc()).all()
         
+        if not movie_statuses:
+            return {"watched": []}
+            
         watched_movie_ids = [ms.movie_id for ms in movie_statuses]
         
-        # Batch load all movies
-        movies_dict = {}
-        if watched_movie_ids:
-            movies = db.query(Movie).filter(Movie.id.in_(watched_movie_ids)).all()
-            movies_dict = {m.id: m for m in movies}
+        # Fetch movies
+        movies = db.query(Movie).filter(Movie.id.in_(watched_movie_ids)).all()
         
-        # Batch load all screenshots for all watched movies
-        screenshots_dict = {}  # movie_id -> list of Screenshot objects
-        first_screenshot_dict = {}  # movie_id -> first Screenshot object
-        if watched_movie_ids:
-            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(watched_movie_ids)).all()
-            for s in all_screenshots:
-                if s.movie_id not in screenshots_dict:
-                    screenshots_dict[s.movie_id] = []
-                    first_screenshot_dict[s.movie_id] = s
-                screenshots_dict[s.movie_id].append(s)
-
-        # Batch load launch history flags
-        launched_set = set()
-        if watched_movie_ids:
-            launched_rows = db.query(LaunchHistory.movie_id).filter(
-                LaunchHistory.movie_id.in_(watched_movie_ids)
-            ).distinct().all()
-            launched_set = {r.movie_id for r in launched_rows}
+        # Build standardized movie cards
+        movie_cards = build_movie_cards(db, movies)
         
-        for movie_status in movie_statuses:
-            movie = movies_dict.get(movie_status.movie_id)
-            if movie:
-                try:
-                    # Get screenshots from preloaded dictionary
-                    screenshot_objs_raw = screenshots_dict.get(movie.id, [])
-                    
-                    # Filter to only screenshots that actually exist on disk
-                    screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
-                    
-                    # Ensure movie has at least one screenshot/image - queue if missing
-                    # Check movie.image_path instead of Image table
-                    has_image = bool(movie.image_path and os.path.exists(movie.image_path))
-                    ensure_movie_has_screenshot(movie.id, movie.path, has_image, screenshot_objs)
-                    
-                    screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
-                    
-                    # Get screenshot ID and path - only from existing screenshots
-                    screenshot_obj = screenshot_objs[0] if screenshot_objs else None
-                    screenshot_id = screenshot_obj.id if screenshot_obj else None
-                    screenshot_path = screenshot_obj.shot_path if screenshot_obj else None
-                    
-                    movie_info = {
-                        "path": movie.path,
-                        "name": movie.name,
-                        "length": movie.length,
-                        "created": movie.created,
-                        "size": movie.size,
-                        "watched_date": movie_status.updated.isoformat() if movie_status.updated else None,
-                        "screenshots": screenshots,
-                        "screenshot_id": screenshot_id,
-                        "screenshot_path": screenshot_path,
-                        "image_path": movie.image_path if (movie.image_path and os.path.exists(movie.image_path)) else None,
-                        "year": movie.year,
-                        "has_launched": movie.id in launched_set
-                    }
-                    watched_movies_list.append(movie_info)
-                except Exception as e:
-                    logger.error(f"Error processing movie {movie_status.movie_id} in watched list: {e}", exc_info=True)
-                    continue
+        # Convert to list
+        watched_movies_list = list(movie_cards.values())
         
         # Sort by watched date (most recent first)
         # Handle None values by converting them to empty string for sorting
@@ -1977,10 +1891,13 @@ async def reclean_all_names():
         total = len(movies)
         updated = 0
         
+        # Load patterns once to improve performance
+        patterns = load_cleaning_patterns()
+        
         for movie in movies:
             try:
                 # Re-clean the name using full path (to handle TV series with season/episode)
-                cleaned_name, year = clean_movie_name(movie.path)
+                cleaned_name, year = clean_movie_name(movie.path, patterns)
                 
                 # Update if changed
                 if movie.name != cleaned_name or movie.year != year:
@@ -2280,102 +2197,11 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
         if not random_movies:
             return {"results": []}
         
-        movie_ids = [m.id for m in random_movies]
+        # Build standardized movie cards
+        movie_cards = build_movie_cards(db, random_movies)
         
-        # Batched fetch for watch status info (latest watch entry regardless of status)
-        watch_status_info = {}
-        if movie_ids:
-            movie_statuses = db.query(MovieStatus).filter(
-                MovieStatus.movie_id.in_(movie_ids)
-            ).all()
-            for ms in movie_statuses:
-                watch_status_info[ms.movie_id] = {
-                    "watch_status": ms.movieStatus,
-                    "watched": ms.movieStatus == MovieStatusEnum.WATCHED.value,
-                    "watched_date": ms.updated.isoformat() if ms.updated else None
-                }
-        
-        # Batch load screenshots for auto-enqueue check
-        screenshots_dict = {}  # movie_id -> list of Screenshot objects
-        if movie_ids:
-            all_screenshots = db.query(Screenshot).filter(Screenshot.movie_id.in_(movie_ids)).all()
-            for s in all_screenshots:
-                if s.movie_id not in screenshots_dict:
-                    screenshots_dict[s.movie_id] = []
-                screenshots_dict[s.movie_id].append(s)
-        
-        # Has launched flags
-        launched_set = set()
-        if movie_ids:
-            launched_rows = db.query(LaunchHistory.movie_id).filter(
-                LaunchHistory.movie_id.in_(movie_ids)
-            ).distinct().all()
-            launched_set = {r.movie_id for r in launched_rows}
-        
-        # Get ratings
-        rating_map = {}
-        if movie_ids:
-            rating_rows = db.query(Rating.movie_id, Rating.rating).filter(
-                Rating.movie_id.in_(movie_ids)
-            ).all()
-            rating_map = {movie_id: int(rating) for movie_id, rating in rating_rows}
-
-        # Get playlists
-        playlist_map = {}  # movie_id -> list of playlist names
-        if movie_ids:
-            playlist_rows = db.query(
-                PlaylistItem.movie_id,
-                Playlist.name
-            ).join(
-                Playlist, PlaylistItem.playlist_id == Playlist.id
-            ).filter(
-                PlaylistItem.movie_id.in_(movie_ids)
-            ).order_by(Playlist.is_system.desc(), Playlist.name).all()
-
-            for movie_id, playlist_name in playlist_rows:
-                if movie_id not in playlist_map:
-                    playlist_map[movie_id] = []
-                playlist_map[movie_id].append(playlist_name)
-
-        # Build response items
-        result_movies = []
-        for m in random_movies:
-            # Ensure movie has at least one screenshot/image - queue if missing
-            screenshot_objs_raw = screenshots_dict.get(m.id, [])
-            screenshot_objs = filter_existing_screenshots(screenshot_objs_raw)
-            # Check movie.image_path instead of Image table
-            has_image = bool(m.image_path and os.path.exists(m.image_path))
-            ensure_movie_has_screenshot(m.id, m.path, has_image, screenshot_objs)
-            
-            # Get screenshot_id from filtered existing screenshots (first one)
-            screenshot_obj = screenshot_objs[0] if screenshot_objs else None
-            screenshot_id = screenshot_obj.id if screenshot_obj else None
-            
-            info = watch_status_info.get(m.id, {})
-            watch_status = info.get("watch_status")
-            screenshots = [{"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds} for s in screenshot_objs]
-            
-            result_movies.append({
-                "id": m.id,
-                "path": m.path,
-                "name": m.name,
-                "length": m.length,
-                "created": m.created,
-                "size": m.size,
-                "watch_status": watch_status,
-                "watched": bool(info.get("watched", False)),
-                "watched_date": info.get("watched_date"),
-                "year": m.year,
-                "has_launched": (m.id in launched_set),
-                "screenshot_id": screenshot_id,
-                "image_path": m.image_path if (m.image_path and os.path.exists(m.image_path)) else None,
-                "image_path_url": get_image_url_path(m.image_path) if m.image_path else None,
-                "screenshots": screenshots,
-                "rating": rating_map.get(m.id),
-                "playlists": playlist_map.get(m.id, [])
-            })
-
-        return {"results": result_movies}
+        # Return list of card dictionaries
+        return {"results": list(movie_cards.values())}
     except Exception as e:
         logger.error(f"Error in random-movies endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -2986,6 +2812,313 @@ async def get_imdb_stats():
         }
     finally:
         db.close()
+
+def load_api_keys():
+    settings_path = SCRIPT_DIR / "settings.json"
+    if not settings_path.exists():
+        return None, None
+    
+    try:
+        with open(settings_path, "r") as f:
+            settings = json.load(f)
+            return settings.get("OpenAIApiKey"), settings.get("AnthropicApiKey")
+    except Exception as e:
+        logger.error(f"Error loading settings.json: {e}")
+        return None, None
+
+AI_PRICING = {
+    "openai": {
+        "model": "GPT-5.1",
+        "input_per_million": Decimal("1.25"),
+        "output_per_million": Decimal("10.00")
+    },
+    "anthropic": {
+        "model": "Claude 4.5 Sonnet",
+        "input_per_million": Decimal("3.00"),
+        "output_per_million": Decimal("15.00")
+    }
+}
+
+JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+def estimate_ai_cost(provider_key: str, input_tokens: int, output_tokens: int):
+    """Calculate cents/USD plus explanatory text for a given provider."""
+    rates = AI_PRICING.get(provider_key)
+    if not rates:
+        return None, None, "No pricing metadata configured."
+    
+    million = Decimal("1000000")
+    input_tokens = int(input_tokens or 0)
+    output_tokens = int(output_tokens or 0)
+    
+    if input_tokens < 0 or output_tokens < 0:
+        raise ValueError("Token counts cannot be negative")
+    
+    input_cost = (Decimal(input_tokens) / million) * rates["input_per_million"]
+    output_cost = (Decimal(output_tokens) / million) * rates["output_per_million"]
+    total_usd = (input_cost + output_cost).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    total_cents = (total_usd * Decimal("100")).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    
+    usd_text = format(total_usd, "f")
+    details = (
+        f"{rates['model']} pricing: {input_tokens} input tok @ ${rates['input_per_million']}/M + "
+        f"{output_tokens} output tok @ ${rates['output_per_million']}/M = ${usd_text}."
+    )
+    return float(total_cents), float(total_usd), details
+
+def parse_ai_response_json(raw_text: str, interaction_id: str, provider_label: str):
+    """Extract and parse the structured JSON returned by the AI provider."""
+    if not raw_text:
+        raise ValueError(f"No response body returned from {provider_label}")
+    
+    trimmed = raw_text.strip()
+    fence_match = JSON_FENCE_PATTERN.search(trimmed)
+    if fence_match:
+        trimmed = fence_match.group(1).strip()
+    
+    try:
+        return json.loads(trimmed)
+    except json.JSONDecodeError as exc:
+        preview = trimmed[:500]
+        logger.error(
+            f"AI interaction {interaction_id} invalid JSON from {provider_label}: {exc}. "
+            f"Payload preview: {preview}"
+        )
+        raise ValueError("Failed to parse AI response JSON") from exc
+
+@app.post("/api/ai_search")
+async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks):
+    openai_key, anthropic_key = load_api_keys()
+    
+    if request.provider == "openai" and not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not found in settings.json")
+    if request.provider == "anthropic" and not anthropic_key:
+        raise HTTPException(status_code=400, detail="Anthropic API key not found in settings.json")
+
+    interaction_id = str(uuid.uuid4())
+    logger.info(f"AI interaction {interaction_id} received: provider={request.provider}, query={request.query}")
+
+    prompt = f"""
+    The user is asking about movies. Your goal is to return a structured JSON list of movies matching their query.
+    
+    User Query: "{request.query}"
+    
+    Guidance:
+    - Do not add a comment unless you genuinely have something useful or interesting to say.
+    - NEVER rephrase the user's query, acknowledge that you are responding, or summarize that you have provided an answer.
+    - Leaving the comment blank is acceptable unless explicitly asked otherwise.
+    
+    Return JSON format:
+    {{
+        "comment": "Optional overall comment.",
+        "movies": [
+            {{
+                "name": "Movie Title",
+                "year": 1999,
+                "comment": "Optional relevant comment."
+            }}
+        ]
+    }}
+    
+    If the query is not about movies, return an empty 'movies' list.
+    """
+    logger.info(f"AI interaction {interaction_id} prompt payload:\n{prompt.strip()}")
+    
+    response_data = {"comment": "", "movies": []}
+    cost_cents = None
+    cost_usd = None
+    cost_details = "Cost not available."
+    
+    try:
+        if request.provider == "openai":
+            provider_key = "openai"
+            model_name = "gpt-5.1"
+            client = openai.OpenAI(api_key=openai_key)
+            logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a helpful movie assistant. Return JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+            
+            content = completion.choices[0].message.content
+            logger.info(f"AI interaction {interaction_id} <- response from {provider_key} ({model_name}): {content}")
+            response_data = parse_ai_response_json(content, interaction_id, f"{provider_key} ({model_name})")
+            
+            if completion.usage:
+                in_tokens = completion.usage.prompt_tokens or 0
+                out_tokens = completion.usage.completion_tokens or 0
+                cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                usd_display = f"${cost_usd:.6f}" if cost_usd is not None else "unknown"
+                logger.info(
+                    f"AI interaction {interaction_id} usage: provider={provider_key}, "
+                    f"input_tokens={in_tokens}, output_tokens={out_tokens}, est_cost_usd={usd_display}"
+                )
+            else:
+                model_label = AI_PRICING[provider_key]["model"]
+                cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
+                logger.warning(f"AI interaction {interaction_id} missing usage data from {provider_key}")
+            
+        elif request.provider == "anthropic":
+            provider_key = "anthropic"
+            model_name = "claude-sonnet-4-5"
+            client = anthropic.Anthropic(api_key=anthropic_key)
+            logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
+            message = client.messages.create(
+                model=model_name,
+                max_tokens=4096,
+                system="You are a helpful movie assistant. Return JSON only.",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            content = message.content[0].text
+            logger.info(f"AI interaction {interaction_id} <- response from {provider_key} ({model_name}): {content}")
+            response_data = parse_ai_response_json(content, interaction_id, f"{provider_key} ({model_name})")
+            
+            if message.usage:
+                in_tokens = message.usage.input_tokens or 0
+                out_tokens = message.usage.output_tokens or 0
+                cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                usd_display = f"${cost_usd:.6f}" if cost_usd is not None else "unknown"
+                logger.info(
+                    f"AI interaction {interaction_id} usage: provider={provider_key}, "
+                    f"input_tokens={in_tokens}, output_tokens={out_tokens}, est_cost_usd={usd_display}"
+                )
+            else:
+                model_label = AI_PRICING[provider_key]["model"]
+                cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
+                logger.warning(f"AI interaction {interaction_id} missing usage data from {provider_key}")
+            
+    except Exception as e:
+        logger.error(f"AI interaction {interaction_id} error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    # Remove duplicate movies returned by the model (ignore differing comments)
+    deduped_movies = []
+    seen_keys = set()
+    for movie in response_data.get("movies", []):
+        title = (movie.get("name") or "").strip()
+        if not title:
+            continue
+        year = movie.get("year")
+        norm_title = re.sub(r'[^\w\s]', '', title).lower()
+        key = (norm_title, year)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped_movies.append(movie)
+    response_data["movies"] = deduped_movies
+    
+    # Match against DB
+    db = SessionLocal()
+    found_movies = []
+    missing_movies = []
+    
+    try:
+        all_movies = db.query(Movie).filter(Movie.hidden == False).all()
+        
+        # Pre-process DB movies for faster matching
+        db_movie_map = {}
+        for m in all_movies:
+            norm_name = re.sub(r'[^\w\s]', '', m.name).lower().strip()
+            if norm_name not in db_movie_map:
+                db_movie_map[norm_name] = []
+            db_movie_map[norm_name].append(m)
+            
+        for ai_movie in response_data.get("movies", []):
+            title = ai_movie.get("name", "")
+            year = ai_movie.get("year")
+            comment = ai_movie.get("comment", "")
+            
+            if not title:
+                continue
+
+            # 1. Try exact normalized match
+            norm_title = re.sub(r'[^\w\s]', '', title).lower().strip()
+            candidates = db_movie_map.get(norm_title, [])
+            
+            match = None
+            
+            # 2. If no exact match, try fuzzy match
+            if not candidates and db_movie_map:
+                # Get best match from keys
+                best_match_result = process.extractOne(norm_title, list(db_movie_map.keys()), scorer=fuzz.token_sort_ratio)
+                if best_match_result:
+                    best_match_name, score = best_match_result
+                    if score > 85:
+                        candidates = db_movie_map[best_match_name]
+            
+            if candidates:
+                # Disambiguate by year
+                matches = []
+                if year and len(candidates) > 1:
+                    try:
+                        target_year = int(year)
+                        for cand in candidates:
+                            if cand.year and abs(cand.year - target_year) <= 1:
+                                matches.append(cand)
+                    except (ValueError, TypeError):
+                        pass
+                    
+                    if not matches:
+                        # If year doesn't match any, but names match, include all candidates (uncertain)
+                        matches = candidates
+                else:
+                    matches = candidates
+            else:
+                matches = []
+            
+            if matches:
+                # Build standardized movie cards for all matched movies
+                movie_cards = build_movie_cards(db, matches)
+                
+                for match in matches:
+                    # Get the standardized card
+                    card = movie_cards.get(match.id)
+                    if card:
+                        # Add AI-specific fields
+                        card["ai_comment"] = comment
+                        found_movies.append(card)
+            else:
+                missing_movies.append({
+                    "name": title,
+                    "year": year,
+                    "ai_comment": comment
+                })
+                
+    except Exception as e:
+        logger.error(f"Error processing AI results: {e}")
+        response_data["comment"] += f" (Error processing results: {str(e)})"
+        
+    finally:
+        db.close()
+
+    cost_cents_payload = round(cost_cents, 4) if cost_cents is not None else None
+    cost_usd_payload = round(cost_usd, 6) if cost_usd is not None else None
+    usd_display = (
+        f"${cost_usd_payload:.6f}" if isinstance(cost_usd_payload, (int, float)) else "unknown"
+    )
+    logger.info(
+        f"AI interaction {interaction_id} completed: found={len(found_movies)}, "
+        f"missing={len(missing_movies)}, est_cost_usd={usd_display}"
+    )
+
+    # Update history in background
+    background_tasks.add_task(update_search_history_bg, request.query, len(deduped_movies))
+        
+    return {
+        "comment": response_data.get("comment", ""),
+        "found_movies": found_movies,
+        "missing_movies": missing_movies,
+        "cost_cents": cost_cents_payload,
+        "cost_usd": cost_usd_payload,
+        "cost_details": cost_details
+    }
 
 # Mount static files directory (favicon, etc.)
 # Must be mounted AFTER specific routes to avoid shadowing root path

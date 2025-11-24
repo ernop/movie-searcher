@@ -65,6 +65,29 @@
                 <!-- Language filter moved to Explore -->
             </div>
 
+            <div id="aiSearchInline"
+                style="margin-top: 20px; padding: 16px; background: #1d1d1d; border: 1px solid #333; border-radius: 6px;">
+                <div
+                    style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <div style="font-weight: 600; color: #fff;">AI Search</div>
+                </div>
+                <div style="display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
+                    <input type="text" id="aiSearchInput"
+                        placeholder="Ask about movies (e.g. &quot;what were Kubrick's 10 most influential movies? and give me a quote and year it was said for each?&quot;)..."
+                        style="flex: 1 1 300px; min-width: 220px; padding: 12px; font-size: 16px; background: #1a1a1a; border: 1px solid #333; color: white; border-radius: 4px;"
+                        onkeypress="if(event.key === 'Enter') performAiSearch()">
+                    <select id="aiProviderSelect"
+                        style="padding: 0 15px; background: #1a1a1a; border: 1px solid #333; color: white; border-radius: 4px;">
+                        <option value="anthropic" selected>Claude 4.5 Sonnet</option>
+                        <option value="openai">GPT-5.1</option>
+                    </select>
+                    <button class="btn" id="aiSearchButton" onclick="performAiSearch()">Ask AI</button>
+                </div>
+                <div id="aiCostDisplay"
+                    style="font-size: 0.9em; color: #888; min-height: 1.2em; margin-top: 6px; width: 100%; display: flex; justify-content: flex-end; text-align: right;"></div>
+                <div id="aiSearchStatus" style="margin-top: 10px; color: #888; min-height: 1.2em;"></div>
+            </div>
+
             <div class="results" id="results"></div>
 
             <div class="watched-section" id="watchedSection">
@@ -300,6 +323,13 @@
                 <input type="hidden" id="screenshotConfigMovieId">
                 <div style="margin-bottom: 20px;">
                     <label style="color: #fff; display: block; margin-bottom: 8px;">Interval (minutes):</label>
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <button onclick="setScreenshotInterval(0.33)" class="btn btn-secondary btn-small" style="flex: 1;">20s</button>
+                        <button onclick="setScreenshotInterval(1)" class="btn btn-secondary btn-small" style="flex: 1;">1m</button>
+                        <button onclick="setScreenshotInterval(2)" class="btn btn-secondary btn-small" style="flex: 1;">2m</button>
+                        <button onclick="setScreenshotInterval(3)" class="btn btn-secondary btn-small" style="flex: 1;">3m</button>
+                        <button onclick="setScreenshotInterval(5)" class="btn btn-secondary btn-small" style="flex: 1;">5m</button>
+                    </div>
                     <input type="number" id="screenshotConfigInterval" value="3" min="0.1" max="60" step="0.1"
                         style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #3a3a3a; color: #fff; border-radius: 4px;">
                 </div>
@@ -330,6 +360,7 @@
         <script src="/js/media.js?v=2"></script>
         <script src="/js/history.js?v=2"></script>
         <script src="/js/setup.js?v=2"></script>
+        <script src="/js/ai-search.js?v=2"></script>
         <script src="/js/app.js?v=2"></script>
 </body>
 

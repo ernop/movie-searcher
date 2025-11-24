@@ -30,7 +30,7 @@ DB_FILE = SCRIPT_DIR / "movie_searcher.db"
 engine = create_engine(
     f"sqlite:///{DB_FILE}", 
     echo=False,
-    connect_args={"check_same_thread": False}  # Required for SQLite with FastAPI
+    connect_args={"check_same_thread": False, "timeout": 15}  # Required for SQLite with FastAPI
 )
 
 # Enable foreign keys for SQLite
@@ -38,6 +38,7 @@ engine = create_engine(
 def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
     cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

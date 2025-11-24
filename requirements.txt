@@ -14,12 +14,16 @@ Pillow==9.3.0
 pandas==2.1.4
 numpy==1.26.2
 
-# Fuzzy matching for IMDb import
+# Fuzzy matching (IMDb import & AI search)
 fuzzywuzzy==0.18.0
 python-levenshtein==0.23.0
 
 # HTTP requests
 requests==2.31.0
+
+# AI Search
+openai>=1.0.0
+anthropic>=0.7.0
 
 # Development
 pytest==7.4.3

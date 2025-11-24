@@ -89,12 +89,8 @@ async function toggleWatched(movieId, currentStatus) {
     const nextIdx = (currentIdx + 1) % cycleOrder.length;
     const nextStatus = cycleOrder[nextIdx];
 
-    // Show loading state
-    const button = document.querySelector(`[data-movie-id="${movieId}"] .movie-card-btn`);
-    if (button) {
-        button.style.opacity = '0.6';
-        button.disabled = true;
-    }
+    // Optimistic update: Update UI immediately
+    updateMovieStatusUI(movieId, nextStatus);
 
     try {
         const response = await fetch('/api/change-status', {
@@ -106,35 +102,25 @@ async function toggleWatched(movieId, currentStatus) {
             })
         });
 
-        if (response.ok) {
-            // Update UI immediately without page reload
-            updateMovieStatusUI(movieId, nextStatus);
-
-            // Add brief success highlight
-            if (button) {
-                button.style.transition = 'background-color 0.3s ease';
-                button.style.backgroundColor = '#e8f5e8';
-                setTimeout(() => {
-                    button.style.backgroundColor = '';
-                }, 500);
-            }
-        } else {
+        if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
+        
+        // Success - UI already updated. 
+        // Optionally add a subtle success indicator if needed, but usually the state change is enough.
     } catch (error) {
         console.error('Error updating watched status:', error);
         showStatus('Failed to update watch status', 'error');
-    } finally {
-        // Restore button state
-        if (button) {
-            button.style.opacity = '';
-            button.disabled = false;
-        }
+        
+        // Revert UI on error
+        updateMovieStatusUI(movieId, currentStatus === 'null' ? null : currentStatus);
     }
 }
 
 // Update just the status UI elements without reloading the page
 function updateMovieStatusUI(movieId, newStatus) {
+    const nextClickStatus = newStatus === null ? 'null' : `'${newStatus}'`;
+
     // Handle movie cards in explore/search views
     const movieCard = document.querySelector(`[data-movie-id="${movieId}"]`);
     if (movieCard) {
@@ -142,36 +128,41 @@ function updateMovieStatusUI(movieId, newStatus) {
         const button = movieCard.querySelector('.movie-card-btn');
         const checkbox = movieCard.querySelector('.watched-checkbox');
 
-        if (button && checkbox) {
-            // Update checkbox class
-            let checkboxClass = 'unset';
-            if (newStatus === 'watched') {
-                checkboxClass = 'watched';
-            } else if (newStatus === 'unwatched') {
-                checkboxClass = 'unwatched';
-            } else if (newStatus === 'want_to_watch') {
-                checkboxClass = 'want-to-watch';
-            }
+        if (button) {
+            // Update onclick handler immediately for next interaction
+            button.setAttribute('onclick', `event.stopPropagation(); toggleWatched(${movieId}, ${nextClickStatus})`);
 
-            checkbox.className = `watched-checkbox ${checkboxClass}`;
+            if (checkbox) {
+                // Update checkbox class
+                let checkboxClass = 'unset';
+                if (newStatus === 'watched') {
+                    checkboxClass = 'watched';
+                } else if (newStatus === 'unwatched') {
+                    checkboxClass = 'unwatched';
+                } else if (newStatus === 'want_to_watch') {
+                    checkboxClass = 'want-to-watch';
+                }
 
-            // Update button text
-            let buttonText = '-';
-            if (newStatus === 'watched') {
-                buttonText = 'watched';
-            } else if (newStatus === 'unwatched') {
-                buttonText = 'not watched';
-            } else if (newStatus === 'want_to_watch') {
-                buttonText = 'want to see';
-            }
+                checkbox.className = `watched-checkbox ${checkboxClass}`;
 
-            // Update the text content (preserve the checkbox span)
-            const textSpan = button.querySelector('span.watched-checkbox + *') || button.lastChild;
-            if (textSpan && textSpan.nodeType === Node.TEXT_NODE) {
-                textSpan.textContent = buttonText;
-            } else {
-                // Fallback: recreate the button content
-                button.innerHTML = `<span class="watched-checkbox ${checkboxClass}"></span>${buttonText}`;
+                // Update button text
+                let buttonText = '-';
+                if (newStatus === 'watched') {
+                    buttonText = 'watched';
+                } else if (newStatus === 'unwatched') {
+                    buttonText = 'not watched';
+                } else if (newStatus === 'want_to_watch') {
+                    buttonText = 'want to see';
+                }
+
+                // Update the text content (preserve the checkbox span)
+                const textSpan = button.querySelector('span.watched-checkbox + *') || button.lastChild;
+                if (textSpan && textSpan.nodeType === Node.TEXT_NODE) {
+                    textSpan.textContent = buttonText;
+                } else {
+                    // Fallback: recreate the button content
+                    button.innerHTML = `<span class="watched-checkbox ${checkboxClass}"></span>${buttonText}`;
+                }
             }
         }
 
@@ -190,6 +181,9 @@ function updateMovieStatusUI(movieId, newStatus) {
         const button = detailView.querySelector('.watched-btn');
 
         if (button) {
+            // Update onclick handler
+            button.setAttribute('onclick', `toggleWatched(${movieId}, ${nextClickStatus})`);
+
             // Update button class
             let buttonClass = '';
             if (newStatus === 'watched') {
@@ -389,8 +383,10 @@ async function loadMovieDetailsById(id) {
         container.innerHTML = `
             <div class="movie-details" data-movie-id="${movie.id}">
                 <div class="movie-details-header">
-                <div class="movie-details-poster">
-                    ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; container.style.height = 'auto'; }">` : 'No Image'}
+                <div style="display: flex; flex-direction: column; gap: 10px; width: 300px; flex-shrink: 0;">
+                    <div class="movie-details-poster" style="width: 100%;">
+                        ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; container.style.height = 'auto'; }">` : 'No Image'}
+                    </div>
                 </div>
                 <div class="movie-details-info">
                     <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>

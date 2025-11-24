@@ -11,7 +11,15 @@ let currentResults = [];
 let searchAbortController = null;
 let currentSearchRequestId = 0;
 
+let searchDebounceTimer = null;
+
 function scheduleSearch(query) {
+    // Clear any pending debounce
+    if (searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = null;
+    }
+
     // If query is empty, clear results
     if (!query || query.trim().length === 0) {
         // Abort any pending search
@@ -28,11 +36,13 @@ function scheduleSearch(query) {
         return;
     }
     
-    // Perform search immediately (no debounce)
-    performSearch(query);
+    // Debounce search requests
+    searchDebounceTimer = setTimeout(() => {
+        performSearch(query);
+    }, 300);
 }
 
-async function performSearch(query) {
+async function performSearch(query, showResultsImmediately = false) {
     // Increment request ID for this new search
     const requestId = ++currentSearchRequestId;
     
@@ -78,6 +88,13 @@ async function performSearch(query) {
         if (currentResults.length === 0) {
             if (autocomplete) autocomplete.style.display = 'none';
             if (results) results.innerHTML = '<div class="empty-state">No results found</div>';
+            return;
+        }
+
+        if (showResultsImmediately) {
+            displayResults(currentResults);
+            if (autocomplete) autocomplete.style.display = 'none';
+            updateClearButtonVisibility();
             return;
         }
         
@@ -531,10 +548,13 @@ searchInput.addEventListener('keydown', (e) => {
             updateClearButtonVisibility();
             const slug = (item.name || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
             openMovieHash(item.id, encodeURIComponent(slug));
-        } else if (currentResults.length > 0) {
-            displayResults(currentResults);
-            autocomplete.style.display = 'none';
-            updateClearButtonVisibility();
+        } else {
+            // Force a search with the current input and show results
+            if (searchDebounceTimer) {
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = null;
+            }
+            performSearch(searchInput.value, true);
         }
     } else if (e.key === 'Escape') {
         autocomplete.style.display = 'none';

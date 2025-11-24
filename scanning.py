@@ -936,7 +936,7 @@ def process_frame_queue(max_workers=3):
     """Process queued frame extractions in background thread pool"""
     process_frame_queue_core(max_workers, scan_progress, add_scan_log)
 
-def index_movie(file_path, db: Session = None):
+def index_movie(file_path, db: Session = None, patterns=None):
     """Index a single movie file"""
     # Normalize the path to ensure consistent storage
     # file_path can be either a Path object or a string
@@ -964,6 +964,13 @@ def index_movie(file_path, db: Session = None):
         should_close = True
     
     try:
+        # Load patterns if not provided (for standalone calls)
+        if patterns is None:
+            patterns = load_cleaning_patterns()
+
+        # Clean movie name and extract year early (to detect improvements/changes in logic)
+        cleaned_name, year = clean_movie_name(normalized_path, patterns)
+
         # Check if already indexed and unchanged
         existing = db.query(Movie).filter(Movie.path == normalized_path).first()
         file_unchanged = existing and existing.hash == file_hash
@@ -974,12 +981,28 @@ def index_movie(file_path, db: Session = None):
             existing_screenshot = db.query(Screenshot).filter(Screenshot.movie_id == existing.id).first()
         has_screenshot = existing_screenshot and os.path.exists(existing_screenshot.shot_path) if existing_screenshot else False
         
-        # If file unchanged and screenshot exists, still refresh audio info, then skip rest
+        # Check if name/year needs update due to code changes
+        name_changed = existing and (existing.name != cleaned_name or existing.year != year)
+        
+        # If file unchanged and screenshot exists, handle potential name update or audio refresh then skip
         if file_unchanged and has_screenshot:
             if existing:
+                # If name changed, update it
+                if name_changed:
+                    existing.name = cleaned_name
+                    existing.year = year
+                    existing.updated = datetime.now()
+                    add_scan_log("info", f"  Updated name: {existing.name}")
+                
+                # Refresh audio info (always do this as it's fast and might be missing)
                 _, audio_types = extract_video_metadata_with_ffprobe(normalized_path)
                 _refresh_movie_audio_rows(db, existing.id, audio_types)
+                
                 db.commit()
+                
+                # If name changed, count as updated
+                if name_changed:
+                    return True
             return False  # No other updates needed
         
         add_scan_log("info", f"  Getting file metadata...")
@@ -1043,8 +1066,7 @@ def index_movie(file_path, db: Session = None):
         # Filter out YTS images before processing (defense in depth)
         images = filter_yts_images(images)
         
-        # Clean movie name and extract year (pass full path to handle TV series with season/episode)
-        cleaned_name, year = clean_movie_name(normalized_path)
+        # cleaned_name and year are already calculated at the start of function
         
         # Create or update movie record FIRST - we need movie.id before queuing screenshots
         if existing:
@@ -1203,6 +1225,11 @@ def scan_directory(root_path, state=None, progress_callback=None):
     
     add_scan_log("info", f"Starting scan of: {root_path}")
     db = SessionLocal()
+    
+    # Load cleaning patterns once to pass to index_movie
+    # This avoids querying the DB for patterns for every single file
+    patterns = load_cleaning_patterns()
+    
     try:
         # First pass: count total files
         global scan_progress
@@ -1254,7 +1281,7 @@ def scan_directory(root_path, state=None, progress_callback=None):
                 
                 add_scan_log("info", f"[{indexed + 1}/{total_files}] Processing: {file_path.name}")
                 
-                if index_movie(file_path, db):
+                if index_movie(file_path, db, patterns):
                     updated += 1
                 indexed += 1
                 

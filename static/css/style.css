@@ -1241,8 +1241,88 @@
         .movie-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-            gap: 20px;
+            gap: 20px 10px;
             margin-bottom: 30px;
+        }
+
+        .ai-results-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .ai-overall-comment {
+            font-size: 1.05em;
+            line-height: 1.5;
+            color: #ddd;
+            background: #252525;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #3a3a3a;
+        }
+
+        .ai-results-grid .ai-card-suggestion {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .ai-movie-comment {
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 6px;
+            color: #ccc;
+            font-size: 13px;
+            line-height: 1.4;
+            padding: 10px;
+        }
+
+        .ai-movie-comment.muted {
+            color: #666;
+            font-style: italic;
+        }
+
+        .ai-missing-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .ai-missing-item {
+            flex: 0 0 240px;
+            max-width: 240px;
+            width: 240px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .ai-missing-card {
+            padding: 15px;
+            background: #252525;
+            border: 1px solid #333;
+            border-radius: 6px;
+        }
+
+        .ai-missing-title {
+            color: #fff;
+            font-size: 16px;
+            margin-bottom: 6px;
+        }
+
+        .ai-missing-year {
+            color: #888;
+        }
+
+        .ai-missing-comment {
+            color: #aaa;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .ai-missing-placeholder {
+            color: #777;
+            font-size: 0.95em;
         }
         
         .movie-card {
@@ -1522,6 +1602,7 @@
             align-items: center;
             gap: 6px;
             flex-shrink: 0;
+            min-width: 105px;
         }
         
         .movie-card-btn:hover {

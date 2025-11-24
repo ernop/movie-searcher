@@ -48,7 +48,7 @@ function renderMediaGallery(images, screenshots, itemPath, movieId) {
         });
     }
     
-    if (allMedia.length === 0) {
+    if (allMedia.length === 0 && !movieId) {
         currentMediaArray = [];
         return '';
     }
@@ -63,6 +63,18 @@ function renderMediaGallery(images, screenshots, itemPath, movieId) {
     // Track if we've seen images and screenshots to add break between them
     let hasSeenImages = false;
     let hasSeenScreenshots = false;
+    let screenshotButtonRendered = false;
+    
+    const renderScreenshotButton = () => {
+        return `
+            <div class="media-item" style="display: flex; align-items: center; justify-content: center; background: #2a2a2a; border: 2px dashed #444; min-width: 120px; min-height: 100px; cursor: pointer;" onclick="showScreenshotConfig(${movieId})">
+                <div style="text-align: center; padding: 15px;">
+                    <div style="font-size: 20px; color: #666; margin-bottom: 5px;">⚙️</div>
+                    <div style="font-size: 12px; color: #999;">Generate<br>Screenshots</div>
+                </div>
+            </div>
+        `;
+    };
     
     allMedia.forEach((media, idx) => {
         const isScreenshot = media.type === 'screenshot';
@@ -98,13 +110,6 @@ function renderMediaGallery(images, screenshots, itemPath, movieId) {
                 : (media.path ? (media.path.includes('screenshots') ? `/screenshots/${encodeURIComponent(getFilename(media.path))}` : `/movies/${encodeURIComponent(media.path)}`) : '');
             galleryHtml += `
                 <div class="media-item" onclick="showMediaOverlay(${media.id || 'null'}, ${isScreenshot ? 'true' : 'false'}, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${idx})" style="position: relative;">
-                    <button 
-                        class="get-more-btn" 
-                        title="Get more screenshots" 
-                        onclick="event.stopPropagation(); showScreenshotConfig(${movieId || 'null'});" 
-                        style="position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 4px 8px; opacity: 0.85; z-index: 10;">
-                        Get more
-                    </button>
                     ${launchBtnHtml}
                     ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
                     <img src="${imageSrc}" 
@@ -140,13 +145,28 @@ function renderMediaGallery(images, screenshots, itemPath, movieId) {
                 </div>
             `;
         }
+        
+        // Insert screenshot button after the first screenshot
+        if (isScreenshot && !screenshotButtonRendered && movieId) {
+            galleryHtml += renderScreenshotButton();
+            screenshotButtonRendered = true;
+        }
     });
+    
+    // If no screenshots were found (or media array was empty), add button at the end
+    if (!screenshotButtonRendered && movieId) {
+        // Add break if we have images but no screenshots yet
+        if (hasSeenImages) {
+            galleryHtml += '<div style="width: 100%; flex-basis: 100%;"></div>';
+        }
+        galleryHtml += renderScreenshotButton();
+    }
     
     galleryHtml += '</div>';
     return galleryHtml;
 }
 
-async function updateScreenshotsGallery(movieId, existingScreenshotIds) {
+async function updateScreenshotsGallery(movieId, existingScreenshotIds, updateProgress = null) {
     // Incrementally update the screenshots gallery without reloading the entire page
     try {
         const response = await fetch(`/api/movie/${movieId}/screenshots`);
@@ -154,6 +174,11 @@ async function updateScreenshotsGallery(movieId, existingScreenshotIds) {
         
         const data = await response.json();
         const allScreenshots = data.screenshots || [];
+        
+        // If we have a progress callback, call it with the current count
+        if (updateProgress && typeof updateProgress === 'function') {
+            updateProgress(allScreenshots.length);
+        }
         
         // Find the media gallery container
         const container = document.getElementById('movieDetailsContainer');
@@ -258,6 +283,15 @@ async function updateScreenshotsGallery(movieId, existingScreenshotIds) {
                         break;
                     }
                 } else {
+                    // Check if it's the screenshot generator button or progress card
+                    const isButton = (el.getAttribute('onclick') && el.getAttribute('onclick').includes('showScreenshotConfig')) || 
+                                   el.id === 'screenshotProgressCard';
+                                   
+                    if (isButton && !foundFirstScreenshot) {
+                        insertBeforeElement = el;
+                        break;
+                    }
+
                     // This is an image - if we haven't seen a screenshot yet, we'll need a break
                     if (!foundFirstScreenshot) {
                         needsBreak = true;
@@ -501,6 +535,16 @@ async function jumpToVideo(movieId, timestampSeconds) {
     }
 }
 
+function setScreenshotInterval(val) {
+    const input = document.getElementById('screenshotConfigInterval');
+    if (input) {
+        input.value = val;
+        // Visual feedback
+        input.style.borderColor = '#4a9eff';
+        setTimeout(() => input.style.borderColor = '#3a3a3a', 300);
+    }
+}
+
 async function showScreenshotConfig(movieId) {
     if (!movieId) {
         showStatus('Movie ID not available', 'error');
@@ -562,7 +606,8 @@ async function generateScreenshots() {
         if (!resp.ok) {
             showStatus('Failed to queue screenshots: ' + (data.detail || 'error'), 'error');
         } else {
-            showStatus('Queued ' + (data.queued || 0) + ' screenshots', 'success');
+            const queuedCount = data.queued || 0;
+            showStatus('Queued ' + queuedCount + ' screenshots', 'success');
             closeScreenshotConfig();
             
             // CLEAR ALL EXISTING SCREENSHOTS FROM DOM - regeneration means fresh start
@@ -570,6 +615,10 @@ async function generateScreenshots() {
             if (container) {
                 const gallery = container.querySelector('.media-gallery');
                 if (gallery) {
+                    // Find the generator button before removing it (so we know where to insert progress)
+                    let generatorButton = null;
+                    let hasImages = false;
+                    
                     // Remove all screenshot elements (keep images)
                     const allItems = Array.from(gallery.querySelectorAll('.media-item'));
                     allItems.forEach(item => {
@@ -577,8 +626,35 @@ async function generateScreenshots() {
                         // Check if it's a screenshot (onclick contains ", true," for screenshots)
                         if (onclick && onclick.includes(', true,')) {
                             item.remove();
+                        } else if (onclick && onclick.includes('showScreenshotConfig')) {
+                            generatorButton = item;
+                        } else {
+                            hasImages = true;
                         }
                     });
+                    
+                    // Replace generator button with progress card
+                    const progressCard = document.createElement('div');
+                    progressCard.id = 'screenshotProgressCard';
+                    progressCard.className = 'media-item';
+                    progressCard.style.cssText = 'display: flex; align-items: center; justify-content: center; background: #2a2a2a; border: 2px solid #4a9eff; min-width: 120px; min-height: 100px;';
+                    progressCard.innerHTML = `
+                        <div style="text-align: center; padding: 15px;">
+                            <div style="font-size: 14px; color: #4a9eff; margin-bottom: 5px; font-weight: bold;">Generating...</div>
+                            <div style="font-size: 12px; color: #ccc;"><span id="gen-count">0</span> / ${queuedCount}</div>
+                        </div>
+                    `;
+                    
+                    if (generatorButton) {
+                        generatorButton.replaceWith(progressCard);
+                    } else {
+                        // If no button found (e.g. maybe hidden?), append to gallery
+                        // If images exist but no button, we might need a break
+                        if (hasImages && !gallery.querySelector('div[style*="flex-basis: 100%"]')) {
+                            gallery.insertAdjacentHTML('beforeend', '<div style="width: 100%; flex-basis: 100%;"></div>');
+                        }
+                        gallery.appendChild(progressCard);
+                    }
                     
                     // Update currentMediaArray - remove screenshots, keep images
                     currentMediaArray = currentMediaArray.filter(media => media.type !== 'screenshot');
@@ -588,15 +664,29 @@ async function generateScreenshots() {
             // Track existing screenshot IDs from API response (should be empty after deletion)
             const existingScreenshotIds = new Set((data.screenshots || []).map(s => s.id));
             
-            // Initial update after a short delay
-            setTimeout(() => {
-                updateScreenshotsGallery(movieId, existingScreenshotIds);
-            }, 1500);
-            
             // Poll for new screenshots (lightweight endpoint, incremental updates)
             let polls = 0;
-            const maxPolls = 30; // Poll for up to 60 seconds (30 * 2s)
+            const maxPolls = 60; // Poll for up to 120 seconds (60 * 2s)
             const pollIntervalMs = 2000;
+            
+            // Function to restore button
+            const restoreButton = () => {
+                const progressCard = document.getElementById('screenshotProgressCard');
+                if (progressCard) {
+                    const btnDiv = document.createElement('div');
+                    btnDiv.className = 'media-item';
+                    btnDiv.style.cssText = 'display: flex; align-items: center; justify-content: center; background: #2a2a2a; border: 2px dashed #444; min-width: 120px; min-height: 100px; cursor: pointer;';
+                    btnDiv.setAttribute('onclick', `showScreenshotConfig(${movieId})`);
+                    btnDiv.innerHTML = `
+                        <div style="text-align: center; padding: 15px;">
+                            <div style="font-size: 20px; color: #666; margin-bottom: 5px;">⚙️</div>
+                            <div style="font-size: 12px; color: #999;">Generate<br>Screenshots</div>
+                        </div>
+                    `;
+                    progressCard.replaceWith(btnDiv);
+                }
+            };
+            
             const iv = setInterval(async () => {
                 // Stop polling if user navigated away from movie details page
                 const pageMovieDetails = document.getElementById('pageMovieDetails');
@@ -604,11 +694,7 @@ async function generateScreenshots() {
                     clearInterval(iv);
                     return;
                 }
-                const container = document.getElementById('movieDetailsContainer');
-                if (!container || !container.innerHTML) {
-                    clearInterval(iv);
-                    return;
-                }
+                
                 // Verify we're still on the same movie by checking route
                 const route = getRoute();
                 const expectedRoute = `/movie/${movieId}`;
@@ -617,15 +703,32 @@ async function generateScreenshots() {
                     return;
                 }
                 
+                const container = document.getElementById('movieDetailsContainer');
+                if (!container || !container.innerHTML) {
+                    clearInterval(iv);
+                    return;
+                }
+
                 // Update gallery incrementally
-                const hadNewScreenshots = await updateScreenshotsGallery(movieId, existingScreenshotIds);
+                const hadNewScreenshots = await updateScreenshotsGallery(movieId, existingScreenshotIds, (count) => {
+                    const countEl = document.getElementById('gen-count');
+                    if (countEl) countEl.textContent = count;
+                });
                 
                 polls += 1;
-                // Stop early if no new screenshots for several polls (likely done)
-                if (!hadNewScreenshots && polls >= 5) {
-                    clearInterval(iv);
+                
+                // Stop logic: if we have >= queued count, we are done
+                // Or timeout
+                const currentCount = parseInt(document.getElementById('gen-count')?.textContent || '0');
+                if (currentCount >= queuedCount && queuedCount > 0) {
+                     // Give it one more poll to ensure everything is settled, then stop
+                     if (polls > 2) { // Minimum polls
+                        clearInterval(iv);
+                        setTimeout(restoreButton, 1000);
+                     }
                 } else if (polls >= maxPolls) {
                     clearInterval(iv);
+                    restoreButton();
                 }
             }, pollIntervalMs);
         }
@@ -644,4 +747,3 @@ async function displayResults(items) {
     results.innerHTML = '<div class="movie-grid">' + items.map(item => createMovieCard(item)).join('') + '</div>';
     initAllStarRatings();
 }
-
