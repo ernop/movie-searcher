@@ -1,0 +1,5 @@
+# UI/UX Rules
+
+- UI elements must NEVER move, scale, or transform on hover
+- Only change colors, borders, opacity, or other visual properties that don't affect layout or position
+- No transform: scale(), translate(), rotate(), or z-index changes on hover states

@@ -3,20 +3,20 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 sqlalchemy==2.0.23
 alembic==1.12.1
-pydantic==2.5.0
+pydantic>=2.9.0
 python-multipart==0.0.6
 
 # Video processing
 mutagen==1.47.0
-Pillow==9.3.0
+Pillow>=10.0.0
 
 # Data processing
-pandas==2.1.4
-numpy==1.26.2
+pandas>=2.2.0
+numpy>=2.0.0
 
 # Fuzzy matching (IMDb import & AI search)
 fuzzywuzzy==0.18.0
-python-levenshtein==0.23.0
+python-levenshtein>=0.26.0
 
 # HTTP requests
 requests==2.31.0

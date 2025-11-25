@@ -54,7 +54,7 @@ Type any part of a movie name. See results instantly as you type. Autocomplete s
 
 ## Getting Started
 
-1. Run `start.bat` to launch the application
+1. Run `python start.py` (or `start.bat` on Windows) to launch the application
 2. Click "Scan Movies Folder" to index your collection the first time
 3. Start searching and exploring
 
@@ -64,8 +64,14 @@ For playback, install VLC Media Player (free from videolan.org).
 
 **Adding More Movies:** Just add files to your movies folder and click "Scan Movies Folder" again. Only new or changed files are processed.
 
-**Stopping:** Close the server window or run `stop.bat`.
+**Stopping:** Close the server window or run `stop.bat` (Windows) or press Ctrl+C.
 
 ## Technical Details
 
-Requires Python 3.8+. Optional: VLC Media Player for playback, ffmpeg for screenshot extraction.
+Requires Python 3.8+. Optional: VLC Media Player for playback.
+
+**Automatic Setup:**
+- Python: https://www.python.org/downloads/
+- ffmpeg: **Automatically installed and configured** - no manual setup needed!
+- The application will automatically detect, install (via winget on Windows), and configure ffmpeg on first startup
+- See `docs/installation.md` for detailed setup instructions

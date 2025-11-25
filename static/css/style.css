@@ -1791,42 +1791,6 @@
             margin-left: 28px;
         }
         
-        .screenshot-processor-status {
-            font-size: 12px;
-            color: #ccc;
-            background: rgba(255, 255, 255, 0.05);
-            padding: 6px 10px;
-            border-radius: 4px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            white-space: nowrap;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .screenshot-processor-status .status-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .screenshot-processor-status .status-label {
-            color: #999;
-        }
-        
-        .screenshot-processor-status .status-value {
-            color: #fff;
-            font-weight: 500;
-        }
-        
-        .screenshot-processor-status .status-value.running {
-            color: #4a9eff;
-        }
-        
-        .screenshot-processor-status .status-value.idle {
-            color: #999;
-        }
-        
         .currently-playing {
             font-size: 20px;
             color: #999;

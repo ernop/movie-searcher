@@ -105,6 +105,12 @@ async function saveFolderPath() {
         return;
     }
     
+    // Validate absolute path before normalizing
+    if (typeof isValidAbsolutePath === 'function' && !isValidAbsolutePath(folderPath)) {
+        showStatus('Path must be absolute (e.g., D:\\movies or C:\\Movies)', 'error');
+        return;
+    }
+    
     // Normalize the path (handle /, \, \\)
     folderPath = normalizePath(folderPath);
     
@@ -235,9 +241,122 @@ async function loadDuplicateMovies() {
     }
 }
 
+async function loadSystemStatus() {
+    const statusEl = document.getElementById('systemStatus');
+    if (!statusEl) return;
+    
+    try {
+        const [ffmpegResponse, vlcResponse] = await Promise.all([
+            fetch('/api/test-ffmpeg'),
+            fetch('/api/test-vlc')
+        ]);
+        
+        if (!ffmpegResponse.ok) {
+            const statusText = ffmpegResponse.statusText || `HTTP ${ffmpegResponse.status}`;
+            let errorDetail = '';
+            try {
+                const errorData = await ffmpegResponse.text();
+                if (errorData) {
+                    const parsed = JSON.parse(errorData);
+                    errorDetail = parsed.detail || parsed.message || errorData.substring(0, 100);
+                } else {
+                    errorDetail = statusText;
+                }
+            } catch {
+                errorDetail = statusText;
+            }
+            
+            statusEl.innerHTML = `
+                <div style="color: #f44336;">
+                    <div style="font-weight: 500;">Server error checking system status</div>
+                    <div style="font-size: 12px; color: #999; margin-top: 5px;">
+                        ${escapeHtml(statusText)}: ${escapeHtml(errorDetail)}
+                    </div>
+                </div>
+            `;
+            return;
+        }
+        
+        let ffmpegResult, vlcResult;
+        try {
+            ffmpegResult = await ffmpegResponse.json();
+            vlcResult = await vlcResponse.json();
+        } catch (jsonError) {
+            statusEl.innerHTML = `
+                <div style="color: #f44336;">
+                    <div style="font-weight: 500;">Invalid response from server</div>
+                    <div style="font-size: 12px; color: #999; margin-top: 5px;">
+                        Server returned non-JSON response. ${escapeHtml(jsonError.message)}
+                    </div>
+                </div>
+            `;
+            return;
+        }
+        
+        let statusHtml = '';
+        const allOk = ffmpegResult.ok && vlcResult.ok;
+        const allErrors = [...(ffmpegResult.errors || []), ...(vlcResult.errors || [])];
+        
+        if (allOk) {
+            statusHtml = `
+                <div style="display: flex; align-items: center; gap: 10px; color: #4caf50;">
+                    <span style="font-size: 20px;">✓</span>
+                    <div>
+                        <div style="font-weight: 500; margin-bottom: 5px;">All systems operational</div>
+                        <div style="font-size: 12px; color: #999;">
+                            ffmpeg: ${ffmpegResult.ffmpeg_version || 'OK'} | 
+                            ffprobe: ${ffmpegResult.ffprobe_version || 'OK'} | 
+                            VLC: ${vlcResult.vlc_version || 'OK'}
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            statusHtml = `
+                <div style="display: flex; align-items: flex-start; gap: 10px; color: #f44336;">
+                    <span style="font-size: 20px;">✗</span>
+                    <div style="flex: 1;">
+                        <div style="font-weight: 500; margin-bottom: 5px;">System issues detected</div>
+                        <div style="font-size: 12px; color: #999; margin-top: 8px;">
+                            ${allErrors.map(e => `<div>• ${escapeHtml(e)}</div>`).join('')}
+                        </div>
+                        ${ffmpegResult.ffmpeg_path ? `<div style="font-size: 11px; color: #666; margin-top: 8px;">ffmpeg: ${escapeHtml(ffmpegResult.ffmpeg_path)}</div>` : ''}
+                        ${vlcResult.vlc_path ? `<div style="font-size: 11px; color: #666; margin-top: 8px;">VLC: ${escapeHtml(vlcResult.vlc_path)}</div>` : ''}
+                        ${vlcResult.checked_locations ? `<div style="font-size: 11px; color: #666; margin-top: 4px;">Searched: ${vlcResult.checked_locations.length} locations</div>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        
+        statusEl.innerHTML = statusHtml;
+    } catch (error) {
+        let errorTitle = 'Error checking system status';
+        let errorMessage = error.message;
+        
+        if (error.name === 'TypeError' && error.message.includes('fetch')) {
+            errorTitle = 'Network error: Cannot reach server';
+            errorMessage = 'Failed to connect to the server. Make sure the server is running and accessible.';
+        } else if (error.name === 'AbortError') {
+            errorTitle = 'Request cancelled';
+            errorMessage = 'The request was cancelled or timed out.';
+        } else if (error.name === 'NetworkError') {
+            errorTitle = 'Network error';
+            errorMessage = 'Network request failed. Check your connection.';
+        }
+        
+        statusEl.innerHTML = `
+            <div style="color: #f44336;">
+                <div style="font-weight: 500;">${errorTitle}</div>
+                <div style="font-size: 12px; color: #999; margin-top: 5px;">${escapeHtml(errorMessage)}</div>
+            </div>
+        `;
+    }
+}
+
 function loadSetupPage() {
     loadCurrentFolder();
     loadStats();
+    loadSystemStatus();
     
     // Clear dynamic lists to avoid staleness
     const hiddenContainer = document.getElementById('hiddenMoviesList');
@@ -245,4 +364,12 @@ function loadSetupPage() {
     
     const recleanStatus = document.getElementById('recleanStatus');
     if (recleanStatus) recleanStatus.style.display = 'none';
+}
+
+async function recheckSystemStatus() {
+    const statusEl = document.getElementById('systemStatus');
+    if (statusEl) {
+        statusEl.innerHTML = '<div class="loading">Re-checking system status...</div>';
+    }
+    await loadSystemStatus();
 }

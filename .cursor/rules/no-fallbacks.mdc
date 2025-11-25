@@ -1,0 +1,211 @@
+# PRIME DIRECTIVE - NO FALLBACKS
+
+When something fails, fix the root cause. Never add alternative logic that tries to work around the failure.
+
+## What is a Fallback?
+
+A fallback is code that silently tries alternative methods when the primary method fails, instead of surfacing and fixing the failure.
+
+## Example 1: Library Loading
+
+WRONG:
+```python
+try:
+    import preferred_library
+    parser = preferred_library.Parser()
+except ImportError:
+    import backup_library
+    parser = backup_library.Parser()
+```
+
+RIGHT:
+```python
+import preferred_library
+parser = preferred_library.Parser()
+```
+If import fails, fix the environment or dependencies. Don't mask it.
+
+## Example 2: Data Extraction (This Project's Core Case)
+
+WRONG:
+```python
+# In indexing
+movie.year = extract_year(filename)  # Returns None if extraction fails
+
+# Later in API endpoint
+def get_movie_details(movie):
+    year = movie.year or try_parse_year_again(movie.filename) or "Unknown"
+    return {"title": movie.title, "year": year}
+```
+
+RIGHT:
+```python
+# In indexing
+movie.year = extract_year(filename)  # Returns None if extraction fails
+
+# In API endpoint
+def get_movie_details(movie):
+    return {"title": movie.title, "year": movie.year}
+```
+If year is missing, improve `extract_year()` and re-index. Don't re-parse in the API.
+
+## Example 3: Configuration Detection
+
+WRONG:
+```python
+def get_vlc_path():
+    path = os.environ.get("VLC_PATH")
+    if not path:
+        path = find_in_program_files()
+    if not path:
+        path = find_in_registry()
+    if not path:
+        path = "/usr/bin/vlc"  # Linux fallback
+    return path
+```
+
+RIGHT:
+```python
+def get_vlc_path():
+    path = os.environ.get("VLC_PATH")
+    if not path:
+        raise ConfigError("VLC_PATH not set. Set it in environment or config file.")
+    return path
+```
+If VLC path is wrong, fix the configuration. Don't guess.
+
+## Example 4: External Tool Calls
+
+WRONG:
+```python
+try:
+    duration = extract_duration_ffmpeg(video_file)
+except Exception:
+    try:
+        duration = extract_duration_mediainfo(video_file)
+    except Exception:
+        duration = estimate_from_filesize(video_file)
+```
+
+RIGHT:
+```python
+duration = extract_duration_ffmpeg(video_file)
+```
+If ffmpeg fails, fix ffmpeg installation or the extraction logic. Don't cascade through alternatives.
+
+## Example 5: tryAscertainValue Pattern
+
+WRONG:
+```python
+def tryAscertainValue(data):
+    # Try method 1
+    value = parse_from_field_a(data)
+    if value:
+        return value
+    
+    # Try method 2
+    value = parse_from_field_b(data)
+    if value:
+        return value
+    
+    # Try method 3
+    value = guess_from_context(data)
+    if value:
+        return value
+    
+    return "default"
+```
+
+RIGHT:
+```python
+def get_value(data):
+    return parse_from_field_a(data)
+```
+If field_a doesn't have the value, fix the data source or the data model. Don't try alternate fields.
+
+## Example 6: Retry Loops
+
+WRONG:
+```python
+def connect_to_service():
+    for i in range(10):
+        try:
+            return service.connect()
+        except ConnectionError:
+            time.sleep(1)
+    raise ConnectionError("Failed after 10 retries")
+```
+
+RIGHT:
+```python
+def connect_to_service():
+    return service.connect()
+```
+If connection fails, fix the service availability, network config, or credentials. Don't retry and hope.
+
+## The Rule
+
+1. Use the correct method
+2. If it fails, the error should be visible
+3. Fix the method or fix the environment
+4. Never add a second/third method to "help" when the first fails
+
+## Why No Fallbacks?
+
+Fallbacks create multiple sources of truth, hide bugs, and make debugging harder. They seem helpful but cause:
+
+1. **Inconsistent behavior** - different code paths produce different results
+2. **Hidden failures** - errors are masked instead of fixed
+3. **Maintenance burden** - multiple methods to maintain and keep in sync
+4. **False confidence** - system appears to work but produces unreliable data
+5. **Unclear execution paths** - you never know which code is actually running, making debugging nearly impossible
+
+### The Core Problem
+
+When fallbacks exist, you can't tell which path your code took. This makes it impossible to:
+- Debug issues (which path failed?)
+- Understand system behavior (what's actually happening?)
+- Fix root causes (which method should work?)
+- Trust the system (is it using the right method?)
+
+### Real Example from This Project
+
+We found screenshots were randomly missing because:
+- Screenshot extraction succeeded (file created)
+- Database save failed silently (path lookup failed)
+- Code fell back to alternative path lookup
+- Fallback also failed silently
+- Result: Screenshot exists on disk but not in database = "randomly missing"
+
+If we had no fallback, the error would have been visible immediately and we could have fixed the root cause (path mismatch) instead of debugging "random" missing screenshots.
+
+### The Pattern to Avoid
+
+```python
+# BAD: Try method 1, if fails try method 2, if fails try method 3
+value = try_method_1() or try_method_2() or try_method_3() or default_value
+
+# BAD: Silent fallback
+try:
+    result = primary_method()
+except:
+    result = fallback_method()  # Hides the error!
+
+# BAD: Multiple attempts
+if not value:
+    value = try_alternative()
+if not value:
+    value = try_another_alternative()
+```
+
+### The Right Approach
+
+```python
+# GOOD: Use the correct method, fail explicitly if it doesn't work
+value = correct_method()  # If this fails, the error is visible
+
+# GOOD: Fix the root cause instead of working around it
+# If correct_method() fails, fix why it fails, don't add alternatives
+```
+
+When you see missing data or failures, the fix is always to improve the single upstream source, never to add downstream alternatives.

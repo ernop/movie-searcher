@@ -1,0 +1,5 @@
+# Name Cleaning Rules
+
+- Name cleaning must NEVER rename, move, modify, or delete files on disk
+- Only filter entries from the database and/or modify how they are displayed to users
+- Files on disk must remain untouched - all changes are database/display-only

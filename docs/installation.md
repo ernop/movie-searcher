@@ -11,6 +11,10 @@
 - **Linux/macOS** (should work with minor adjustments - see below)
 
 ### Additional Software
+- **ffmpeg** (required for screenshot extraction)
+  - **Automatically installed and configured** - no manual setup needed!
+  - The application will automatically detect, install (via winget on Windows), and configure ffmpeg on first startup
+  - Required for extracting video screenshots and determining video length
 - **VLC Media Player** (optional, for playing movies)
   - Download from: https://www.videolan.org/
   - The application will auto-detect VLC in common Windows installation locations
@@ -32,7 +36,9 @@
    - The script will automatically:
      - Check for Python
      - Create a virtual environment if needed
-     - Install all dependencies
+     - Install all Python dependencies
+     - **Automatically detect and install ffmpeg** (if not found)
+     - Configure ffmpeg and verify it's working
      - Start the server
      - Open your browser
 
@@ -42,7 +48,7 @@
    - Click "Scan Movies Folder" in the web interface
    - Wait for indexing to complete
 
-That's it! The application is now running.
+That's it! The application is now running. **ffmpeg is automatically installed and configured** - no manual setup needed!
 
 ## Manual Installation (Windows)
 
@@ -62,7 +68,7 @@ If you prefer to set up manually:
 
 Extract the project files to your desired location (e.g., `D:\movie-searcher`)
 
-### 3. Create Virtual Environment
+### 4. Create Virtual Environment
 
 Open Command Prompt in the project directory:
 
@@ -72,7 +78,7 @@ python -m venv venv
 venv\Scripts\activate
 ```
 
-### 4. Install Dependencies
+### 5. Install Dependencies
 
 With the virtual environment activated:
 
@@ -85,11 +91,7 @@ This installs:
 - **FastAPI** (0.104.1) - Web framework for the API
 - **Uvicorn** (0.24.0) with standard extras - ASGI server
 - **Mutagen** (1.47.0) - For extracting video metadata (length, etc.)
-- **SQLAlchemy** (2.0.23) - Database ORM for SQLite
-
-### 5. Create Movies Folder
-
-Create a folder named `movies` in the project directory and place your movie files there.
+- **SQLAlchemy** (2.0.44) - Database ORM for SQLite
 
 ### 6. Start the Server
 
@@ -98,6 +100,16 @@ python main.py
 ```
 
 The server will start on `http://localhost:8002` and your browser should open automatically.
+
+**Note:** On first startup, the application will automatically:
+- Detect if ffmpeg is installed
+- Install ffmpeg via winget if not found (Windows only)
+- Configure ffmpeg paths and verify everything works
+- Save configuration to the database
+
+### 7. Create Movies Folder
+
+Create a folder named `movies` in the project directory and place your movie files there.
 
 ## Installation for Linux/macOS
 
@@ -196,11 +208,25 @@ The server runs on `http://localhost:8002` by default.
 - **mutagen** - Audio/video metadata library for extracting video length
 - **sqlalchemy** - SQL toolkit and ORM for database operations
 
-### Optional Dependencies
+### Automatic Setup Features
 
-- **ffmpeg** - For extracting video screenshots (optional)
-  - If not installed, screenshots won't be generated
-  - Download from: https://ffmpeg.org/
+The application automatically handles setup of external tools:
+
+- **ffmpeg installation**: Automatically detects if ffmpeg is missing and installs it via winget (Windows)
+- **ffmpeg configuration**: Automatically finds ffmpeg and ffprobe, tests both, and saves paths to database
+- **Startup verification**: Tests ffmpeg and ffprobe on every startup to ensure everything works
+- **Retry logic**: Retries installation and configuration up to 3 times if initial attempts fail
+- **Status reporting**: Settings page shows system status with clear indicators if anything needs attention
+
+### Required External Tools
+
+- **ffmpeg** - Required for extracting video screenshots and determining video length
+  - **Automatically installed and configured** on first startup
+  - The application will detect, install (via winget on Windows), and configure ffmpeg automatically
+  - If automatic installation fails, you can install manually:
+    - Windows: `winget install --id=Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements`
+    - Other platforms: Download from https://ffmpeg.org/
+  - Configuration is saved to the database and verified on each startup
 
 ## Troubleshooting
 
@@ -295,6 +321,40 @@ The server runs on `http://localhost:8002` by default.
 2. **Manual migration:**
    - Ensure JSON files exist (`movie_index.json`, `watched_movies.json`, etc.)
    - Start the server - migration happens automatically if database is empty
+
+### ffmpeg Not Found (Windows)
+
+**Symptoms:** Screenshots not being generated, warnings about ffmpeg not found
+
+**Solutions:**
+
+1. **Automatic installation should handle this:**
+   - The application automatically installs ffmpeg on first startup
+   - If you see warnings, restart the server - it will retry installation
+   - Check the server logs for installation progress
+
+2. **If automatic installation fails:**
+   - Open PowerShell or Command Prompt as Administrator
+   - Run: `winget install --id=Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements`
+   - Restart the server - it will detect and configure the installation
+
+3. **Manual installation (if winget is not available):**
+   - Download from: https://ffmpeg.org/download.html
+   - Extract to a folder (e.g., `C:\ffmpeg`)
+   - Restart the server - it will detect and configure the installation
+   - The application searches these locations automatically:
+     - System PATH
+     - `C:\ffmpeg\bin\ffmpeg.exe`
+     - `C:\Program Files\ffmpeg\bin\ffmpeg.exe`
+     - `C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe`
+     - Winget installation directory
+
+4. **Check system status:**
+   - Go to Settings page in the web interface
+   - Check the "System Status" section at the top
+   - It will show if ffmpeg and ffprobe are working correctly
+
+5. **Note:** The application will automatically retry installation up to 3 times on startup. If it still fails, check the logs for specific error messages.
 
 ### VLC Not Found (Windows)
 

@@ -62,6 +62,20 @@ function normalizePath(path) {
     return path;
 }
 
+function isValidAbsolutePath(path) {
+    if (!path || !path.trim()) return false;
+    path = path.trim();
+    // Windows: Check for drive letter (C:\) or UNC path (\\)
+    if (path.match(/^[A-Za-z]:[\\/]/) || path.startsWith('\\\\')) {
+        return true;
+    }
+    // Unix-like: Check for leading /
+    if (path.startsWith('/')) {
+        return true;
+    }
+    return false;
+}
+
 function getFilename(path) {
     if (!path) return null;
     const parts = path.replace(/\\/g, '/').split('/');
@@ -183,12 +197,61 @@ function hideFolderDialog() {
     dialog.classList.remove('active');
 }
 
+async function browseFolder() {
+    // Use file input with webkitdirectory to let user select a folder
+    // Note: This requires selecting a file inside the folder, but helps with navigation
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.webkitdirectory = true;
+    input.directory = true;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    
+    input.addEventListener('change', async (e) => {
+        const files = e.target.files;
+        if (files.length > 0) {
+            const firstFile = files[0];
+            const folderPathInput = document.getElementById('folderPathInput');
+            
+            // Try to extract path from file object
+            // On some browsers, file.path contains the full path
+            if (firstFile.path && firstFile.path.match(/^[A-Za-z]:/)) {
+                // Extract directory from file path
+                const filePath = firstFile.path.replace(/\//g, '\\');
+                const lastBackslash = filePath.lastIndexOf('\\');
+                if (lastBackslash > 0) {
+                    const dirPath = filePath.substring(0, lastBackslash);
+                    if (folderPathInput) {
+                        folderPathInput.value = dirPath;
+                        showStatus('Folder path extracted. Please verify it is correct.', 'info');
+                    }
+                }
+            } else {
+                // Can't extract full path - show instructions
+                showStatus('Please copy the full path from Windows Explorer and paste it here (e.g., D:\\movies)', 'info');
+                if (folderPathInput) {
+                    folderPathInput.focus();
+                }
+            }
+        }
+        document.body.removeChild(input);
+    });
+    
+    input.click();
+}
+
 async function saveFolderPath() {
     const input = document.getElementById('folderPathInput');
     let folderPath = input.value.trim();
     
     if (!folderPath) {
         showStatus('Please enter a folder path', 'error');
+        return;
+    }
+    
+    // Validate absolute path before normalizing
+    if (!isValidAbsolutePath(folderPath)) {
+        showStatus('Path must be absolute (e.g., D:\\movies or C:\\Movies)', 'error');
         return;
     }
     
@@ -213,43 +276,6 @@ async function saveFolderPath() {
         }
     } catch (error) {
         showStatus('Failed to update folder: ' + error.message, 'error');
-    }
-}
-
-// Screenshot Processor Status
-
-async function updateScreenshotProcessorStatus() {
-    try {
-        const response = await fetch('/api/frames/status');
-        const data = await response.json();
-        const statusEl = document.getElementById('screenshotProcessorStatus');
-        
-        if (!statusEl) return;
-        
-        const isRunning = data.is_running || false;
-        const queueSize = data.queue_size || 0;
-        const processedLastMinute = data.processed_last_minute || 0;
-        
-        statusEl.innerHTML = `
-            <div class="status-item">
-                <span class="status-label">Status:</span>
-                <span class="status-value ${isRunning ? 'running' : 'idle'}">${isRunning ? 'Running' : 'Idle'}</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">Queued:</span>
-                <span class="status-value">${queueSize}</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">Last min:</span>
-                <span class="status-value">${processedLastMinute}</span>
-            </div>
-        `;
-    } catch (error) {
-        console.error('Error updating screenshot processor status:', error);
-        const statusEl = document.getElementById('screenshotProcessorStatus');
-        if (statusEl) {
-            statusEl.innerHTML = '<div class="status-item"><span class="status-label">Status:</span><span class="status-value idle">Error</span></div>';
-        }
     }
 }
 

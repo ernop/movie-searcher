@@ -238,22 +238,4 @@ window.addEventListener('hashchange', () => {
 window.addEventListener('popstate', handleRoute);
 window.addEventListener('load', handleRoute);
 window.addEventListener('load', startCurrentlyPlayingPolling);
-window.addEventListener('load', updateScreenshotProcessorStatus);
-
-// Auto-update screenshot processor status every 10 seconds
-let screenshotStatusInterval = null;
-function startScreenshotStatusPolling() {
-    updateScreenshotProcessorStatus();
-    if (screenshotStatusInterval) {
-        clearInterval(screenshotStatusInterval);
-    }
-    screenshotStatusInterval = setInterval(updateScreenshotProcessorStatus, 10000);
-}
-function stopScreenshotStatusPolling() {
-    if (screenshotStatusInterval) {
-        clearInterval(screenshotStatusInterval);
-        screenshotStatusInterval = null;
-    }
-}
-window.addEventListener('load', startScreenshotStatusPolling);
 

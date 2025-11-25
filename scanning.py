@@ -16,7 +16,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.sql import func
 
 # Database imports
-from database import SessionLocal, Movie, Screenshot, IndexedPath, Config, MovieAudio
+from database import SessionLocal, Movie, Screenshot, IndexedPath, MovieAudio
 
 # Video processing imports
 from video_processing import (
@@ -229,25 +229,21 @@ def extract_year_from_name(name):
     return None
 
 def load_cleaning_patterns():
-    """Load approved cleaning patterns from database"""
-    db = SessionLocal()
+    """Load approved cleaning patterns from config file"""
+    from config import load_config
     try:
-        config_row = db.query(Config).filter(Config.key == 'cleaning_patterns').first()
-        if config_row:
-            try:
-                data = json.loads(config_row.value)
+        config = load_config()
+        data = config.get('cleaning_patterns')
+        if data:
+            if isinstance(data, dict):
                 return {
                     'exact_strings': set(data.get('exact_strings', [])),
                     'bracket_patterns': data.get('bracket_patterns', []),
                     'parentheses_patterns': data.get('parentheses_patterns', []),
                     'year_patterns': data.get('year_patterns', True),  # Default to True
                 }
-            except Exception as e:
-                logger.error(f"Error parsing cleaning patterns from database: {e}")
     except Exception as e:
         logger.error(f"Error loading cleaning patterns: {e}")
-    finally:
-        db.close()
     
     # Return defaults if not found
     return {

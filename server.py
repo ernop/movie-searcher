@@ -5,8 +5,9 @@ import sys
 import atexit
 
 # Import from main module
-from main import app, shutdown_flag, kill_all_active_subprocesses, logger, LOG_FILE
+from main import app, shutdown_flag, kill_all_active_subprocesses, logger
 import main
+from utils.logging import LOG_FILE
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C gracefully"""

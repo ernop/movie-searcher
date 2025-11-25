@@ -94,27 +94,152 @@ def has_been_launched(movie_path):
         db.close()
 
 def find_vlc_executable():
-    """Find VLC executable in common locations or PATH"""
+    """Find VLC executable in common locations, PATH, and Windows registry"""
+    
+    # First, check if VLC path is saved in config
+    try:
+        from config import load_config
+        config = load_config()
+        vlc_path = config.get("vlc_path")
+        if vlc_path and os.path.exists(vlc_path):
+            logger.info(f"Using VLC from config: {vlc_path}")
+            return vlc_path
+    except Exception as e:
+        logger.debug(f"Error loading VLC path from config: {e}")
+    
+    # Next check PATH
+    import shutil
+    vlc_in_path = shutil.which("vlc")
+    if vlc_in_path:
+        logger.info(f"Found VLC in PATH: {vlc_in_path}")
+        return vlc_in_path
+    
+    # Common installation paths
     vlc_paths = [
         r"C:\Program Files\VideoLAN\VLC\vlc.exe",
         r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-        os.path.expanduser(r"~\AppData\Local\Programs\VideoLAN\vlc.exe"),
-        "vlc"  # If in PATH
+        os.path.expanduser(r"~\AppData\Local\Programs\VideoLAN\VLC\vlc.exe"),
     ]
     
+    # Check common paths
     for path in vlc_paths:
-        if path == "vlc":
-            # Check if vlc is in PATH
-            try:
-                result = subprocess.run(["vlc", "--version"], capture_output=True, timeout=2)
-                if result.returncode == 0:
-                    return path
-            except:
-                continue
-        elif os.path.exists(path):
+        if os.path.exists(path):
+            logger.info(f"Found VLC at: {path}")
             return path
     
+    # On Windows, check registry
+    if os.name == 'nt':
+        try:
+            import winreg
+            # Check both 64-bit and 32-bit registry keys
+            registry_keys = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\VideoLAN\VLC"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\VideoLAN\VLC"),
+                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\VideoLAN\VLC"),
+            ]
+            
+            for hkey, key_path in registry_keys:
+                try:
+                    with winreg.OpenKey(hkey, key_path) as key:
+                        install_dir, _ = winreg.QueryValueEx(key, "InstallDir")
+                        vlc_path = os.path.join(install_dir, "vlc.exe")
+                        if os.path.exists(vlc_path):
+                            logger.info(f"Found VLC via registry: {vlc_path}")
+                            return vlc_path
+                except (FileNotFoundError, OSError):
+                    continue
+        except Exception as e:
+            logger.debug(f"Error checking registry for VLC: {e}")
+    
+    # Search in Program Files directories
+    if os.name == 'nt':
+        program_files_dirs = [
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+        ]
+        
+        for base_dir in program_files_dirs:
+            if not base_dir or not os.path.exists(base_dir):
+                continue
+            try:
+                for item in Path(base_dir).iterdir():
+                    if item.is_dir() and "vlc" in item.name.lower():
+                        vlc_exe = item / "vlc.exe"
+                        if vlc_exe.exists():
+                            logger.info(f"Found VLC by searching Program Files: {vlc_exe}")
+                            return str(vlc_exe)
+            except (PermissionError, OSError):
+                continue
+    
+    logger.warning("VLC not found in any common locations")
     return None
+
+def test_vlc_comprehensive():
+    """
+    Comprehensive test of VLC installation.
+    Tests VLC executable and returns status.
+    Returns dict with status, errors, and details.
+    """
+    vlc_path = find_vlc_executable()
+    
+    vlc_search_info = [
+        "PATH environment variable",
+        r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+        r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+        os.path.expanduser(r"~\AppData\Local\Programs\VideoLAN\vlc.exe"),
+        "Windows registry (HKLM and HKCU)",
+        "Program Files directories"
+    ]
+    
+    if not vlc_path:
+        return {
+            "ok": False,
+            "vlc_ok": False,
+            "errors": ["VLC not found. Install from https://www.videolan.org/vlc/"],
+            "vlc_path": None,
+            "vlc_version": None,
+            "checked_locations": vlc_search_info
+        }
+    
+    # Test VLC executable
+    vlc_version = None
+    vlc_ok = False
+    errors = []
+    
+    try:
+        result = subprocess.run(
+            [vlc_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            vlc_ok = True
+            # Extract version from output
+            version_match = re.search(r'VLC version ([0-9.]+)', result.stdout)
+            if version_match:
+                vlc_version = version_match.group(1)
+            else:
+                vlc_version = "OK"
+        else:
+            errors.append(f"VLC returned non-zero exit code: {result.returncode}")
+    except subprocess.TimeoutExpired:
+        errors.append("VLC version check timed out after 5 seconds")
+    except FileNotFoundError:
+        errors.append(f"VLC executable not found at: {vlc_path}")
+    except Exception as e:
+        errors.append(f"Error running VLC: {str(e)}")
+    
+    return {
+        "ok": vlc_ok,
+        "vlc_ok": vlc_ok,
+        "errors": errors,
+        "vlc_path": str(vlc_path) if vlc_path else None,
+        "vlc_version": vlc_version,
+        "checked_locations": vlc_search_info
+    }
 
 def close_vlc_processes():
     """Close all running VLC processes"""
@@ -630,13 +755,57 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     
     # Step 1: Verify file exists
     steps.append("Step 1: Verifying movie file exists")
+    logger.info(f"launch_movie_in_vlc: Checking file existence for path: {movie_path}")
+    logger.info(f"launch_movie_in_vlc: Path type: {type(movie_path)}, Path repr: {repr(movie_path)}")
+    
+    # Normalize path before checking (same as indexing does)
+    try:
+        normalized_path_obj = Path(movie_path).resolve()
+        normalized_path = str(normalized_path_obj)
+        logger.info(f"launch_movie_in_vlc: Normalized path: {normalized_path}")
+        if normalized_path != movie_path:
+            logger.info(f"launch_movie_in_vlc: Path changed after normalization: '{movie_path}' -> '{normalized_path}'")
+            movie_path = normalized_path
+            steps.append(f"  Path normalized: {normalized_path}")
+    except (OSError, RuntimeError) as e:
+        logger.warning(f"launch_movie_in_vlc: Failed to resolve path '{movie_path}': {e}, using original path")
+        # Try absolute() as fallback
+        try:
+            normalized_path = str(Path(movie_path).absolute())
+            logger.info(f"launch_movie_in_vlc: Using absolute() fallback: {normalized_path}")
+            if normalized_path != movie_path:
+                logger.info(f"launch_movie_in_vlc: Path changed after absolute(): '{movie_path}' -> '{normalized_path}'")
+                movie_path = normalized_path
+                steps.append(f"  Path normalized (absolute): {normalized_path}")
+        except Exception as e2:
+            logger.warning(f"launch_movie_in_vlc: Failed to get absolute path: {e2}, using original path")
+    
     if not os.path.exists(movie_path):
         error_msg = f"File not found: {movie_path}"
         steps.append(f"  ERROR: {error_msg}")
         results.append({"step": 1, "status": "error", "message": error_msg})
+        logger.error(f"launch_movie_in_vlc: File does not exist at path: {movie_path}")
+        logger.error(f"launch_movie_in_vlc: Path type: {type(movie_path)}, Path repr: {repr(movie_path)}")
+        # Try to find similar files in the same directory
+        try:
+            parent_dir = Path(movie_path).parent
+            if parent_dir.exists():
+                logger.error(f"launch_movie_in_vlc: Parent directory exists: {parent_dir}")
+                files_in_dir = list(parent_dir.iterdir())
+                logger.error(f"launch_movie_in_vlc: Files in parent directory ({len(files_in_dir)} total): {[f.name for f in files_in_dir[:20]]}")
+                # Check for case-insensitive match
+                expected_filename = Path(movie_path).name
+                for f in files_in_dir:
+                    if f.name.lower() == expected_filename.lower() and f.name != expected_filename:
+                        logger.error(f"launch_movie_in_vlc: Found case-insensitive match: '{f.name}' (expected: '{expected_filename}')")
+            else:
+                logger.error(f"launch_movie_in_vlc: Parent directory does not exist: {parent_dir}")
+        except Exception as e:
+            logger.error(f"launch_movie_in_vlc: Error checking parent directory: {e}")
         raise FileNotFoundError(error_msg)
     results.append({"step": 1, "status": "success", "message": f"File found: {movie_path}"})
     steps.append(f"  SUCCESS: File exists at {movie_path}")
+    logger.info(f"launch_movie_in_vlc: File exists, proceeding: {movie_path}")
     
     # Step 2: Find VLC executable
     steps.append("Step 2: Locating VLC executable")

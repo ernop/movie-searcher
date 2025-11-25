@@ -32,7 +32,6 @@
             </div>
             <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
                 <div id="statusMessage"></div>
-                <div id="screenshotProcessorStatus" class="screenshot-processor-status"></div>
                 <div id="currentlyPlaying" class="currently-playing">nothing playing</div>
                 <a href="#/setup" class="nav-link" id="navSetup">Setup</a>
             </div>
@@ -216,6 +215,15 @@
         <div class="page" id="pageSetup">
             <h1>Setup</h1>
 
+            <!-- System Status -->
+            <div class="setup-section" id="systemStatusSection" style="margin-bottom: 20px;">
+                <h3>System Status</h3>
+                <div id="systemStatus" style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 10px;">
+                    <div class="loading">Checking system status...</div>
+                </div>
+                <button class="btn btn-secondary" onclick="recheckSystemStatus()">Re-check System Status</button>
+            </div>
+
             <div class="setup-section">
                 <h3>Movies Folder</h3>
                 <p>Configure the folder where your movies are stored. The application will scan this folder to index all
@@ -300,11 +308,16 @@
 
         <div class="folder-dialog" id="folderDialog">
             <h3>Select Movies Folder</h3>
-            <p style="margin-bottom: 10px; color: #999; font-size: 13px;">Enter the full path to your movies folder:</p>
-            <input type="text" id="folderPathInput" placeholder="C:\Movies or D:\Movies\MyCollection"
-                style="margin-bottom: 15px;" autofocus>
-            <p style="margin-bottom: 15px; color: #777; font-size: 12px;">You can use forward slashes (/) or backslashes
-                (\) - they will be converted automatically.</p>
+            <p style="margin-bottom: 10px; color: #999; font-size: 13px;">Enter the <strong>full absolute path</strong> to your movies folder:</p>
+            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                <input type="text" id="folderPathInput" placeholder="D:\movies or C:\Movies\MyCollection"
+                    style="flex: 1; margin-bottom: 0;" autofocus>
+                <button class="btn btn-secondary" onclick="browseFolder()" style="white-space: nowrap;">Browse</button>
+            </div>
+            <p style="margin-bottom: 15px; color: #777; font-size: 12px;">
+                <strong>Required:</strong> Path must be absolute (start with drive letter like <code>D:\</code> or <code>C:\</code>).<br>
+                You can use forward slashes (/) or backslashes (\) - they will be converted automatically.
+            </p>
             <div class="dialog-buttons">
                 <button class="btn btn-secondary" onclick="hideFolderDialog()">Cancel</button>
                 <button class="btn btn-success" onclick="saveFolderPath()">Save</button>

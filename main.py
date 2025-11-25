@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 import os
 import json
@@ -26,74 +25,8 @@ import anthropic
 from fuzzywuzzy import fuzz, process
 
 # Setup logging
-import sys
-# Ensure UTF-8 output for console to avoid UnicodeEncodeError on Windows consoles
-try:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8")
-except Exception:
-    # Safe to ignore; file handler below still uses UTF-8
-    pass
-
-# Log file in root directory
-LOG_FILE = Path(__file__).parent / "movie_searcher.log"
-
-# Custom filter to suppress verbose video_processing logs from console
-class ConsoleLogFilter(logging.Filter):
-    """Filter to suppress verbose logs from video_processing module on console"""
-    def filter(self, record):
-        # Allow all logs that are WARNING or above
-        if record.levelno >= logging.WARNING:
-            return True
-        # Suppress INFO/DEBUG logs from video_processing module
-        if record.name.startswith('video_processing'):
-            return False
-        # Allow all other logs
-        return True
-
-# Global shutdown flag for filter (set during shutdown)
-_app_shutting_down = False
-
-# Custom filter to suppress asyncio shutdown errors (known Windows issue)
-class SuppressShutdownErrorsFilter(logging.Filter):
-    """Filter to suppress known harmless errors during shutdown"""
-    def filter(self, record):
-        # Suppress AssertionError from asyncio during shutdown (Windows ProactorEventLoop issue)
-        if record.levelno == logging.ERROR:
-            if 'asyncio' in record.name:
-                msg = record.getMessage() if hasattr(record, 'getMessage') else str(record.msg)
-                if 'AssertionError' in msg or '_attach' in msg:
-                    return False
-            # Suppress ffmpeg errors during shutdown (processes being killed is expected)
-            if 'video_processing' in record.name:
-                msg = record.getMessage() if hasattr(record, 'getMessage') else str(record.msg)
-                if '_ffmpeg_job failed' in msg and _app_shutting_down:
-                    return False
-        return True
-
-# Configure root logger
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.DEBUG)  # Capture everything
-
-# File handler: logs everything (DEBUG and above) with shutdown error suppression
-file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
-file_handler.setLevel(logging.DEBUG)
-file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(file_formatter)
-file_handler.addFilter(SuppressShutdownErrorsFilter())
-root_logger.addHandler(file_handler)
-
-# Console handler: only logs INFO and above, with filtering for video_processing
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)
-console_handler.addFilter(ConsoleLogFilter())
-console_handler.addFilter(SuppressShutdownErrorsFilter())
-console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_formatter)
-root_logger.addHandler(console_handler)
-
+from utils.logging import setup_logging, set_app_shutting_down
+setup_logging()
 logger = logging.getLogger(__name__)
 
 # Database setup - import from database module
@@ -367,43 +300,8 @@ def build_movie_cards(db, movies: List[Movie]) -> dict:
     return results
 
 
-# Auto-detect and save ffmpeg if not configured (called during startup)
-def auto_detect_ffmpeg():
-    """Auto-detect ffmpeg and save to config if found"""
-    config = load_config()
-    
-    # If already configured and valid, skip
-    if config.get("ffmpeg_path"):
-        is_valid, _ = validate_ffmpeg_path(config["ffmpeg_path"])
-        if is_valid:
-            return
-    
-    # Try to find ffmpeg in PATH
-    import shutil
-    ffmpeg_exe = shutil.which("ffmpeg")
-    if ffmpeg_exe:
-        is_valid, _ = validate_ffmpeg_path(ffmpeg_exe)
-        if is_valid:
-            config["ffmpeg_path"] = ffmpeg_exe
-            save_config(config)
-            logger.info(f"Auto-detected and saved ffmpeg: {ffmpeg_exe}")
-            return
-    
-    # Try common Windows locations
-    if os.name == 'nt':
-        common_paths = [
-            Path("C:/ffmpeg/bin/ffmpeg.exe"),
-            Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
-            Path("C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe"),
-        ]
-        for ffmpeg_path in common_paths:
-            if ffmpeg_path.exists():
-                is_valid, _ = validate_ffmpeg_path(str(ffmpeg_path))
-                if is_valid:
-                    config["ffmpeg_path"] = str(ffmpeg_path)
-                    save_config(config)
-                    logger.info(f"Auto-detected and saved ffmpeg: {ffmpeg_path}")
-                    return
+# Import ffmpeg setup functions from separate module
+from setup.ffmpeg_setup import auto_detect_ffmpeg
 
 # Define lifespan function after all dependencies are available
 from contextlib import asynccontextmanager
@@ -427,8 +325,51 @@ async def lifespan(app):
     # Initialize video processing and ffmpeg after DB is ready
     logger.info("Startup: initializing video processing...")
     initialize_video_processing(SCRIPT_DIR)
-    auto_detect_ffmpeg()
+    
+    # Comprehensive ffmpeg check: find, test, install, configure - retries until working
+    logger.info("Startup: checking ffmpeg configuration...")
+    ffmpeg_configured = auto_detect_ffmpeg()
+    
+    if ffmpeg_configured:
+        # Verify one more time that everything is working
+        ffmpeg_path = find_ffmpeg()
+        if ffmpeg_path:
+            from video_processing import test_ffmpeg_comprehensive
+            test_result = test_ffmpeg_comprehensive(ffmpeg_path)
+            if test_result["ok"] and test_result["ffmpeg_ok"] and test_result["ffprobe_ok"]:
+                logger.info(f"FFmpeg fully operational: {test_result.get('ffmpeg_version', 'unknown version')}")
+                logger.info(f"FFprobe fully operational: {test_result.get('ffprobe_version', 'unknown version')}")
+            else:
+                logger.error(f"FFmpeg configuration incomplete: {', '.join(test_result.get('errors', []))}")
+        else:
+            logger.error("FFmpeg path not found after configuration")
+    else:
+        logger.error("Failed to configure ffmpeg. Screenshot extraction will be disabled.")
+    
     logger.info("Startup: video processing ready.")
+    
+    # Check and configure VLC
+    logger.info("Startup: checking VLC configuration...")
+    from vlc_integration import find_vlc_executable, test_vlc_comprehensive
+    vlc_path = find_vlc_executable()
+    
+    if vlc_path:
+        # Save VLC path to config
+        config = load_config()
+        if config.get("vlc_path") != vlc_path:
+            config["vlc_path"] = vlc_path
+            save_config(config)
+            logger.info(f"VLC path saved to config: {vlc_path}")
+        
+        # Test VLC
+        vlc_test = test_vlc_comprehensive()
+        if vlc_test["ok"]:
+            logger.info(f"VLC fully operational: {vlc_test.get('vlc_version', 'unknown version')}")
+            logger.info(f"  VLC path: {vlc_path}")
+        else:
+            logger.warning(f"VLC found but not working: {', '.join(vlc_test.get('errors', []))}")
+    else:
+        logger.warning("VLC not found. Movie launching will not be available. Install VLC from https://www.videolan.org/vlc/")
     
     # Screenshots are served via custom endpoint /screenshots/{filename} for proper URL encoding handling
     # StaticFiles mount removed - using custom endpoint handles spaces and special characters correctly
@@ -451,8 +392,7 @@ async def lifespan(app):
     
     # Shutdown
     logger.info("Shutdown event triggered, cleaning up...")
-    global _app_shutting_down
-    _app_shutting_down = True
+    set_app_shutting_down(True)
     shutdown_flag.set()
     kill_all_active_subprocesses()
 
@@ -460,48 +400,13 @@ async def lifespan(app):
 app = FastAPI(title="Movie Searcher", lifespan=lifespan)
 
 
-class MovieInfo(BaseModel):
-    path: str
-    name: str
-    length: Optional[float] = None
-    created: Optional[str] = None
-    size: Optional[int] = None
-
-class SearchRequest(BaseModel):
-    query: str
-
-class LaunchRequest(BaseModel):
-    movie_id: int
-    subtitle_path: Optional[str] = None
-    close_existing_vlc: bool = True
-    start_time: Optional[float] = None  # Start time in seconds
-
-class ChangeStatusRequest(BaseModel):
-    movie_id: int
-    movieStatus: Optional[str] = None  # None = unset, "watched", "unwatched", "want_to_watch"
-
-class RatingRequest(BaseModel):
-    movie_id: int
-    rating: int  # 1-5 only
-
-class ConfigRequest(BaseModel):
-    movies_folder: Optional[str] = None
-    settings: Optional[dict] = None
-
-class FolderRequest(BaseModel):
-    path: str
-
-class CleanNameTestRequest(BaseModel):
-    text: str
-
-class ScreenshotsIntervalRequest(BaseModel):
-    movie_id: int
-    every_minutes: float = 3
-    subtitle_path: Optional[str] = None  # Path to subtitle file to burn in (if any)
-
-class AiSearchRequest(BaseModel):
-    query: str
-    provider: Literal["openai", "anthropic"] = "openai"
+# Import Pydantic models from core module
+from core.models import (
+    MovieInfo, SearchRequest, LaunchRequest, ChangeStatusRequest,
+    RatingRequest, ConfigRequest, FolderRequest, CleanNameTestRequest,
+    ScreenshotsIntervalRequest, AiSearchRequest, PlaylistCreateRequest,
+    PlaylistAddMovieRequest
+)
 
 @app.post("/api/frames/start")
 async def start_frame_worker():
@@ -1310,6 +1215,49 @@ async def launch_movie(request: LaunchRequest):
         if not movie:
             raise HTTPException(status_code=404, detail=f"Movie not found: {request.movie_id}")
         movie_path = movie.path
+        logger.info(f"Launch: Retrieved movie path from database: movie_id={request.movie_id}, path={movie_path}")
+        
+        # Normalize path before checking existence (same as indexing does)
+        from pathlib import Path
+        try:
+            normalized_path_obj = Path(movie_path).resolve()
+            normalized_path = str(normalized_path_obj)
+            logger.info(f"Launch: Normalized path: {normalized_path}")
+            if normalized_path != movie_path:
+                logger.info(f"Launch: Path changed after normalization: '{movie_path}' -> '{normalized_path}'")
+                movie_path = normalized_path
+        except (OSError, RuntimeError) as e:
+            logger.warning(f"Launch: Failed to resolve path '{movie_path}': {e}, using original path")
+            # Try absolute() as fallback
+            try:
+                normalized_path = str(Path(movie_path).absolute())
+                logger.info(f"Launch: Using absolute() fallback: {normalized_path}")
+                if normalized_path != movie_path:
+                    logger.info(f"Launch: Path changed after absolute(): '{movie_path}' -> '{normalized_path}'")
+                    movie_path = normalized_path
+            except Exception as e2:
+                logger.warning(f"Launch: Failed to get absolute path: {e2}, using original path")
+        
+        # Check if file exists before launching
+        import os
+        if not os.path.exists(movie_path):
+            error_msg = f"File not found: {movie_path}"
+            logger.error(f"Launch: File does not exist at path: {movie_path}")
+            logger.error(f"Launch: Original database path was: {movie.path}")
+            logger.error(f"Launch: Path type: {type(movie_path)}, Path repr: {repr(movie_path)}")
+            # Try to find similar files in the same directory
+            try:
+                parent_dir = Path(movie_path).parent
+                if parent_dir.exists():
+                    logger.error(f"Launch: Parent directory exists: {parent_dir}")
+                    logger.error(f"Launch: Files in parent directory: {list(parent_dir.iterdir())[:10]}")
+                else:
+                    logger.error(f"Launch: Parent directory does not exist: {parent_dir}")
+            except Exception as e:
+                logger.error(f"Launch: Error checking parent directory: {e}")
+            raise HTTPException(status_code=404, detail=error_msg)
+        else:
+            logger.info(f"Launch: File exists, proceeding with launch: {movie_path}")
     finally:
         db.close()
     
@@ -1633,12 +1581,18 @@ async def get_config():
         config = load_config()
         movies_folder = get_movies_folder()
         
-        # Check ffmpeg status
+        # Check ffmpeg status and run comprehensive test
         ffmpeg_path = find_ffmpeg()
+        ffmpeg_test = None
+        if ffmpeg_path:
+            from video_processing import test_ffmpeg_comprehensive
+            ffmpeg_test = test_ffmpeg_comprehensive(ffmpeg_path)
+        
         ffmpeg_status = {
             "found": ffmpeg_path is not None,
             "path": ffmpeg_path or "",
-            "configured": config.get("ffmpeg_path") or None
+            "configured": config.get("ffmpeg_path") or None,
+            "test": ffmpeg_test
         }
         
         # Return all config settings
@@ -1649,6 +1603,33 @@ async def get_config():
         }
     finally:
         db.close()
+
+@app.get("/api/test-ffmpeg")
+async def test_ffmpeg_endpoint():
+    """Test ffmpeg installation comprehensively"""
+    from video_processing import test_ffmpeg_comprehensive
+    ffmpeg_path = find_ffmpeg_core(load_config)
+    if not ffmpeg_path:
+        return {
+            "ok": False,
+            "ffmpeg_ok": False,
+            "ffprobe_ok": False,
+            "errors": ["ffmpeg not configured. Please install ffmpeg and configure the path in settings."],
+            "ffmpeg_path": None,
+            "ffprobe_path": None,
+            "ffmpeg_version": None,
+            "ffprobe_version": None
+        }
+    # Get configured ffprobe_path if available (for winget installations where they're in separate dirs)
+    config = load_config()
+    ffprobe_path = config.get("ffprobe_path")
+    return test_ffmpeg_comprehensive(ffmpeg_path, ffprobe_path=ffprobe_path)
+
+@app.get("/api/test-vlc")
+async def test_vlc_endpoint():
+    """Test VLC installation comprehensively"""
+    from vlc_integration import test_vlc_comprehensive
+    return test_vlc_comprehensive()
 
 @app.post("/api/config")
 async def set_config(request: ConfigRequest):
@@ -1670,8 +1651,17 @@ async def set_config(request: ConfigRequest):
         
         # Normalize path (handle both / and \)
         folder_path = request.movies_folder.strip()
-        # Convert forward slashes to backslashes on Windows
+        
+        # Validate that path is absolute before processing
         if os.name == 'nt':  # Windows
+            # On Windows, absolute paths start with drive letter (C:\) or UNC (\\)
+            is_drive_path = folder_path and len(folder_path) >= 3 and folder_path[1] == ':' and folder_path[2] in ['\\', '/']
+            is_unc_path = folder_path and folder_path.startswith('\\\\')
+            if not (is_drive_path or is_unc_path):
+                error_msg = f"Path must be absolute (start with drive letter like C:\\ or D:\\): '{folder_path}'"
+                logger.error(error_msg)
+                raise HTTPException(status_code=400, detail=error_msg)
+            # Convert forward slashes to backslashes on Windows
             folder_path = folder_path.replace('/', '\\')
             # Normalize double backslashes (but preserve UNC paths)
             if not folder_path.startswith('\\\\'):
@@ -1679,15 +1669,32 @@ async def set_config(request: ConfigRequest):
             # Remove trailing backslash (unless it's a drive root like C:\)
             if folder_path.endswith('\\') and len(folder_path) > 3:
                 folder_path = folder_path.rstrip('\\')
+        else:
+            # On Unix-like systems, absolute paths start with /
+            if not (folder_path and folder_path.startswith('/')):
+                error_msg = f"Path must be absolute (start with /): '{folder_path}'"
+                logger.error(error_msg)
+                raise HTTPException(status_code=400, detail=error_msg)
         
         logger.info(f"Normalized path: '{folder_path}'")
         
         # Use pathlib for validation (No fallback to os.path)
         path_obj = Path(folder_path)
+        # Get absolute path representation (doesn't require path to exist)
+        path_obj = path_obj.absolute()
+        logger.info(f"Absolute path: '{path_obj}'")
         
         if not path_obj.exists():
+            # Additional diagnostics
+            logger.error(f"Path does not exist: '{path_obj}'")
+            logger.error(f"Path type: {type(path_obj)}")
+            logger.error(f"Path parts: {path_obj.parts}")
+            # Check if parent exists
+            if path_obj.parent.exists():
+                logger.error(f"Parent directory exists: '{path_obj.parent}'")
+            else:
+                logger.error(f"Parent directory also does not exist: '{path_obj.parent}'")
             error_msg = f"Path not found: '{folder_path}'"
-            logger.error(error_msg)
             raise HTTPException(status_code=404, detail=error_msg)
         
         if not path_obj.is_dir():
@@ -1695,13 +1702,14 @@ async def set_config(request: ConfigRequest):
             logger.error(error_msg)
             raise HTTPException(status_code=400, detail=error_msg)
         
-        # Save movies folder to config
-        config["movies_folder"] = folder_path
+        # Save movies folder to config (use absolute path for consistency)
+        absolute_path_str = str(path_obj)
+        config["movies_folder"] = absolute_path_str
         save_config(config)
-        logger.info(f"Saved to config: {folder_path}")
+        logger.info(f"Saved to config: {absolute_path_str}")
         
         # Update global
-        ROOT_MOVIE_PATH = folder_path
+        ROOT_MOVIE_PATH = absolute_path_str
         logger.info(f"Updated ROOT_MOVIE_PATH to: {ROOT_MOVIE_PATH}")
     
     # Update user settings if provided
@@ -2340,12 +2348,6 @@ async def get_duplicate_movies():
         db.close()
 
 # --- Playlist API Endpoints ---
-
-class PlaylistCreateRequest(BaseModel):
-    name: str
-
-class PlaylistAddMovieRequest(BaseModel):
-    movie_id: int
 
 @app.get("/api/playlists")
 async def get_playlists():
