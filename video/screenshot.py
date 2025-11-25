@@ -186,10 +186,17 @@ def process_screenshot_extraction_worker(screenshot_info):
         
         logger.info(f"process_screenshot_extraction_worker: {Path(video_path).name} at {timestamp_seconds}s, subtitle_path={subtitle_path}")
 
+        # Check if video file exists first
+        if not Path(video_path).exists():
+            logger.error(f"Cannot extract screenshot: video file not found: {video_path}")
+            add_scan_log_func("error", f"Video file not found: {Path(video_path).name}")
+            return True  # Return True to avoid retrying a missing file
+        
         # Check if video stream exists before proceeding
         # This prevents "Output file #0 does not contain any stream" errors for audio files
         if not has_video_stream(video_path):
             logger.info(f"No video stream found in {video_path}, skipping screenshot extraction")
+            add_scan_log_func("info", f"Skipping audio-only file: {Path(video_path).name}")
             # We return True to indicate "success" in handling this item (by skipping it)
             # rather than failing and potentially retrying or logging errors.
             return True
@@ -358,6 +365,13 @@ def extract_screenshots(video_path, num_screenshots, load_config_func, find_ffmp
         if add_scan_log_func:
             add_scan_log_func("info", f"  All {num_screenshots} screenshots already exist")
         return existing_screenshots
+    
+    # Check if video file exists
+    if not video_path_obj.exists():
+        if add_scan_log_func:
+            add_scan_log_func("warning", f"  Video file not found, skipping screenshots")
+        logger.warning(f"Cannot extract screenshots: video file not found: {video_path}")
+        return existing_screenshots if existing_screenshots else []
     
     # Check if video stream exists
     if not has_video_stream(video_path):

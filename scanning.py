@@ -16,7 +16,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.sql import func
 
 # Database imports
-from database import SessionLocal, Movie, Screenshot, IndexedPath, MovieAudio
+from database import SessionLocal, Movie, Screenshot, IndexedPath, MovieAudio, Rating, MovieStatus, LaunchHistory, PlaylistItem
 
 # Video processing imports
 from video_processing import (
@@ -49,14 +49,17 @@ scan_progress = {
     "logs": [],  # List of log entries: {"timestamp": str, "level": str, "message": str}
     "frame_queue_size": 0,
     "frames_processed": 0,
-    "frames_total": 0
+    "frames_total": 0,
+    "movies_added": 0,      # New movies added to database
+    "movies_updated": 0,    # Existing movies updated
+    "movies_removed": 0     # Orphaned movies removed
 }
 
 # Import config functions directly from shared module
 from config import load_config, get_movies_folder
 
 def add_scan_log(level: str, message: str):
-    """Add a log entry to scan progress"""
+    """Add a log entry to scan progress and permanent log file"""
     global scan_progress
     timestamp = datetime.now().strftime("%H:%M:%S")
     log_entry = {
@@ -65,6 +68,16 @@ def add_scan_log(level: str, message: str):
         "message": message
     }
     scan_progress["logs"].append(log_entry)
+    
+    # Also write to permanent log file
+    if level == "error":
+        logger.error(f"[SCAN] {message}")
+    elif level == "warning":
+        logger.warning(f"[SCAN] {message}")
+    elif level == "success":
+        logger.info(f"[SCAN] ✓ {message}")
+    else:
+        logger.info(f"[SCAN] {message}")
 
 def is_sample_file(file_path):
     """Check if a file should be excluded (contains 'sample' in name, case-insensitive)"""
@@ -1247,6 +1260,9 @@ def scan_directory(root_path, state=None, progress_callback=None):
         scan_progress["total"] = total_files
         scan_progress["current"] = 0
         scan_progress["status"] = "scanning"
+        scan_progress["movies_added"] = 0
+        scan_progress["movies_updated"] = 0
+        scan_progress["movies_removed"] = 0
         add_scan_log("success", f"Total files to process: {total_files}")
         
         indexed = 0
@@ -1277,7 +1293,16 @@ def scan_directory(root_path, state=None, progress_callback=None):
                 
                 add_scan_log("info", f"[{indexed + 1}/{total_files}] Processing: {file_path.name}")
                 
-                if index_movie(file_path, db, patterns):
+                # Check if movie already exists to track add vs update
+                normalized_path = str(file_path.resolve() if hasattr(file_path, 'resolve') else Path(file_path).resolve())
+                movie_existed = db.query(Movie).filter(Movie.path == normalized_path).first() is not None
+                
+                was_updated = index_movie(file_path, db, patterns)
+                if was_updated:
+                    if movie_existed:
+                        scan_progress["movies_updated"] += 1
+                    else:
+                        scan_progress["movies_added"] += 1
                     updated += 1
                 indexed += 1
                 
@@ -1294,7 +1319,74 @@ def scan_directory(root_path, state=None, progress_callback=None):
         db.execute(stmt)
         db.commit()
         
-        add_scan_log("success", f"Scan complete: {indexed} files processed, {updated} updated")
+        # Build summary message with counts
+        summary_parts = [f"{indexed} files processed"]
+        if scan_progress["movies_added"] > 0:
+            summary_parts.append(f"{scan_progress['movies_added']} added")
+        if scan_progress["movies_updated"] > 0:
+            summary_parts.append(f"{scan_progress['movies_updated']} updated")
+        add_scan_log("success", f"Scan complete: {', '.join(summary_parts)}")
+        
+        # Clean up orphaned database entries (movies whose files no longer exist)
+        add_scan_log("info", "Checking for orphaned database entries...")
+        root_path_str = str(root_path)
+        # Find all movies in database that start with this root path
+        orphaned_movies = []
+        all_movies_in_path = db.query(Movie).filter(
+            Movie.path.like(f"{root_path_str}%")
+        ).all()
+        
+        for movie in all_movies_in_path:
+            if not os.path.exists(movie.path):
+                orphaned_movies.append(movie)
+        
+        add_scan_log("info", f"Scanned {len(all_movies_in_path)} movies, found {len(orphaned_movies)} with missing files")
+        
+        if orphaned_movies:
+            add_scan_log("warning", f"Found {len(orphaned_movies)} movies with missing files, removing from database...")
+            removed_count = 0
+            failed_count = 0
+            for movie in orphaned_movies:
+                try:
+                    # Delete related screenshots first
+                    screenshots = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
+                    for screenshot in screenshots:
+                        # Try to delete screenshot file from disk if it exists
+                        if screenshot.shot_path and os.path.exists(screenshot.shot_path):
+                            try:
+                                os.remove(screenshot.shot_path)
+                            except Exception as e:
+                                logger.debug(f"Could not delete screenshot file {screenshot.shot_path}: {e}")
+                        db.delete(screenshot)
+                    
+                    # Delete other related records
+                    db.query(Rating).filter(Rating.movie_id == movie.id).delete()
+                    db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).delete()
+                    db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).delete()
+                    db.query(PlaylistItem).filter(PlaylistItem.movie_id == movie.id).delete()
+                    db.query(MovieAudio).filter(MovieAudio.movie_id == movie.id).delete()
+                    
+                    # Delete the movie itself
+                    db.delete(movie)
+                    
+                    # Commit each deletion individually so one failure doesn't affect others
+                    db.commit()
+                    removed_count += 1
+                    scan_progress["movies_removed"] += 1
+                    
+                    if removed_count <= 10 or removed_count % 50 == 0:
+                        add_scan_log("info", f"Removed: {movie.name} (file not found: {Path(movie.path).name})")
+                    
+                except Exception as e:
+                    logger.error(f"Error removing orphaned movie {movie.name}: {e}")
+                    db.rollback()
+                    failed_count += 1
+            
+            if failed_count > 0:
+                add_scan_log("warning", f"Failed to remove {failed_count} orphaned movie(s)")
+            add_scan_log("success", f"Removed {removed_count} orphaned movie(s) from database")
+        else:
+            add_scan_log("info", "No orphaned entries found")
         
         # After scan completes, enqueue screenshot jobs for movies without screenshots
         add_scan_log("info", "Checking for movies without screenshots...")
@@ -1363,6 +1455,9 @@ def run_scan_async(root_path: str):
         scan_progress["logs"] = []  # Clear previous logs
         scan_progress["frames_processed"] = 0
         scan_progress["frames_total"] = 0
+        scan_progress["movies_added"] = 0
+        scan_progress["movies_updated"] = 0
+        scan_progress["movies_removed"] = 0
         
         # Clear frame queue
         while not frame_extraction_queue.empty():
@@ -1384,7 +1479,12 @@ def run_scan_async(root_path: str):
         add_scan_log("info", "=" * 60)
         add_scan_log("success", f"Scan completed successfully!")
         add_scan_log("info", f"  Files processed: {result['indexed']}")
-        add_scan_log("info", f"  Files updated: {result['updated']}")
+        if scan_progress["movies_added"] > 0:
+            add_scan_log("info", f"  Movies added: {scan_progress['movies_added']}")
+        if scan_progress["movies_updated"] > 0:
+            add_scan_log("info", f"  Movies updated: {scan_progress['movies_updated']}")
+        if scan_progress["movies_removed"] > 0:
+            add_scan_log("info", f"  Movies removed: {scan_progress['movies_removed']}")
         queue_size = frame_extraction_queue.qsize()
         if queue_size > 0:
             add_scan_log("info", f"  Frames queued: {queue_size} (processing in background)")

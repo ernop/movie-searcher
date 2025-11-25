@@ -69,8 +69,16 @@ def get_uvicorn_log_config():
         },
     }
 
-def run_server():
-    """Run the uvicorn server with configured settings"""
+def run_server(open_browser_url: str | None = None):
+    """Run the uvicorn server with configured settings
+    
+    Args:
+        open_browser_url: If set, opens this URL in browser once server is ready
+    """
+    # Set browser URL in main module (checked during lifespan startup)
+    if open_browser_url:
+        main._open_browser_url = open_browser_url
+    
     # Register atexit handler for cleanup on exit
     atexit.register(lambda: (shutdown_flag.set(), kill_all_active_subprocesses()))
     

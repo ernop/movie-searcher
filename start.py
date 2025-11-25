@@ -153,7 +153,7 @@ def run_setup_vlc() -> bool:
         print(f"ERROR: Failed to run setup/setup_vlc.py: {e}")
         return False
 
-def start_server():
+def start_server(open_browser_url: str | None = None):
     """Start the server by importing and running it"""
     print("Starting Movie Searcher server...")
     print(f"Server will be available at {SERVER_URL}")
@@ -162,7 +162,7 @@ def start_server():
     
     # Import and run the server
     from server import run_server
-    run_server()
+    run_server(open_browser_url=open_browser_url)
 
 def main():
     """Main startup logic"""
@@ -226,21 +226,9 @@ def main():
         input("Press Enter to exit...")
         return 1
     
-    # Wait a moment for any setup to complete
-    time.sleep(1)
-    
-    # Open browser after a short delay (server will start shortly)
-    print(f"\nOpening browser to {SERVER_URL}...")
-    print("(Server will start in a moment)")
-    time.sleep(0.5)
-    webbrowser.open(SERVER_URL)
-    
-    print()
-    print("=" * 60)
-    
-    # Start the server (this will block until Ctrl+C)
+    # Start the server (blocks until Ctrl+C, opens browser when ready)
     try:
-        start_server()
+        start_server(open_browser_url=SERVER_URL)
     except KeyboardInterrupt:
         print("\n\nServer stopped by user.")
         return 0

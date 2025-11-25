@@ -7,6 +7,7 @@ import json
 import subprocess
 import re
 import shutil
+import webbrowser
 from pathlib import Path
 from datetime import datetime
 import hashlib
@@ -28,6 +29,9 @@ from fuzzywuzzy import fuzz, process
 from utils.logging import setup_logging, set_app_shutting_down
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# Browser URL to open on startup (set by server.py if launched via start.py)
+_open_browser_url: str | None = None
 
 # Database setup - import from database module
 from database import (
@@ -348,28 +352,34 @@ async def lifespan(app):
     
     logger.info("Startup: video processing ready.")
     
-    # Check and configure VLC
+    # Check and configure VLC (REQUIRED - server will not start without working VLC)
     logger.info("Startup: checking VLC configuration...")
     from vlc_integration import find_vlc_executable, test_vlc_comprehensive
     vlc_path = find_vlc_executable()
     
-    if vlc_path:
-        # Save VLC path to config
-        config = load_config()
-        if config.get("vlc_path") != vlc_path:
-            config["vlc_path"] = vlc_path
-            save_config(config)
-            logger.info(f"VLC path saved to config: {vlc_path}")
-        
-        # Test VLC
-        vlc_test = test_vlc_comprehensive()
-        if vlc_test["ok"]:
-            logger.info(f"VLC fully operational: {vlc_test.get('vlc_version', 'unknown version')}")
-            logger.info(f"  VLC path: {vlc_path}")
-        else:
-            logger.warning(f"VLC found but not working: {', '.join(vlc_test.get('errors', []))}")
+    if not vlc_path:
+        logger.error("VLC not found. VLC is required to launch movies.")
+        logger.error("Install VLC from https://www.videolan.org/vlc/")
+        logger.error("Or use: winget install --id=VideoLAN.VLC")
+        raise RuntimeError("VLC not found - cannot start server")
+    
+    # Save VLC path to config
+    config = load_config()
+    if config.get("vlc_path") != vlc_path:
+        config["vlc_path"] = vlc_path
+        save_config(config)
+        logger.info(f"VLC path saved to config: {vlc_path}")
+    
+    # Test VLC - must pass to start server
+    vlc_test = test_vlc_comprehensive(vlc_path)
+    if vlc_test["ok"]:
+        logger.info(f"VLC fully operational: {vlc_test.get('vlc_version', 'OK')}")
+        logger.info(f"  VLC path: {vlc_path}")
     else:
-        logger.warning("VLC not found. Movie launching will not be available. Install VLC from https://www.videolan.org/vlc/")
+        logger.error(f"VLC found but not working: {', '.join(vlc_test.get('errors', []))}")
+        logger.error(f"VLC path: {vlc_path}")
+        logger.error("VLC must be fully functional to start server")
+        raise RuntimeError(f"VLC validation failed: {', '.join(vlc_test.get('errors', []))}")
     
     # Screenshots are served via custom endpoint /screenshots/{filename} for proper URL encoding handling
     # StaticFiles mount removed - using custom endpoint handles spaces and special characters correctly
@@ -387,6 +397,11 @@ async def lifespan(app):
     except Exception as e:
         logger.error(f"Error during lifespan startup (final phase): {e}", exc_info=True)
         raise
+    
+    # Open browser if requested (set by server.py before uvicorn starts)
+    if _open_browser_url:
+        logger.info(f"Opening browser to {_open_browser_url}")
+        webbrowser.open(_open_browser_url)
     
     yield
     
@@ -609,7 +624,10 @@ async def get_scan_progress():
         "logs": scan_progress.get("logs", []),
         "frame_queue_size": frame_extraction_queue.qsize(),
         "frames_processed": scan_progress.get("frames_processed", 0),
-        "frames_total": scan_progress.get("frames_total", 0)
+        "frames_total": scan_progress.get("frames_total", 0),
+        "movies_added": scan_progress.get("movies_added", 0),
+        "movies_updated": scan_progress.get("movies_updated", 0),
+        "movies_removed": scan_progress.get("movies_removed", 0)
     }
 
 @app.get("/api/scan-logs")

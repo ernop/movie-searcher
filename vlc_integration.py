@@ -175,13 +175,17 @@ def find_vlc_executable():
     logger.warning("VLC not found in any common locations")
     return None
 
-def test_vlc_comprehensive():
+def test_vlc_comprehensive(vlc_path=None):
     """
     Comprehensive test of VLC installation.
-    Tests VLC executable and returns status.
-    Returns dict with status, errors, and details.
+    Simply checks if VLC executable exists and is accessible - we don't run --version
+    because on Windows that can pop up dialogs requiring user interaction.
+    
+    Args:
+        vlc_path: Optional path to VLC executable. If not provided, will search for it.
     """
-    vlc_path = find_vlc_executable()
+    if not vlc_path:
+        vlc_path = find_vlc_executable()
     
     vlc_search_info = [
         "PATH environment variable",
@@ -202,35 +206,23 @@ def test_vlc_comprehensive():
             "checked_locations": vlc_search_info
         }
     
-    # Test VLC executable
-    vlc_version = None
+    # Simple validation: check if file exists and is executable
+    # We DON'T run 'vlc --version' because on Windows it can pop up GUI dialogs
+    # that require user interaction (pressing Enter). Since we only need VLC to 
+    # launch movies, verifying the executable exists and is accessible is sufficient.
     vlc_ok = False
+    vlc_version = None
     errors = []
     
-    try:
-        result = subprocess.run(
-            [vlc_path, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode == 0:
-            vlc_ok = True
-            # Extract version from output
-            version_match = re.search(r'VLC version ([0-9.]+)', result.stdout)
-            if version_match:
-                vlc_version = version_match.group(1)
-            else:
-                vlc_version = "OK"
-        else:
-            errors.append(f"VLC returned non-zero exit code: {result.returncode}")
-    except subprocess.TimeoutExpired:
-        errors.append("VLC version check timed out after 5 seconds")
-    except FileNotFoundError:
+    if not os.path.exists(vlc_path):
         errors.append(f"VLC executable not found at: {vlc_path}")
-    except Exception as e:
-        errors.append(f"Error running VLC: {str(e)}")
+    elif not os.access(vlc_path, os.X_OK):
+        errors.append(f"VLC file exists but is not executable: {vlc_path}")
+    else:
+        # File exists and is executable - that's all we need!
+        vlc_ok = True
+        vlc_version = "OK"
+        logger.info(f"VLC validated: {vlc_path}")
     
     return {
         "ok": vlc_ok,

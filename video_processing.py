@@ -359,6 +359,11 @@ def has_video_stream(file_path):
     ffprobe = _get_ffprobe_path_from_config()
     if not ffprobe:
         return False
+    
+    # Check if file exists first
+    if not os.path.exists(file_path):
+        logger.warning(f"Cannot check video stream: file does not exist: {file_path}")
+        return False
         
     try:
         cmd = [
@@ -371,6 +376,13 @@ def has_video_stream(file_path):
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         if result.returncode != 0:
+            # Check if it's a "no such file" error or other error
+            stderr_msg = result.stderr.strip()
+            if stderr_msg and ("No such file" in stderr_msg or "does not exist" in stderr_msg):
+                logger.warning(f"File not accessible by ffprobe: {file_path}")
+            elif stderr_msg:
+                logger.debug(f"ffprobe returned non-zero for {file_path}: {stderr_msg}")
+            # Return False for any ffprobe failure (file not found, no video stream, etc.)
             return False
         return result.stdout.strip() == "video"
     except Exception as e:

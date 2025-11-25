@@ -1,6 +1,10 @@
 """
 Helper script to detect and save VLC path to config.
 Called from start.py during startup.
+
+CRITICAL: VLC executable must exist and be accessible before the server starts.
+We don't run '--version' because on Windows it can pop up GUI dialogs that
+require user interaction (pressing Enter). File existence check is sufficient.
 """
 import os
 import shutil
@@ -117,6 +121,7 @@ def setup_vlc():
     
     for vlc_path in common_paths:
         if vlc_path.exists():
+            # VLC found - save it (we don't test --version as it can pop up dialogs on Windows)
             config["vlc_path"] = str(vlc_path)
             try:
                 save_config(config)

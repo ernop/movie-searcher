@@ -1,7 +1,6 @@
 // Application initialization
 
 window.addEventListener('load', startCurrentlyPlayingPolling);
-window.addEventListener('load', updateScreenshotProcessorStatus);
 
 // Load stats and folder path on page load
 loadStats();

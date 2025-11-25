@@ -440,7 +440,20 @@ function startProgressPolling(progressContainer, progressBar, progressStatus, pr
                     progressBar.style.width = percent + '%';
                     progressBar.textContent = percent + '%';
                 }
-                if (progressCount) progressCount.textContent = `${data.current} / ${data.total}`;
+                
+                // Show file count and add/update/remove counts
+                if (progressCount) {
+                    let countText = `${data.current} / ${data.total}`;
+                    const statsParts = [];
+                    if (data.movies_added > 0) statsParts.push(`+${data.movies_added}`);
+                    if (data.movies_updated > 0) statsParts.push(`~${data.movies_updated}`);
+                    if (data.movies_removed > 0) statsParts.push(`-${data.movies_removed}`);
+                    if (statsParts.length > 0) {
+                        countText += ` (${statsParts.join(', ')})`;
+                    }
+                    progressCount.textContent = countText;
+                }
+                
                 if (progressFile) progressFile.textContent = data.current_file ? `Scanning: ${data.current_file}` : '';
                 
                 if (progressStatus) {
@@ -482,7 +495,18 @@ function startProgressPolling(progressContainer, progressBar, progressStatus, pr
                 // Update progress status to show completion
                 if (progressStatus) {
                     if (data.status === 'complete') {
-                        progressStatus.textContent = `Scan complete: ${data.current} movies indexed`;
+                        // Build completion message with stats
+                        const statsParts = [];
+                        if (data.movies_added > 0) statsParts.push(`${data.movies_added} added`);
+                        if (data.movies_updated > 0) statsParts.push(`${data.movies_updated} updated`);
+                        if (data.movies_removed > 0) statsParts.push(`${data.movies_removed} removed`);
+                        
+                        let statusText = `Scan complete: ${data.current} movies`;
+                        if (statsParts.length > 0) {
+                            statusText += ` (${statsParts.join(', ')})`;
+                        }
+                        progressStatus.textContent = statusText;
+                        
                         if (progressBar) {
                             progressBar.style.width = '100%';
                             progressBar.textContent = '100%';
@@ -494,7 +518,17 @@ function startProgressPolling(progressContainer, progressBar, progressStatus, pr
                 }
                 
                 if (data.status === 'complete') {
-                    showStatus(`Scan complete: ${data.current} movies indexed`, 'success');
+                    // Build completion message with stats for toast
+                    const statsParts = [];
+                    if (data.movies_added > 0) statsParts.push(`${data.movies_added} added`);
+                    if (data.movies_updated > 0) statsParts.push(`${data.movies_updated} updated`);
+                    if (data.movies_removed > 0) statsParts.push(`${data.movies_removed} removed`);
+                    
+                    let toastMsg = `Scan complete: ${data.current} movies`;
+                    if (statsParts.length > 0) {
+                        toastMsg += ` (${statsParts.join(', ')})`;
+                    }
+                    showStatus(toastMsg, 'success');
                     loadStats();
                     // Reload setup stats if on setup page
                     const route = getRoute();
