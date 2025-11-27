@@ -736,14 +736,15 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     steps = []
     results = []
     
-    # Load config to check launch_with_subtitles_on setting
+    # Load config for launch settings
+    config = {}  # Default empty config
     try:
         from config import load_config
         config = load_config()
-        launch_with_subtitles_on = config.get("launch_with_subtitles_on", True)
     except Exception as e:
-        logger.warning(f"Failed to load config for launch_with_subtitles_on: {e}. Defaulting to True.")
-        launch_with_subtitles_on = True
+        logger.warning(f"Failed to load config: {e}. Using defaults.")
+    
+    launch_with_subtitles_on = config.get("launch_with_subtitles_on", True)
     
     # Step 1: Verify file exists
     steps.append("Step 1: Verifying movie file exists")
@@ -850,11 +851,52 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         steps.append("Step 2.5: Skipping close existing VLC (option disabled)")
         results.append({"step": 2.5, "status": "info", "message": "Close existing VLC option disabled"})
     
-    # Step 3: Build VLC command
+    # Step 3: Build VLC command with fast startup optimizations
     steps.append("Step 3: Building VLC command")
-    vlc_cmd = [vlc_exe, movie_path]
-    steps.append(f"  Base command: {vlc_exe} {movie_path}")
-    results.append({"step": 3, "status": "success", "message": f"Command prepared: {vlc_exe}"})
+    
+    # Fast startup optimization flags - always applied for best performance
+    # These significantly reduce time-to-first-frame by:
+    # - Reducing file caching from default 1200ms to 300ms (local files don't need much)
+    # - Using fast seeking (less accurate but much faster for --start-time)
+    # - Disabling network metadata lookups
+    # - Disabling auto-preparsing of files
+    # - Disabling media library scanning
+    # - Disabling Lua extensions (can slow startup)
+    # - Disabling album art fetching
+    fast_startup_opts = [
+        "--file-caching=300",       # Reduce file caching (default 1200ms)
+        "--input-fast-seek",        # Fast seeking for --start-time (less accurate but faster)
+        "--no-metadata-network-access",  # Don't fetch online metadata
+        "--no-auto-preparse",       # Don't preparse playlist files
+        "--no-media-library",       # Don't use media library
+        "--no-lua",                 # Disable Lua extensions
+        "--no-video-title-show",    # Don't show video title on screen
+        "--no-qt-updates-notif",    # Disable update notifications
+        "--no-qt-privacy-ask",      # Skip privacy dialog
+        "--no-album-art",           # Don't fetch album art
+    ]
+    
+    # Check config for hardware acceleration setting (opt-in for safety)
+    # Hardware acceleration can fail on some systems, so we only enable if user opts in
+    try:
+        hw_accel = config.get("vlc_hardware_acceleration", False)
+        if hw_accel:
+            if os.name == 'nt':
+                # Windows: prefer d3d11va (modern) with d3d11 video output
+                fast_startup_opts.extend([
+                    "--avcodec-hw=d3d11va",
+                    "--vout=direct3d11",
+                ])
+            else:
+                # Linux: try VAAPI first (works with Intel/AMD)
+                fast_startup_opts.append("--avcodec-hw=vaapi")
+            steps.append("  Hardware acceleration enabled")
+    except Exception as e:
+        logger.debug(f"Error checking hardware acceleration config: {e}")
+    
+    vlc_cmd = [vlc_exe] + fast_startup_opts + [movie_path]
+    steps.append(f"  Base command: {vlc_exe} [+{len(fast_startup_opts)} optimization flags] {movie_path}")
+    results.append({"step": 3, "status": "success", "message": f"Command prepared with {len(fast_startup_opts)} fast-startup optimizations"})
     
     # Step 4: Handle subtitles
     steps.append("Step 4: Checking for subtitles")
