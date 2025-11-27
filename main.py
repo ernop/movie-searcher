@@ -60,7 +60,8 @@ from video_processing import (
 # Import VLC integration
 from vlc_integration import (
     launch_movie_in_vlc, get_currently_playing_movies,
-    has_been_launched, find_subtitle_file
+    has_been_launched, find_subtitle_file,
+    vlc_optimization_router
 )
 
 # Import scanning module
@@ -422,6 +423,9 @@ from core.models import (
     ScreenshotsIntervalRequest, AiSearchRequest, PlaylistCreateRequest,
     PlaylistAddMovieRequest
 )
+
+# Include VLC optimization routes
+app.include_router(vlc_optimization_router)
 
 @app.post("/api/frames/start")
 async def start_frame_worker():
@@ -3139,6 +3143,7 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         "cost_usd": cost_usd_payload,
         "cost_details": cost_details
     }
+
 
 # Mount static files directory (favicon, etc.)
 # Must be mounted AFTER specific routes to avoid shadowing root path
