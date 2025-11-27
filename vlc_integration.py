@@ -12,7 +12,7 @@ import logging
 import threading
 from pathlib import Path
 from datetime import datetime
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 import time
 import json
@@ -1459,3 +1459,97 @@ A backup of your original settings is created before applying changes.
             "You can restore original settings at any time"
         ]
     }
+
+
+# =============================================================================
+# VLC Optimization API Router
+# =============================================================================
+
+vlc_optimization_router = APIRouter(prefix="/api/vlc/optimization", tags=["vlc"])
+
+
+@vlc_optimization_router.get("/status")
+async def get_vlc_optimization_status():
+    """
+    Get the current VLC optimization status.
+    Returns info about vlcrc file, backup status, and whether optimizations are applied.
+    """
+    try:
+        status = check_vlcrc_status()
+        info = get_vlcrc_optimization_info()
+        
+        return {
+            "status": status,
+            "optimization_info": info,
+            "command_line_optimizations": {
+                "enabled": True,
+                "description": "Command-line optimizations are always applied when launching movies from Movie Searcher. These don't affect VLC when launched separately."
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error checking VLC optimization status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@vlc_optimization_router.post("/apply")
+async def apply_vlc_optimization():
+    """
+    Apply VLC fast-startup optimizations to vlcrc config file.
+    This affects ALL VLC usage system-wide, not just Movie Searcher launches.
+    Creates a backup before making changes.
+    """
+    try:
+        status = check_vlcrc_status()
+        
+        if status["is_optimized"]:
+            return {
+                "success": True,
+                "message": "VLC configuration is already optimized.",
+                "already_optimized": True
+            }
+        
+        result = apply_vlcrc_optimizations()
+        return result
+    except Exception as e:
+        logger.error(f"Error applying VLC optimization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@vlc_optimization_router.post("/remove")
+async def remove_vlc_optimization():
+    """
+    Remove VLC optimizations and restore original settings.
+    If a backup exists, restores from backup.
+    """
+    try:
+        result = remove_vlcrc_optimizations()
+        return result
+    except Exception as e:
+        logger.error(f"Error removing VLC optimization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@vlc_optimization_router.post("/backup")
+async def create_vlc_backup_endpoint():
+    """
+    Create a backup of the current VLC configuration.
+    """
+    try:
+        result = create_vlcrc_backup()
+        return result
+    except Exception as e:
+        logger.error(f"Error creating VLC backup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@vlc_optimization_router.post("/restore")
+async def restore_vlc_backup_endpoint():
+    """
+    Restore VLC configuration from backup.
+    """
+    try:
+        result = restore_vlcrc_backup()
+        return result
+    except Exception as e:
+        logger.error(f"Error restoring VLC backup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

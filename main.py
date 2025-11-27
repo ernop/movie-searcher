@@ -60,7 +60,8 @@ from video_processing import (
 # Import VLC integration
 from vlc_integration import (
     launch_movie_in_vlc, get_currently_playing_movies,
-    has_been_launched, find_subtitle_file
+    has_been_launched, find_subtitle_file,
+    vlc_optimization_router
 )
 
 # Import scanning module
@@ -422,6 +423,9 @@ from core.models import (
     ScreenshotsIntervalRequest, AiSearchRequest, PlaylistCreateRequest,
     PlaylistAddMovieRequest
 )
+
+# Include VLC optimization routes
+app.include_router(vlc_optimization_router)
 
 @app.post("/api/frames/start")
 async def start_frame_worker():
@@ -3139,113 +3143,6 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         "cost_usd": cost_usd_payload,
         "cost_details": cost_details
     }
-
-
-# =============================================================================
-# VLC Optimization API
-# =============================================================================
-
-@app.get("/api/vlc/optimization/status")
-async def get_vlc_optimization_status():
-    """
-    Get the current VLC optimization status.
-    Returns info about vlcrc file, backup status, and whether optimizations are applied.
-    """
-    try:
-        from vlc_integration import check_vlcrc_status, get_vlcrc_optimization_info
-        
-        status = check_vlcrc_status()
-        info = get_vlcrc_optimization_info()
-        
-        return {
-            "status": status,
-            "optimization_info": info,
-            "command_line_optimizations": {
-                "enabled": True,
-                "description": "Command-line optimizations are always applied when launching movies from Movie Searcher. These don't affect VLC when launched separately."
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error checking VLC optimization status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/vlc/optimization/apply")
-async def apply_vlc_optimization():
-    """
-    Apply VLC fast-startup optimizations to vlcrc config file.
-    This affects ALL VLC usage system-wide, not just Movie Searcher launches.
-    Creates a backup before making changes.
-    """
-    try:
-        from vlc_integration import apply_vlcrc_optimizations, check_vlcrc_status
-        
-        # Check current status first
-        status = check_vlcrc_status()
-        
-        if status["is_optimized"]:
-            return {
-                "success": True,
-                "message": "VLC configuration is already optimized.",
-                "already_optimized": True
-            }
-        
-        # Apply optimizations
-        result = apply_vlcrc_optimizations()
-        
-        return result
-    except Exception as e:
-        logger.error(f"Error applying VLC optimization: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/vlc/optimization/remove")
-async def remove_vlc_optimization():
-    """
-    Remove VLC optimizations and restore original settings.
-    If a backup exists, restores from backup.
-    """
-    try:
-        from vlc_integration import remove_vlcrc_optimizations
-        
-        result = remove_vlcrc_optimizations()
-        
-        return result
-    except Exception as e:
-        logger.error(f"Error removing VLC optimization: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/vlc/optimization/backup")
-async def create_vlc_backup():
-    """
-    Create a backup of the current VLC configuration.
-    """
-    try:
-        from vlc_integration import create_vlcrc_backup
-        
-        result = create_vlcrc_backup()
-        
-        return result
-    except Exception as e:
-        logger.error(f"Error creating VLC backup: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/vlc/optimization/restore")
-async def restore_vlc_backup():
-    """
-    Restore VLC configuration from backup.
-    """
-    try:
-        from vlc_integration import restore_vlcrc_backup
-        
-        result = restore_vlcrc_backup()
-        
-        return result
-    except Exception as e:
-        logger.error(f"Error restoring VLC backup: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Mount static files directory (favicon, etc.)
