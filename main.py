@@ -3152,10 +3152,10 @@ async def get_vlc_optimization_status():
     Returns info about vlcrc file, backup status, and whether optimizations are applied.
     """
     try:
-        from setup.vlc_optimize import check_vlcrc_status, get_optimization_info
+        from vlc_integration import check_vlcrc_status, get_vlcrc_optimization_info
         
         status = check_vlcrc_status()
-        info = get_optimization_info()
+        info = get_vlcrc_optimization_info()
         
         return {
             "status": status,
@@ -3178,7 +3178,7 @@ async def apply_vlc_optimization():
     Creates a backup before making changes.
     """
     try:
-        from setup.vlc_optimize import apply_optimizations, check_vlcrc_status
+        from vlc_integration import apply_vlcrc_optimizations, check_vlcrc_status
         
         # Check current status first
         status = check_vlcrc_status()
@@ -3191,7 +3191,7 @@ async def apply_vlc_optimization():
             }
         
         # Apply optimizations
-        result = apply_optimizations()
+        result = apply_vlcrc_optimizations()
         
         return result
     except Exception as e:
@@ -3206,9 +3206,9 @@ async def remove_vlc_optimization():
     If a backup exists, restores from backup.
     """
     try:
-        from setup.vlc_optimize import remove_optimizations
+        from vlc_integration import remove_vlcrc_optimizations
         
-        result = remove_optimizations()
+        result = remove_vlcrc_optimizations()
         
         return result
     except Exception as e:
@@ -3222,9 +3222,9 @@ async def create_vlc_backup():
     Create a backup of the current VLC configuration.
     """
     try:
-        from setup.vlc_optimize import create_backup
+        from vlc_integration import create_vlcrc_backup
         
-        result = create_backup()
+        result = create_vlcrc_backup()
         
         return result
     except Exception as e:
@@ -3238,9 +3238,9 @@ async def restore_vlc_backup():
     Restore VLC configuration from backup.
     """
     try:
-        from setup.vlc_optimize import restore_backup
+        from vlc_integration import restore_vlcrc_backup
         
-        result = restore_backup()
+        result = restore_vlcrc_backup()
         
         return result
     except Exception as e:
