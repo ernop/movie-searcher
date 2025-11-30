@@ -30,7 +30,47 @@ async function performAiSearch() {
         askBtn.textContent = 'Searching...';
     }
     
-    resultsContainer.innerHTML = '<div class="loading">Processing request...</div>';
+    // Show progress UI
+    resultsContainer.innerHTML = `
+        <div class="ai-progress-container">
+            <div class="ai-progress-step" data-step="1">
+                <span class="ai-progress-indicator">○</span>
+                <span class="ai-progress-text">Preparing query for AI...</span>
+            </div>
+            <div class="ai-progress-step" data-step="2">
+                <span class="ai-progress-indicator">○</span>
+                <span class="ai-progress-text">Waiting for AI response...</span>
+            </div>
+            <div class="ai-progress-step" data-step="3">
+                <span class="ai-progress-indicator">○</span>
+                <span class="ai-progress-text">Matching movies in your library...</span>
+            </div>
+            <div class="ai-progress-step" data-step="4">
+                <span class="ai-progress-indicator">○</span>
+                <span class="ai-progress-text">Building results...</span>
+            </div>
+        </div>
+    `;
+    
+    function updateProgress(step, message) {
+        // Mark previous steps as completed
+        for (let i = 1; i < step; i++) {
+            const prevStep = resultsContainer.querySelector(`.ai-progress-step[data-step="${i}"]`);
+            if (prevStep) {
+                prevStep.classList.add('completed');
+                prevStep.classList.remove('active');
+                prevStep.querySelector('.ai-progress-indicator').textContent = '✓';
+            }
+        }
+        // Mark current step as active
+        const currentStep = resultsContainer.querySelector(`.ai-progress-step[data-step="${step}"]`);
+        if (currentStep) {
+            currentStep.classList.add('active');
+            currentStep.classList.remove('completed');
+            currentStep.querySelector('.ai-progress-indicator').textContent = '●';
+            currentStep.querySelector('.ai-progress-text').textContent = message;
+        }
+    }
     
     try {
         const response = await fetch('/api/ai_search', {
@@ -55,8 +95,46 @@ async function performAiSearch() {
             throw new Error(detail);
         }
         
-        const data = await response.json();
-        renderAiResults(data);
+        // Read SSE stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let resultData = null;
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Parse SSE events from buffer
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep incomplete line in buffer
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const eventData = JSON.parse(line.slice(6));
+                        
+                        if (eventData.type === 'progress') {
+                            updateProgress(eventData.step, eventData.message);
+                        } else if (eventData.type === 'result') {
+                            resultData = eventData;
+                        } else if (eventData.type === 'error') {
+                            throw new Error(eventData.detail);
+                        }
+                    } catch (parseErr) {
+                        console.warn('Failed to parse SSE event:', line, parseErr);
+                    }
+                }
+            }
+        }
+        
+        if (resultData) {
+            renderAiResults(resultData);
+        } else {
+            throw new Error('No result received from AI search');
+        }
     } catch (error) {
         console.error('AI Search Error:', error);
         alert(`Error: ${error.message}`);
@@ -102,6 +180,19 @@ function renderAiResults(data) {
     const foundMovies = Array.isArray(data.found_movies) ? data.found_movies : [];
     const missingMovies = Array.isArray(data.missing_movies) ? data.missing_movies : [];
     const overallComment = (data.comment || '').trim();
+    const listSlug = data.movie_list_slug;
+    const listTitle = data.title || '';
+    
+    // Build header with title and link to saved list
+    let headerBlock = '';
+    if (listTitle || listSlug) {
+        headerBlock = `
+            <div class="ai-results-header">
+                <div class="ai-results-title">${escapeHtml(listTitle)}</div>
+                ${listSlug ? `<a href="#/lists/${escapeHtml(listSlug)}" class="ai-results-link">View saved list →</a>` : ''}
+            </div>
+        `;
+    }
     
     let commentBlock = '';
     if (overallComment) {
@@ -153,14 +244,44 @@ function renderAiResults(data) {
     
     resultsContainer.innerHTML = `
         <div class="ai-results-wrapper">
+            ${headerBlock}
             ${commentBlock}
             ${foundHtml}
             ${missingHtml}
         </div>
     `;
     
+    // Reload suggestions to show this new list in recent
+    if (typeof loadMovieListSuggestions === 'function') {
+        loadMovieListSuggestions('');
+    }
+    
     if (typeof initAllStarRatings === 'function') {
         initAllStarRatings();
     }
 }
+
+// Load suggestions as user types in AI search
+let aiSuggestionsDebounce = null;
+function initAiSearchSuggestions() {
+    const input = document.getElementById('aiSearchInput');
+    if (!input) return;
+    
+    input.addEventListener('input', (e) => {
+        clearTimeout(aiSuggestionsDebounce);
+        aiSuggestionsDebounce = setTimeout(() => {
+            if (typeof loadMovieListSuggestions === 'function') {
+                loadMovieListSuggestions(e.target.value);
+            }
+        }, 300);
+    });
+    
+    // Load initial suggestions
+    if (typeof loadMovieListSuggestions === 'function') {
+        loadMovieListSuggestions('');
+    }
+}
+
+// Initialize on DOM ready
+document.addEventListener('DOMContentLoaded', initAiSearchSuggestions);
 

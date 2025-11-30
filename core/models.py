@@ -36,6 +36,7 @@ class RatingRequest(BaseModel):
 
 class ConfigRequest(BaseModel):
     movies_folder: Optional[str] = None
+    local_target_folder: Optional[str] = None
     settings: Optional[dict] = None
 
 
@@ -65,3 +66,7 @@ class PlaylistCreateRequest(BaseModel):
 class PlaylistAddMovieRequest(BaseModel):
     movie_id: int
 
+
+class MovieListUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    is_favorite: Optional[bool] = None

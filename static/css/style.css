@@ -8,9 +8,9 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             background: #1a1a1a;
             color: #e0e0e0;
-            padding: 20px;
+            padding: 20px 3%;
             margin: 0 auto;
-            max-width: 55vw;
+            max-width: 94%;
         }
         
         h1 {
@@ -135,8 +135,8 @@
             border: 1px solid #4a4a4a !important;
             background: #3a3a3a !important;
             color: #e0e0e0 !important;
-            padding: 8px 16px !important;
-            font-size: 14px;
+            padding: 5px 10px !important;
+            font-size: 13px;
             cursor: pointer;
             transition: all 0s;
             border-radius: 0 !important;
@@ -1025,37 +1025,108 @@
             gap: 0;
             align-items: center;
             margin-top: 0;
-            margin-bottom: 25px;
+            margin-bottom: 10px;
             position: relative;
+        }
+        
+        .language-nav {
+            display: flex;
+            gap: 0;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+            padding: 0;
+            background: transparent;
+            border-radius: 0;
+            border: none;
+            align-items: center;
+        }
+        
+        .language-nav .language-filter-group {
+            display: flex;
+            gap: 0;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .language-nav .btn {
+            padding: 2px 5px !important;
+            font-size: 11px;
+            border-radius: 0 !important;
+            border: 1px solid #444 !important;
+            border-left-width: 0 !important;
+            background: #333 !important;
+            color: #bbb !important;
+        }
+        
+        .language-nav .btn:first-of-type {
+            border-left-width: 1px !important;
+            border-top-left-radius: 3px !important;
+            border-bottom-left-radius: 3px !important;
+        }
+        
+        .language-nav .btn:last-of-type {
+            border-top-right-radius: 3px !important;
+            border-bottom-right-radius: 3px !important;
+        }
+        
+        .language-nav .btn:hover {
+            background: #4a9eff !important;
+            color: #fff !important;
+        }
+        
+        .language-nav .btn.active {
+            background: #4a9eff !important;
+            border-color: #4a9eff !important;
+            color: #fff !important;
+        }
+        
+        .language-nav .language-label {
+            font-weight: 600;
+            color: #777;
+            margin-right: 6px;
+            white-space: nowrap;
+            font-size: 11px;
         }
         
         .letter-nav {
             display: flex;
-            gap: 8px;
+            gap: 0;
             flex-wrap: wrap;
-            margin-bottom: 20px;
-            padding: 15px;
-            background: #2a2a2a;
-            border-radius: 8px;
-            border: 1px solid #3a3a3a;
+            margin-bottom: 8px;
+            padding: 0;
+            background: transparent;
+            border-radius: 0;
+            border: none;
         }
         
         .letter-btn {
-            background: #3a3a3a;
-            color: #e0e0e0;
-            border: 1px solid #4a4a4a;
-            padding: 6px 12px;
-            border-radius: 4px;
+            background: #333;
+            color: #bbb;
+            border: 1px solid #444;
+            border-left-width: 0;
+            padding: 2px 4px;
+            border-radius: 0;
             cursor: pointer;
-            font-size: 13px;
+            font-size: 11px;
             transition: all 0s;
-            min-width: 40px;
+            min-width: 0;
             text-align: center;
         }
         
-        .letter-btn:hover {
-            background: #4a4a4a;
-            border-color: #4a9eff;
+        .letter-btn:first-child {
+            border-left-width: 1px;
+            border-top-left-radius: 3px;
+            border-bottom-left-radius: 3px;
+        }
+        
+        .letter-btn:last-child {
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }
+        
+        .letter-btn:hover:not(:disabled) {
+            background: #4a9eff;
+            color: #fff;
         }
         
         .letter-btn.active {
@@ -1065,39 +1136,51 @@
         }
         
         .letter-btn:disabled {
-            background: #1a1a1a;
-            color: #555;
-            border-color: #2a2a2a;
+            background: #252525;
+            color: #444;
+            border-color: #333;
             cursor: not-allowed;
         }
         
         .decade-nav {
             display: flex;
-            gap: 8px;
+            gap: 0;
             flex-wrap: wrap;
-            margin-bottom: 20px;
-            padding: 15px;
-            background: #2a2a2a;
-            border-radius: 8px;
-            border: 1px solid #3a3a3a;
+            margin-bottom: 8px;
+            padding: 0;
+            background: transparent;
+            border-radius: 0;
+            border: none;
         }
         
         .decade-btn {
-            background: #3a3a3a;
-            color: #e0e0e0;
-            border: 1px solid #4a4a4a;
-            padding: 6px 12px;
-            border-radius: 4px;
+            background: #333;
+            color: #bbb;
+            border: 1px solid #444;
+            border-left-width: 0;
+            padding: 2px 5px;
+            border-radius: 0;
             cursor: pointer;
-            font-size: 13px;
+            font-size: 11px;
             transition: all 0s;
-            min-width: 60px;
+            min-width: 0;
             text-align: center;
         }
         
-        .decade-btn:hover {
-            background: #4a4a4a;
-            border-color: #4a9eff;
+        .decade-btn:first-child {
+            border-left-width: 1px;
+            border-top-left-radius: 3px;
+            border-bottom-left-radius: 3px;
+        }
+        
+        .decade-btn:last-child {
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }
+        
+        .decade-btn:hover:not(:disabled) {
+            background: #4a9eff;
+            color: #fff;
         }
         
         .decade-btn.active {
@@ -1107,35 +1190,38 @@
         }
         
         .decade-btn:disabled {
-            background: #1a1a1a;
-            color: #555;
-            border-color: #2a2a2a;
+            background: #252525;
+            color: #444;
+            border-color: #333;
             cursor: not-allowed;
         }
         
         .year-filter-container {
-            margin-bottom: 20px;
+            margin-bottom: 12px;
             display: flex;
-            gap: 10px;
+            gap: 8px;
             align-items: center;
             flex-wrap: wrap;
+            padding: 8px 12px;
+            background: #252525;
+            border-radius: 6px;
+            border: 1px solid #3a3a3a;
         }
         
         .year-input-wrapper {
             position: relative;
-            flex: 1;
-            min-width: 200px;
-            max-width: 300px;
+            min-width: 140px;
+            max-width: 180px;
         }
         
         .year-input {
             width: 100%;
-            padding: 8px 12px;
-            background: #2a2a2a;
-            border: 1px solid #3a3a3a;
-            border-radius: 6px;
+            padding: 6px 10px;
+            background: #1a1a1a;
+            border: 1px solid #4a4a4a;
+            border-radius: 4px;
             color: #e0e0e0;
-            font-size: 14px;
+            font-size: 13px;
             transition: border-color 0.2s;
         }
         
@@ -1180,9 +1266,16 @@
             color: #fff;
         }
         
+        .year-filter-label {
+            font-size: 12px;
+            color: #888;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        
         .year-chip-container {
             display: flex;
-            gap: 4px;
+            gap: 3px;
             align-items: center;
         }
         
@@ -1190,12 +1283,12 @@
             background: #3a3a3a;
             color: #e0e0e0;
             border: 1px solid #4a4a4a;
-            padding: 4px 8px;
-            border-radius: 4px;
+            padding: 4px 10px;
+            border-radius: 3px;
             cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s;
-            min-width: 32px;
+            font-size: 13px;
+            transition: all 0s;
+            min-width: 28px;
             text-align: center;
             display: flex;
             align-items: center;
@@ -1203,35 +1296,36 @@
         }
         
         .year-nav-btn:hover:not(:disabled) {
-            background: #4a4a4a;
+            background: #4a9eff;
             border-color: #4a9eff;
+            color: #fff;
         }
         
         .year-nav-btn:disabled {
-            background: #1a1a1a;
+            background: #2a2a2a;
             color: #555;
-            border-color: #2a2a2a;
+            border-color: #3a3a3a;
             cursor: not-allowed;
-            opacity: 0.5;
         }
         
         .year-chip {
             display: flex;
             align-items: center;
             gap: 6px;
-            padding: 6px 10px;
+            padding: 4px 10px;
             background: #4a9eff;
             color: #fff;
-            border-radius: 16px;
+            border-radius: 3px;
             font-size: 13px;
+            font-weight: 500;
         }
         
         .year-chip-close {
             cursor: pointer;
-            font-size: 16px;
+            font-size: 14px;
             line-height: 1;
             opacity: 0.8;
-            transition: opacity 0.2s;
+            transition: opacity 0s;
         }
         
         .year-chip-close:hover {
@@ -1249,6 +1343,31 @@
             display: flex;
             flex-direction: column;
             gap: 20px;
+        }
+
+        .ai-results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .ai-results-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .ai-results-link {
+            font-size: 14px;
+            color: #4a9eff;
+            text-decoration: none;
+        }
+
+        .ai-results-link:hover {
+            text-decoration: underline;
         }
 
         .ai-overall-comment {
@@ -1323,6 +1442,315 @@
         .ai-missing-placeholder {
             color: #777;
             font-size: 0.95em;
+        }
+
+        /* AI Search Progress Styles */
+        .ai-progress-container {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 30px;
+            max-width: 500px;
+            margin: 20px auto;
+            background: linear-gradient(145deg, #1e1e1e, #252525);
+            border-radius: 12px;
+            border: 1px solid #3a3a3a;
+        }
+
+        .ai-progress-step {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            background: #1a1a1a;
+            border: 1px solid transparent;
+            transition: all 0.3s ease;
+            opacity: 0.5;
+        }
+
+        .ai-progress-step.active {
+            opacity: 1;
+            background: #1f2937;
+            border-color: #4a9eff;
+            box-shadow: 0 0 12px rgba(74, 158, 255, 0.15);
+        }
+
+        .ai-progress-step.completed {
+            opacity: 0.8;
+            background: #1a2e1a;
+            border-color: #3d8b3d;
+        }
+
+        .ai-progress-indicator {
+            font-size: 18px;
+            width: 24px;
+            text-align: center;
+            color: #666;
+            transition: color 0.3s ease;
+        }
+
+        .ai-progress-step.active .ai-progress-indicator {
+            color: #4a9eff;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        .ai-progress-step.completed .ai-progress-indicator {
+            color: #5cb85c;
+        }
+
+        .ai-progress-text {
+            color: #888;
+            font-size: 15px;
+            transition: color 0.3s ease;
+        }
+
+        .ai-progress-step.active .ai-progress-text {
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+
+        .ai-progress-step.completed .ai-progress-text {
+            color: #9a9a9a;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Movie Lists Styles */
+        .movie-lists-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .movie-lists-filter {
+            flex: 1;
+            min-width: 200px;
+            max-width: 400px;
+        }
+
+        .movie-lists-filter input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            background: #2a2a2a;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+
+        .movie-lists-filter input:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+
+        .movie-lists-actions .btn.active {
+            background: #4a9eff;
+            border-color: #4a9eff;
+        }
+
+        .movie-lists-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 20px;
+        }
+
+        .movie-list-card {
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 10px;
+            padding: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .movie-list-card:hover {
+            border-color: #4a9eff;
+            background: #333;
+            transform: translateY(-2px);
+        }
+
+        .movie-list-card.favorite {
+            border-color: #d4a017;
+            background: linear-gradient(145deg, #2a2a2a, #332a1a);
+        }
+
+        .movie-list-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .movie-list-card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+            line-height: 1.3;
+        }
+
+        .movie-list-favorite-btn {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0;
+            color: #666;
+            transition: color 0.2s;
+        }
+
+        .movie-list-favorite-btn:hover {
+            color: #d4a017;
+        }
+
+        .movie-list-card.favorite .movie-list-favorite-btn {
+            color: #d4a017;
+        }
+
+        .movie-list-card-query {
+            font-size: 13px;
+            color: #888;
+            font-style: italic;
+            margin-bottom: 12px;
+            line-height: 1.4;
+            word-break: break-word;
+        }
+
+        .movie-list-card-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 12px;
+        }
+
+        .movie-list-card-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .movie-lists-more {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+
+        /* Movie List Detail View */
+        .movie-list-detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+
+        .movie-list-detail-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .movie-list-detail-info {
+            margin-bottom: 24px;
+        }
+
+        .movie-list-detail-title {
+            font-size: 28px;
+            margin: 0 0 10px 0;
+            color: #fff;
+            cursor: text;
+            padding: 4px 8px;
+            margin-left: -8px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .movie-list-detail-title:hover {
+            background: #333;
+        }
+
+        .movie-list-detail-title:focus {
+            outline: none;
+            background: #333;
+            border: 1px solid #4a9eff;
+        }
+
+        .movie-list-detail-query {
+            font-size: 14px;
+            color: #888;
+            font-style: italic;
+            margin-bottom: 8px;
+        }
+
+        .movie-list-detail-meta {
+            font-size: 13px;
+            color: #666;
+        }
+
+        .movie-list-detail-comment {
+            background: #252525;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            color: #bbb;
+            font-size: 15px;
+            line-height: 1.6;
+        }
+
+        /* Movie List Suggestions */
+        .movie-list-suggestions {
+            margin-top: 16px;
+            padding: 16px;
+            background: #252525;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+        }
+
+        .suggestions-section {
+            margin-bottom: 12px;
+        }
+
+        .suggestions-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .suggestions-label {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 8px;
+        }
+
+        .suggestions-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .suggestion-item {
+            font-size: 13px;
+            color: #4a9eff;
+            text-decoration: none;
+            padding: 6px 12px;
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            border-radius: 20px;
+            transition: all 0.2s;
+        }
+
+        .suggestion-item:hover {
+            background: #333;
+            border-color: #4a9eff;
         }
         
         .movie-card {

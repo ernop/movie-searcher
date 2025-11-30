@@ -136,6 +136,7 @@ function handleRoute() {
     const pageMovieDetails = document.getElementById('pageMovieDetails');
     const pageHistory = document.getElementById('pageHistory');
     const pagePlaylists = document.getElementById('pagePlaylists');
+    const pageMovieLists = document.getElementById('pageMovieLists');
 
     // Detail routes (hash-based)
     if (route.startsWith('/movie/')) {
@@ -160,6 +161,29 @@ function handleRoute() {
                 handlePlaylistRoute(playlistId);
                 return;
             }
+        }
+    }
+    
+    // Movie list routes
+    if (route.startsWith('/lists/')) {
+        const parts = route.split('/').filter(Boolean); // ["lists", "{slug}"]
+        if (parts.length >= 2) {
+            const slug = parts[1];
+            if (pageMovieLists && slug) {
+                pageMovieLists.classList.add('active');
+                document.getElementById('navLists')?.classList.add('active');
+                handleMovieListRoute(slug);
+                return;
+            }
+        }
+    }
+    
+    if (route === '/lists') {
+        if (pageMovieLists) {
+            pageMovieLists.classList.add('active');
+            document.getElementById('navLists')?.classList.add('active');
+            loadMovieListsPage();
+            return;
         }
     }
     

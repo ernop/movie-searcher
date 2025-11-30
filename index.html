@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Movie Searcher</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/css/style.css?v=2">
+    <link rel="stylesheet" href="/css/style.css?v=5">
 </head>
 
 <body>
@@ -15,7 +15,7 @@
             <div style="display: flex; gap: 10px; align-items: center;">
                 <a href="#/home" class="nav-link" id="navHome">Home</a>
                 <a href="#/explore" class="nav-link" id="navExplore">Explore</a>
-                <a href="#/all-movies" class="nav-link" id="navAllMovies">All Movies</a>
+                <a href="#/all-movies" class="nav-link" id="navAllMovies" style="display: none;">All Movies</a>
                 <div class="playlists-nav-dropdown" id="playlistsNavDropdown">
                     <button class="nav-link playlists-nav-btn" id="navPlaylistsBtn"
                         onclick="togglePlaylistsDropdown()">Playlists ▼</button>
@@ -29,6 +29,7 @@
                     </div>
                 </div>
                 <a href="#/history" class="nav-link" id="navHistory">History</a>
+                <a href="#/lists" class="nav-link" id="navLists">Lists</a>
             </div>
             <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
                 <div id="statusMessage"></div>
@@ -85,6 +86,7 @@
                 <div id="aiCostDisplay"
                     style="font-size: 0.9em; color: #888; min-height: 1.2em; margin-top: 6px; width: 100%; display: flex; justify-content: flex-end; text-align: right;"></div>
                 <div id="aiSearchStatus" style="margin-top: 10px; color: #888; min-height: 1.2em;"></div>
+                <div id="movieListSuggestions" class="movie-list-suggestions" style="display: none;"></div>
             </div>
 
             <div class="results" id="results"></div>
@@ -118,12 +120,12 @@
                     <button type="button" class="btn" data-filter="newest"
                         onclick="setExploreWatchFilter('newest', this)">Newest 100</button>
                 </div>
-                <div style="margin-left:16px;padding-left:16px;border-left: 2px solid #e0e0e0;">
-                    <div class="btn-group btn-group-toggle language-filter-group" role="group"
-                        id="exploreLanguageFilterGroup"
-                        style="display:inline-flex;flex-wrap:wrap;gap:0;align-items:center;">
-                        <!-- Audio language buttons will be populated by JavaScript -->
-                    </div>
+            </div>
+
+            <div class="language-nav" id="languageNav">
+                <div class="btn-group btn-group-toggle language-filter-group" role="group"
+                    id="exploreLanguageFilterGroup">
+                    <!-- Audio language buttons will be populated by JavaScript -->
                 </div>
             </div>
 
@@ -132,8 +134,9 @@
             <div class="decade-nav" id="decadeNav"></div>
 
             <div class="year-filter-container" id="yearFilterContainer">
+                <span class="year-filter-label">Year:</span>
                 <div class="year-input-wrapper">
-                    <input type="text" id="yearInput" placeholder="Filter by year..." autocomplete="off"
+                    <input type="text" id="yearInput" placeholder="Type year..." autocomplete="off"
                         class="year-input">
                     <div class="year-autocomplete" id="yearAutocomplete"></div>
                 </div>
@@ -197,6 +200,22 @@
             </div>
         </div>
 
+        <!-- Movie Lists Page -->
+        <div class="page" id="pageMovieLists">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h1>📋 Movie Lists</h1>
+            </div>
+            
+            <!-- Overview of all lists -->
+            <div id="movieListsOverview">
+                <div class="loading">Loading movie lists...</div>
+            </div>
+            
+            <!-- Detail view for single list -->
+            <div id="movieListDetailView" style="display: none;">
+            </div>
+        </div>
+
         <!-- Duplicates Page -->
         <div class="page" id="pageDuplicates">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -236,6 +255,16 @@
             </div>
 
             <div class="setup-section">
+                <h3>Local Target Folder</h3>
+                <p>Configure a local folder where movies can be copied for offline access. Use "Copy to Local" in a movie's menu to copy it here.</p>
+                <div class="folder-info" style="margin-bottom: 15px;">
+                    <span>Current folder:</span>
+                    <span class="folder-path" id="setupLocalTargetFolder">Not set</span>
+                </div>
+                <button class="btn" id="setupChangeLocalTargetBtn" onclick="showLocalTargetDialog()">Change Local Target Folder</button>
+            </div>
+
+            <div class="setup-section">
                 <h3>Scan Movies</h3>
                 <p>Scan your movies folder to index all video files. This will update the database with any new or
                     changed files.</p>
@@ -250,6 +279,21 @@
                     </div>
                     <div class="progress-file" id="setupProgressFile"></div>
                     <div class="scan-log-window" id="setupScanLogWindow" style="display: none;"></div>
+                </div>
+            </div>
+
+            <div class="setup-section">
+                <h3>Interface Settings</h3>
+                <p>Configure the appearance and behavior of the interface.</p>
+                <div class="setup-option">
+                    <label>
+                        <input type="checkbox" id="setupShowAllMoviesTab">
+                        Show "All Movies" tab in navigation
+                    </label>
+                    <div class="setup-option-description">
+                        When enabled, displays the "All Movies" tab which shows a simple alphabetical list of all movies.
+                        Useful for browsing when you just want to see everything at once.
+                    </div>
                 </div>
             </div>
 
@@ -324,6 +368,37 @@
             </div>
         </div>
 
+        <div class="folder-dialog" id="localTargetDialog" style="display: none;">
+            <h3>Select Local Target Folder</h3>
+            <p style="margin-bottom: 10px; color: #999; font-size: 13px;">Enter the <strong>full absolute path</strong> where you want movies copied to:</p>
+            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                <input type="text" id="localTargetPathInput" placeholder="C:\LocalMovies or D:\Offline\Movies"
+                    style="flex: 1; margin-bottom: 0;" autofocus>
+                <button class="btn btn-secondary" onclick="browseLocalTargetFolder()" style="white-space: nowrap;">Browse</button>
+            </div>
+            <p style="margin-bottom: 15px; color: #777; font-size: 12px;">
+                <strong>Required:</strong> Path must be absolute (start with drive letter like <code>D:\</code> or <code>C:\</code>).<br>
+                The folder will be created if it doesn't exist.
+            </p>
+            <div class="dialog-buttons">
+                <button class="btn btn-secondary" onclick="hideLocalTargetDialog()">Cancel</button>
+                <button class="btn btn-success" onclick="saveLocalTargetPath()">Save</button>
+            </div>
+        </div>
+
+        <!-- Copy Progress Toast -->
+        <div id="copyProgressToast" style="display: none; position: fixed; bottom: 20px; right: 20px; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; padding: 16px 20px; min-width: 300px; max-width: 400px; z-index: 10001; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-weight: 600; color: #fff;" id="copyProgressTitle">Copying Movie</span>
+                <button onclick="hideCopyProgress()" style="background: none; border: none; color: #999; cursor: pointer; font-size: 18px; line-height: 1;">&times;</button>
+            </div>
+            <div id="copyProgressMessage" style="color: #ccc; font-size: 13px; margin-bottom: 10px;">Preparing...</div>
+            <div style="background: #444; border-radius: 4px; height: 6px; overflow: hidden;">
+                <div id="copyProgressBar" style="background: #4a9eff; height: 100%; width: 0%; transition: width 0.3s ease;"></div>
+            </div>
+            <div id="copyProgressPercent" style="color: #888; font-size: 11px; margin-top: 4px; text-align: right;">0%</div>
+        </div>
+
         <div class="media-overlay" id="mediaOverlay" onclick="closeMediaOverlay()">
             <div class="media-overlay-close" onclick="event.stopPropagation(); closeMediaOverlay();">×</div>
             <img id="mediaOverlayImage" onclick="event.stopPropagation();" alt="Full size image">
@@ -364,6 +439,7 @@
 
         <script src="/js/utils.js?v=2"></script>
         <script src="/js/routing.js?v=2"></script>
+        <script src="/js/movie-menu.js?v=2"></script>
         <script src="/js/components.js?v=2"></script>
         <script src="/js/search.js?v=2"></script>
         <script src="/js/explore.js?v=2"></script>
@@ -374,6 +450,7 @@
         <script src="/js/history.js?v=2"></script>
         <script src="/js/setup.js?v=2"></script>
         <script src="/js/ai-search.js?v=2"></script>
+        <script src="/js/movie-lists.js?v=2"></script>
         <script src="/js/app.js?v=2"></script>
 </body>
 

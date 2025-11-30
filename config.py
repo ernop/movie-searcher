@@ -173,3 +173,11 @@ def get_movies_folder():
         return path
     return None
 
+
+def get_local_target_folder():
+    """Get the local target folder path from config only - no defaults, no guessing"""
+    config = load_config()
+    path = config.get("local_target_folder")
+    if path:
+        return path
+    return None

@@ -8,6 +8,14 @@ loadLanguageFilters();
 loadCurrentFolder();
 updateCurrentlyPlaying();
 
+// Update All Movies nav visibility based on setting
+function updateAllMoviesNavVisibility(show) {
+    const navAllMovies = document.getElementById('navAllMovies');
+    if (navAllMovies) {
+        navAllMovies.style.display = show ? '' : 'none';
+    }
+}
+
 // Save launch with subtitles setting when checkbox changes
 document.addEventListener('DOMContentLoaded', () => {
     const launchWithSubtitlesOnEl = document.getElementById('setupLaunchWithSubtitlesOn');
@@ -25,6 +33,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 if (response.ok) {
                     showStatus('Setting saved successfully', 'success');
+                } else {
+                    const data = await response.json();
+                    showStatus('Failed to save setting: ' + (data.detail || 'Unknown error'), 'error');
+                }
+            } catch (error) {
+                showStatus('Failed to save setting: ' + error.message, 'error');
+            }
+        });
+    }
+    
+    // Save show all movies tab setting when checkbox changes
+    const showAllMoviesTabEl = document.getElementById('setupShowAllMoviesTab');
+    if (showAllMoviesTabEl) {
+        showAllMoviesTabEl.addEventListener('change', async () => {
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        settings: {
+                            show_all_movies_tab: showAllMoviesTabEl.checked
+                        }
+                    })
+                });
+                if (response.ok) {
+                    showStatus('Setting saved successfully', 'success');
+                    updateAllMoviesNavVisibility(showAllMoviesTabEl.checked);
                 } else {
                     const data = await response.json();
                     showStatus('Failed to save setting: ' + (data.detail || 'Unknown error'), 'error');

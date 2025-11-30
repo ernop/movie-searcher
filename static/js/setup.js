@@ -2,8 +2,13 @@
 
 async function loadCurrentFolder() {
     const setupCurrentFolderEl = document.getElementById('setupCurrentFolder');
+    const setupLocalTargetFolderEl = document.getElementById('setupLocalTargetFolder');
+    
     if (setupCurrentFolderEl) {
         setupCurrentFolderEl.textContent = 'Loading...';
+    }
+    if (setupLocalTargetFolderEl) {
+        setupLocalTargetFolderEl.textContent = 'Loading...';
     }
     
     try {
@@ -17,14 +22,20 @@ async function loadCurrentFolder() {
         
         if (response.ok) {
             const folderPath = data.movies_folder || 'Not set';
+            const localTargetPath = data.local_target_folder || 'Not set';
+            
             if (setupCurrentFolderEl) {
                 setupCurrentFolderEl.textContent = folderPath;
+            }
+            if (setupLocalTargetFolderEl) {
+                setupLocalTargetFolderEl.textContent = localTargetPath;
             }
             
             // Also update setup checkboxes if present
             if (data.settings) {
                 const closeVlcEl = document.getElementById('setupCloseExistingVlc');
                 const launchSubsEl = document.getElementById('setupLaunchWithSubtitlesOn');
+                const showAllMoviesEl = document.getElementById('setupShowAllMoviesTab');
                 
                 if (closeVlcEl && data.settings.close_existing_vlc !== undefined) {
                     closeVlcEl.checked = data.settings.close_existing_vlc;
@@ -32,6 +43,13 @@ async function loadCurrentFolder() {
                 if (launchSubsEl && data.settings.launch_with_subtitles_on !== undefined) {
                     launchSubsEl.checked = data.settings.launch_with_subtitles_on;
                 }
+                if (showAllMoviesEl) {
+                    // Default to false if not set
+                    showAllMoviesEl.checked = data.settings.show_all_movies_tab === true;
+                }
+                
+                // Update nav visibility
+                updateAllMoviesNavVisibility(data.settings.show_all_movies_tab === true);
             }
             
             return folderPath;
@@ -39,11 +57,17 @@ async function loadCurrentFolder() {
             if (setupCurrentFolderEl) {
                 setupCurrentFolderEl.textContent = 'Error loading';
             }
+            if (setupLocalTargetFolderEl) {
+                setupLocalTargetFolderEl.textContent = 'Error loading';
+            }
             return null;
         }
     } catch (error) {
         if (setupCurrentFolderEl) {
             setupCurrentFolderEl.textContent = 'Error loading';
+        }
+        if (setupLocalTargetFolderEl) {
+            setupLocalTargetFolderEl.textContent = 'Error loading';
         }
         return null;
     }
@@ -372,4 +396,214 @@ async function recheckSystemStatus() {
         statusEl.innerHTML = '<div class="loading">Re-checking system status...</div>';
     }
     await loadSystemStatus();
+}
+
+// Local Target Folder Functions
+
+function showLocalTargetDialog() {
+    const dialog = document.getElementById('localTargetDialog');
+    if (dialog) {
+        dialog.style.display = 'flex';
+        const input = document.getElementById('localTargetPathInput');
+        if (input) {
+            input.focus();
+        }
+    }
+}
+
+function hideLocalTargetDialog() {
+    const dialog = document.getElementById('localTargetDialog');
+    if (dialog) {
+        dialog.style.display = 'none';
+    }
+}
+
+function browseLocalTargetFolder() {
+    // Browser can't open native folder dialog, show instructions
+    showStatus('Please type the folder path manually', 'info');
+}
+
+async function saveLocalTargetPath() {
+    const input = document.getElementById('localTargetPathInput');
+    let folderPath = input.value.trim();
+    
+    if (!folderPath) {
+        showStatus('Please enter a folder path', 'error');
+        return;
+    }
+    
+    // Validate absolute path before normalizing
+    if (typeof isValidAbsolutePath === 'function' && !isValidAbsolutePath(folderPath)) {
+        showStatus('Path must be absolute (e.g., D:\\LocalMovies or C:\\Offline)', 'error');
+        return;
+    }
+    
+    // Normalize the path (handle /, \, \\)
+    if (typeof normalizePath === 'function') {
+        folderPath = normalizePath(folderPath);
+    }
+    
+    try {
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({local_target_folder: folderPath})
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showStatus('Local target folder updated successfully', 'success');
+            loadCurrentFolder();
+            hideLocalTargetDialog();
+        } else {
+            showStatus('Failed to update folder: ' + (data.detail || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showStatus('Failed to update folder: ' + error.message, 'error');
+    }
+}
+
+// Copy to Local Functions
+
+let activeCopyMovieId = null;
+let copyProgressPollInterval = null;
+
+function showCopyProgress(movieName) {
+    const toast = document.getElementById('copyProgressToast');
+    const titleEl = document.getElementById('copyProgressTitle');
+    const messageEl = document.getElementById('copyProgressMessage');
+    const barEl = document.getElementById('copyProgressBar');
+    const percentEl = document.getElementById('copyProgressPercent');
+    
+    if (toast) {
+        toast.style.display = 'block';
+        if (titleEl) titleEl.textContent = `Copying: ${movieName}`;
+        if (messageEl) messageEl.textContent = 'Starting copy...';
+        if (barEl) barEl.style.width = '0%';
+        if (percentEl) percentEl.textContent = '0%';
+    }
+}
+
+function updateCopyProgress(progress, message) {
+    const barEl = document.getElementById('copyProgressBar');
+    const percentEl = document.getElementById('copyProgressPercent');
+    const messageEl = document.getElementById('copyProgressMessage');
+    
+    if (barEl) barEl.style.width = `${progress}%`;
+    if (percentEl) percentEl.textContent = `${Math.round(progress)}%`;
+    if (messageEl && message) messageEl.textContent = message;
+}
+
+function hideCopyProgress() {
+    const toast = document.getElementById('copyProgressToast');
+    if (toast) {
+        toast.style.display = 'none';
+    }
+    if (copyProgressPollInterval) {
+        clearInterval(copyProgressPollInterval);
+        copyProgressPollInterval = null;
+    }
+    activeCopyMovieId = null;
+}
+
+function showCopyComplete(message, isError = false) {
+    const titleEl = document.getElementById('copyProgressTitle');
+    const messageEl = document.getElementById('copyProgressMessage');
+    const barEl = document.getElementById('copyProgressBar');
+    
+    if (titleEl) titleEl.textContent = isError ? 'Copy Failed' : 'Copy Complete';
+    if (messageEl) messageEl.textContent = message;
+    if (barEl) barEl.style.width = isError ? '0%' : '100%';
+    if (barEl) barEl.style.background = isError ? '#f44336' : '#4caf50';
+    
+    // Auto-hide after 5 seconds
+    setTimeout(() => {
+        const barEl = document.getElementById('copyProgressBar');
+        if (barEl) barEl.style.background = '#4a9eff';  // Reset color
+        hideCopyProgress();
+    }, 5000);
+}
+
+async function copyMovieToLocal(movieId, movieName) {
+    if (activeCopyMovieId === movieId) {
+        showStatus('Copy already in progress', 'info');
+        return;
+    }
+    
+    activeCopyMovieId = movieId;
+    showCopyProgress(movieName);
+    
+    try {
+        // Start the copy
+        const response = await fetch(`/api/movie/${movieId}/copy-to-local`, {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === 'already_copied') {
+            showCopyComplete(data.message);
+            return;
+        }
+        
+        if (data.status === 'complete') {
+            showCopyComplete(data.message);
+            return;
+        }
+        
+        if (data.status === 'in_progress') {
+            // Start polling for progress
+            startCopyProgressPolling(movieId);
+            return;
+        }
+        
+        if (!response.ok) {
+            showCopyComplete(data.detail || 'Copy failed', true);
+            return;
+        }
+        
+        showCopyComplete(data.message || 'Copy complete');
+        
+    } catch (error) {
+        showCopyComplete('Error: ' + error.message, true);
+    }
+}
+
+function startCopyProgressPolling(movieId) {
+    if (copyProgressPollInterval) {
+        clearInterval(copyProgressPollInterval);
+    }
+    
+    copyProgressPollInterval = setInterval(async () => {
+        try {
+            const response = await fetch(`/api/movie/${movieId}/copy-status`);
+            const data = await response.json();
+            
+            if (data.status === 'in_progress') {
+                updateCopyProgress(data.progress || 0, data.message);
+            } else if (data.status === 'complete' || data.status === 'already_copied') {
+                clearInterval(copyProgressPollInterval);
+                copyProgressPollInterval = null;
+                showCopyComplete(data.message);
+            } else if (data.status === 'error') {
+                clearInterval(copyProgressPollInterval);
+                copyProgressPollInterval = null;
+                showCopyComplete(data.message, true);
+            }
+        } catch (error) {
+            console.error('Error polling copy status:', error);
+        }
+    }, 500);  // Poll every 500ms
+}
+
+async function checkCopyStatus(movieId) {
+    try {
+        const response = await fetch(`/api/movie/${movieId}/copy-status`);
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error checking copy status:', error);
+        return { status: 'error', message: error.message };
+    }
 }

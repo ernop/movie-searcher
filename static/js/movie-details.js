@@ -289,6 +289,16 @@ async function launchMovie(movieId) {
 let availableSubtitles = {};
 let selectedSubtitles = {};
 
+// Note: Copy to Local and menu functionality is now handled by movie-menu.js
+// The handleCopyToLocal function is called via handleMovieMenuAction in movie-menu.js
+
+function closeAllMenus() {
+    document.querySelectorAll('.movie-card-menu-dropdown').forEach(menu => {
+        menu.classList.remove('show');
+        menu.classList.remove('active');
+    });
+}
+
 async function loadSubtitles(movieId) {
     try {
         const response = await fetch(`/api/subtitles?movie_id=${movieId}`);
@@ -403,13 +413,15 @@ async function loadMovieDetailsById(id) {
                         </button>
                         ${subtitleSelect}
                         <button class="launch-btn" onclick="launchMovie(${movie.id})">Launch</button>
-                        <div style="position: relative; display: inline-block;">
-                            <button class="btn btn-secondary" onclick="event.stopPropagation(); toggleCardMenu(this, 'menu-details-${movie.id}')">...</button>
-                            <div class="movie-card-menu-dropdown" id="menu-details-${movie.id}" style="right: auto; left: 0;">
-                                <button class="movie-card-menu-item" onclick="event.stopPropagation(); showAddToPlaylistMenu(${movie.id})">Add to playlist</button>
-                                <button class="movie-card-menu-item" onclick="event.stopPropagation(); hideMovie(${movie.id})">Don't show this anymore</button>
+                        ${typeof renderDetailsMenu === 'function' ? renderDetailsMenu(movie, 'menu-details-' + movie.id) : `
+                            <div style="position: relative; display: inline-block;">
+                                <button class="btn btn-secondary" onclick="event.stopPropagation(); toggleCardMenu(this, 'menu-details-${movie.id}')">...</button>
+                                <div class="movie-card-menu-dropdown" id="menu-details-${movie.id}" style="right: auto; left: 0;">
+                                    <button class="movie-card-menu-item" onclick="event.stopPropagation(); showAddToPlaylistMenu(${movie.id})">Add to playlist</button>
+                                    <button class="movie-card-menu-item" onclick="event.stopPropagation(); hideMovie(${movie.id})">Don't show this anymore</button>
+                                </div>
                             </div>
-                        </div>
+                        `}
                     </div>
                     <div class="external-links" style="margin-top: 20px;">
                         <a href="${externalLinks.letterboxd}" target="_blank" class="external-link">Letterboxd</a>
@@ -428,6 +440,7 @@ async function loadMovieDetailsById(id) {
             </div>
         `;
         initAllStarRatings();
+        // Menu state is pre-computed server-side, no need for additional API calls
     } catch (error) {
         container.innerHTML = `<div class="empty-state">Error loading movie: ${error.message}</div>`;
     }

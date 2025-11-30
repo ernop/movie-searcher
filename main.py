@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from typing import List, Optional, Literal
 import os
 import json
@@ -38,6 +38,7 @@ from database import (
     Base, SessionLocal, get_db,
     Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, IndexedPath, Config, Screenshot, SchemaVersion,
     Playlist, PlaylistItem, ExternalMovie, Person, MovieCredit,
+    MovieList, MovieListItem,
     init_db, migrate_db_schema, remove_sample_files,
     get_movie_id_by_path, get_indexed_paths_set, get_movie_screenshot_path
 )
@@ -92,7 +93,7 @@ scan_start_lock = threading.Lock()
 SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.vtt', '.ass', '.ssa'}
 
 # Import config functions from shared module
-from config import load_config, save_config, get_movies_folder
+from config import load_config, save_config, get_movies_folder, get_local_target_folder
 
 def filter_existing_screenshots(screenshot_objs: list) -> list:
     """
@@ -420,7 +421,7 @@ from core.models import (
     MovieInfo, SearchRequest, LaunchRequest, ChangeStatusRequest,
     RatingRequest, ConfigRequest, FolderRequest, CleanNameTestRequest,
     ScreenshotsIntervalRequest, AiSearchRequest, PlaylistCreateRequest,
-    PlaylistAddMovieRequest
+    PlaylistAddMovieRequest, MovieListUpdateRequest
 )
 
 @app.post("/api/frames/start")
@@ -1598,6 +1599,7 @@ async def get_config():
     try:
         config = load_config()
         movies_folder = get_movies_folder()
+        local_target_folder = get_local_target_folder()
         
         # Check ffmpeg status and run comprehensive test
         ffmpeg_path = find_ffmpeg()
@@ -1616,6 +1618,7 @@ async def get_config():
         # Return all config settings
         return {
             "movies_folder": movies_folder or "",
+            "local_target_folder": local_target_folder or "",
             "ffmpeg": ffmpeg_status,
             "settings": config  # Return all settings
         }
@@ -1730,6 +1733,60 @@ async def set_config(request: ConfigRequest):
         ROOT_MOVIE_PATH = absolute_path_str
         logger.info(f"Updated ROOT_MOVIE_PATH to: {ROOT_MOVIE_PATH}")
     
+    # Update local target folder if provided
+    if request.local_target_folder is not None:
+        if not request.local_target_folder:
+            # Remove local target folder from config
+            config.pop("local_target_folder", None)
+            save_config(config)
+            logger.info("Removed local_target_folder from config")
+        else:
+            # Normalize path (handle both / and \)
+            local_folder_path = request.local_target_folder.strip()
+            
+            # Validate that path is absolute before processing
+            if os.name == 'nt':  # Windows
+                is_drive_path = local_folder_path and len(local_folder_path) >= 3 and local_folder_path[1] == ':' and local_folder_path[2] in ['\\', '/']
+                is_unc_path = local_folder_path and local_folder_path.startswith('\\\\')
+                if not (is_drive_path or is_unc_path):
+                    error_msg = f"Local target path must be absolute (start with drive letter like C:\\ or D:\\): '{local_folder_path}'"
+                    logger.error(error_msg)
+                    raise HTTPException(status_code=400, detail=error_msg)
+                local_folder_path = local_folder_path.replace('/', '\\')
+                if not local_folder_path.startswith('\\\\'):
+                    local_folder_path = local_folder_path.replace('\\\\', '\\')
+                if local_folder_path.endswith('\\') and len(local_folder_path) > 3:
+                    local_folder_path = local_folder_path.rstrip('\\')
+            else:
+                if not (local_folder_path and local_folder_path.startswith('/')):
+                    error_msg = f"Local target path must be absolute (start with /): '{local_folder_path}'"
+                    logger.error(error_msg)
+                    raise HTTPException(status_code=400, detail=error_msg)
+            
+            logger.info(f"Local target folder normalized path: '{local_folder_path}'")
+            
+            local_path_obj = Path(local_folder_path)
+            local_path_obj = local_path_obj.absolute()
+            
+            if not local_path_obj.exists():
+                # Try to create the directory
+                try:
+                    local_path_obj.mkdir(parents=True, exist_ok=True)
+                    logger.info(f"Created local target folder: '{local_path_obj}'")
+                except Exception as e:
+                    logger.error(f"Failed to create local target folder: {e}")
+                    raise HTTPException(status_code=400, detail=f"Cannot create local target folder: '{local_folder_path}': {e}")
+            
+            if not local_path_obj.is_dir():
+                error_msg = f"Local target path is not a directory: '{local_folder_path}'"
+                logger.error(error_msg)
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            absolute_local_path_str = str(local_path_obj)
+            config["local_target_folder"] = absolute_local_path_str
+            save_config(config)
+            logger.info(f"Saved local_target_folder to config: {absolute_local_path_str}")
+    
     # Update user settings if provided
     if request.settings:
         for key, value in request.settings.items():
@@ -1753,7 +1810,7 @@ async def set_config(request: ConfigRequest):
         save_config(config)
         logger.info(f"Updated user settings: {list(request.settings.keys())}")
     
-    return {"status": "updated", "movies_folder": config.get("movies_folder", ""), "settings": config}
+    return {"status": "updated", "movies_folder": config.get("movies_folder", ""), "local_target_folder": config.get("local_target_folder", ""), "settings": config}
 
 @app.post("/api/open-folder")
 async def open_folder(request: FolderRequest):
@@ -1808,6 +1865,225 @@ async def open_folder(request: FolderRequest):
     except Exception as e:
         logger.error(f"Error opening folder: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Global tracking for copy operations in progress
+_copy_operations = {}  # {movie_id: {"status": str, "progress": float, "message": str, "copied_files": list}}
+
+@app.post("/api/movie/{movie_id}/copy-to-local")
+async def copy_movie_to_local(movie_id: int):
+    """Copy movie (video file + subtitles) to local target folder.
+    
+    Creates a folder named after the cleaned movie name in the local target folder,
+    then copies the video file and all subtitle files.
+    """
+    global _copy_operations
+    
+    # Check if copy is already in progress for this movie
+    if movie_id in _copy_operations and _copy_operations[movie_id].get("status") == "in_progress":
+        return {
+            "status": "in_progress",
+            "message": "Copy already in progress",
+            "progress": _copy_operations[movie_id].get("progress", 0)
+        }
+    
+    # Check local_target_folder is configured
+    local_target = get_local_target_folder()
+    if not local_target:
+        raise HTTPException(status_code=400, detail="Local target folder not configured. Please set it in Settings first.")
+    
+    local_target_path = Path(local_target)
+    if not local_target_path.exists():
+        raise HTTPException(status_code=400, detail=f"Local target folder does not exist: {local_target}")
+    
+    # Get movie from database
+    db = SessionLocal()
+    try:
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail=f"Movie not found: {movie_id}")
+        
+        movie_path = Path(movie.path)
+        if not movie_path.exists():
+            raise HTTPException(status_code=404, detail=f"Movie file not found: {movie.path}")
+        
+        # Get the source folder (parent of the video file)
+        source_folder = movie_path.parent
+        
+        # Generate target folder name using the cleaned movie name
+        from scanning import clean_movie_name
+        cleaned_name, year = clean_movie_name(movie.name)
+        # Sanitize the folder name (remove characters not allowed in folder names)
+        folder_name = cleaned_name
+        if year:
+            folder_name = f"{cleaned_name} ({year})"
+        # Remove or replace invalid characters for Windows folder names
+        invalid_chars = '<>:"/\\|?*'
+        for char in invalid_chars:
+            folder_name = folder_name.replace(char, '_')
+        folder_name = folder_name.strip('. ')  # Remove leading/trailing dots and spaces
+        
+        # Create target folder path
+        target_folder = local_target_path / folder_name
+        target_video_path = target_folder / movie_path.name
+        
+        # Check if already copied (video file exists and same size)
+        if target_video_path.exists():
+            source_size = movie_path.stat().st_size
+            target_size = target_video_path.stat().st_size
+            if source_size == target_size:
+                return {
+                    "status": "already_copied",
+                    "message": f"Movie already exists in local folder: {folder_name}",
+                    "target_folder": str(target_folder)
+                }
+        
+        # Initialize progress tracking
+        _copy_operations[movie_id] = {
+            "status": "in_progress",
+            "progress": 0,
+            "message": "Starting copy...",
+            "copied_files": []
+        }
+        
+        # Create target folder
+        try:
+            target_folder.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            _copy_operations[movie_id] = {"status": "error", "message": f"Failed to create folder: {e}"}
+            raise HTTPException(status_code=500, detail=f"Failed to create target folder: {e}")
+        
+        # Find subtitle files to copy
+        subtitle_extensions = {'.srt', '.sub', '.vtt', '.ass', '.ssa'}
+        subtitle_files = []
+        
+        # Check source folder for subtitles
+        for item in source_folder.iterdir():
+            if item.is_file() and item.suffix.lower() in subtitle_extensions:
+                subtitle_files.append(item)
+        
+        # Check "subs" subfolder (case-insensitive)
+        for item in source_folder.iterdir():
+            if item.is_dir() and item.name.lower() == "subs":
+                for sub_item in item.iterdir():
+                    if sub_item.is_file() and sub_item.suffix.lower() in subtitle_extensions:
+                        subtitle_files.append(sub_item)
+        
+        # Files to copy: video file + all subtitle files
+        files_to_copy = [(movie_path, target_folder / movie_path.name)]
+        for sub_file in subtitle_files:
+            # Flatten subs folder - copy all subtitles to root of target folder
+            files_to_copy.append((sub_file, target_folder / sub_file.name))
+        
+        total_size = sum(f[0].stat().st_size for f in files_to_copy)
+        copied_size = 0
+        copied_files = []
+        
+        _copy_operations[movie_id]["message"] = f"Copying {len(files_to_copy)} file(s)..."
+        
+        try:
+            for src_path, dest_path in files_to_copy:
+                file_size = src_path.stat().st_size
+                
+                _copy_operations[movie_id]["message"] = f"Copying: {src_path.name}"
+                logger.info(f"Copying {src_path} -> {dest_path}")
+                
+                # Skip if already exists with same size
+                if dest_path.exists() and dest_path.stat().st_size == file_size:
+                    copied_size += file_size
+                    _copy_operations[movie_id]["progress"] = (copied_size / total_size) * 100 if total_size > 0 else 100
+                    copied_files.append(str(dest_path.name))
+                    continue
+                
+                # Copy with progress tracking (chunked for large files)
+                chunk_size = 1024 * 1024 * 8  # 8MB chunks
+                copied_bytes = 0
+                
+                with open(src_path, 'rb') as src_file, open(dest_path, 'wb') as dest_file:
+                    while True:
+                        chunk = src_file.read(chunk_size)
+                        if not chunk:
+                            break
+                        dest_file.write(chunk)
+                        copied_bytes += len(chunk)
+                        
+                        # Update progress
+                        current_progress = (copied_size + copied_bytes) / total_size * 100 if total_size > 0 else 100
+                        _copy_operations[movie_id]["progress"] = current_progress
+                
+                # Preserve file metadata (times, etc.)
+                shutil.copystat(str(src_path), str(dest_path))
+                
+                copied_size += file_size
+                copied_files.append(str(dest_path.name))
+            
+            _copy_operations[movie_id] = {
+                "status": "complete",
+                "progress": 100,
+                "message": f"Copied {len(copied_files)} file(s) to {folder_name}",
+                "copied_files": copied_files,
+                "target_folder": str(target_folder)
+            }
+            
+            return {
+                "status": "complete",
+                "message": f"Successfully copied {len(copied_files)} file(s)",
+                "copied_files": copied_files,
+                "target_folder": str(target_folder)
+            }
+            
+        except Exception as e:
+            error_msg = f"Error copying files: {e}"
+            logger.error(error_msg, exc_info=True)
+            _copy_operations[movie_id] = {"status": "error", "progress": 0, "message": error_msg}
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+    finally:
+        db.close()
+
+@app.get("/api/movie/{movie_id}/copy-status")
+async def get_copy_status(movie_id: int):
+    """Get the status of a copy operation for a movie."""
+    if movie_id in _copy_operations:
+        return _copy_operations[movie_id]
+    
+    # Check if already copied
+    local_target = get_local_target_folder()
+    if not local_target:
+        return {"status": "not_configured", "message": "Local target folder not configured"}
+    
+    db = SessionLocal()
+    try:
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            return {"status": "error", "message": "Movie not found"}
+        
+        movie_path = Path(movie.path)
+        if not movie_path.exists():
+            return {"status": "error", "message": "Movie file not found"}
+        
+        # Check if target folder exists with the video
+        from scanning import clean_movie_name
+        cleaned_name, year = clean_movie_name(movie.name)
+        folder_name = cleaned_name
+        if year:
+            folder_name = f"{cleaned_name} ({year})"
+        invalid_chars = '<>:"/\\|?*'
+        for char in invalid_chars:
+            folder_name = folder_name.replace(char, '_')
+        folder_name = folder_name.strip('. ')
+        
+        target_folder = Path(local_target) / folder_name
+        target_video = target_folder / movie_path.name
+        
+        if target_video.exists():
+            source_size = movie_path.stat().st_size
+            target_size = target_video.stat().st_size
+            if source_size == target_size:
+                return {"status": "already_copied", "message": "Already copied", "target_folder": str(target_folder)}
+        
+        return {"status": "not_copied", "message": "Not yet copied"}
+    finally:
+        db.close()
 
 @app.get("/api/stats")
 async def get_stats():
@@ -2107,37 +2383,59 @@ async def explore_movies(
         movie_cards = build_movie_cards(db, rows)
         result_movies = [movie_cards[m.id] for m in rows]
 
-        # Letter counts across all movies respecting watched filter (but not letter/year/decade filters)
-        # Fetch only needed columns for speed
-        counts_q = db.query(Movie.id, Movie.name, Movie.year)
+        # Compute counts using efficient SQL GROUP BY (not Python iteration)
+        # Base filter for counts: same as main query but without letter/year/decade filters
+        base_filter = [
+            or_(Movie.length == None, Movie.length >= 60),
+            Movie.hidden == False
+        ]
+        
+        # Apply watch filter to counts
+        watch_filter = []
         if filter_type == "watched":
             exists_watch = db.query(MovieStatus.id).filter(
                 (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
             ).exists()
-            counts_q = counts_q.filter(exists_watch)
+            watch_filter = [exists_watch]
         elif filter_type == "unwatched":
             exists_watch = db.query(MovieStatus.id).filter(
                 (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
             ).exists()
-            counts_q = counts_q.filter(~exists_watch)
-        elif filter_type == "newest":
-            if newest_ids_subq is not None:
-                counts_q = counts_q.filter(Movie.id.in_(newest_ids_subq))
-            
+            watch_filter = [~exists_watch]
+        elif filter_type == "newest" and newest_ids_subq is not None:
+            watch_filter = [Movie.id.in_(newest_ids_subq)]
+        
+        all_filters = base_filter + watch_filter
+        
+        # Letter counts via SQL GROUP BY on first character
+        letter_counts_rows = db.query(
+            func.upper(func.substr(Movie.name, 1, 1)).label('letter'),
+            func.count(Movie.id)
+        ).filter(*all_filters).group_by(func.upper(func.substr(Movie.name, 1, 1))).all()
+        
         letter_counts = {}
-        year_counts = {}
-        decade_counts = {}
-        no_year_count = 0
-        for _, nm, yr in counts_q.all():
-            lt = get_first_letter(nm)
-            letter_counts[lt] = letter_counts.get(lt, 0) + 1
-            if yr is not None:
-                year_counts[yr] = year_counts.get(yr, 0) + 1
-                # Calculate decade (e.g., 1987 -> 1980s)
-                decade_start = (yr // 10) * 10
-                decade_counts[decade_start] = decade_counts.get(decade_start, 0) + 1
+        for lt, cnt in letter_counts_rows:
+            if lt and lt.isalpha():
+                letter_counts[lt] = cnt
             else:
-                no_year_count += 1
+                letter_counts['#'] = letter_counts.get('#', 0) + cnt
+        
+        # Year counts via SQL GROUP BY
+        year_counts_rows = db.query(
+            Movie.year,
+            func.count(Movie.id)
+        ).filter(*all_filters, Movie.year.isnot(None)).group_by(Movie.year).all()
+        year_counts = {yr: cnt for yr, cnt in year_counts_rows}
+        
+        # Decade counts via SQL GROUP BY (year / 10 * 10)
+        decade_counts_rows = db.query(
+            (Movie.year / 10 * 10).label('decade'),
+            func.count(Movie.id)
+        ).filter(*all_filters, Movie.year.isnot(None)).group_by(Movie.year / 10 * 10).all()
+        decade_counts = {int(dec): cnt for dec, cnt in decade_counts_rows if dec}
+        
+        # No year count
+        no_year_count = db.query(func.count(Movie.id)).filter(*all_filters, Movie.year == None).scalar() or 0
 
         return {
             "movies": result_movies,
@@ -2906,8 +3204,123 @@ def parse_ai_response_json(raw_text: str, interaction_id: str, provider_label: s
         )
         raise ValueError("Failed to parse AI response JSON") from exc
 
+
+def generate_movie_list_slug(title: str, db: Session) -> str:
+    """Generate a unique URL-friendly slug for a movie list."""
+    import time
+    # Clean the title to create base slug
+    base_slug = re.sub(r'[^\w\s-]', '', title.lower())
+    base_slug = re.sub(r'[\s_]+', '-', base_slug).strip('-')
+    base_slug = base_slug[:50]  # Limit length
+    
+    if not base_slug:
+        base_slug = "movie-list"
+    
+    # Add timestamp suffix for uniqueness
+    timestamp = int(time.time())
+    slug = f"{base_slug}-{timestamp}"
+    
+    # Check if slug already exists (unlikely with timestamp)
+    existing = db.query(MovieList).filter(MovieList.slug == slug).first()
+    if existing:
+        # Add random suffix if collision
+        import random
+        slug = f"{base_slug}-{timestamp}-{random.randint(1000, 9999)}"
+    
+    return slug
+
+
+def get_unique_movie_list_title(title: str, db: Session) -> str:
+    """Ensure movie list title is unique by adding (2), (3), etc. if needed."""
+    # Check if this exact title exists
+    existing = db.query(MovieList).filter(
+        MovieList.title == title,
+        MovieList.is_deleted == False
+    ).first()
+    
+    if not existing:
+        return title
+    
+    # Find existing titles with same base
+    counter = 2
+    while True:
+        new_title = f"{title} ({counter})"
+        existing = db.query(MovieList).filter(
+            MovieList.title == new_title,
+            MovieList.is_deleted == False
+        ).first()
+        if not existing:
+            return new_title
+        counter += 1
+
+
+def save_movie_list(
+    db: Session,
+    query: str,
+    title: str,
+    provider: str,
+    comment: str,
+    cost_usd: float,
+    found_movies: list,
+    missing_movies: list,
+    deduped_ai_movies: list
+) -> MovieList:
+    """Save AI search results as a MovieList with items."""
+    # Generate unique title and slug
+    unique_title = get_unique_movie_list_title(title, db)
+    slug = generate_movie_list_slug(unique_title, db)
+    
+    # Create the movie list
+    movie_list = MovieList(
+        slug=slug,
+        query=query,
+        title=unique_title,
+        provider=provider,
+        comment=comment,
+        cost_usd=cost_usd,
+        movies_count=len(found_movies) + len(missing_movies),
+        in_library_count=len(found_movies)
+    )
+    db.add(movie_list)
+    db.flush()  # Get the ID
+    
+    # Add items from found movies
+    sort_order = 0
+    for fm in found_movies:
+        item = MovieListItem(
+            movie_list_id=movie_list.id,
+            movie_id=fm.get("id"),
+            title=fm.get("name", "Unknown"),
+            year=fm.get("year"),
+            ai_comment=fm.get("ai_comment"),
+            is_in_library=True,
+            sort_order=sort_order
+        )
+        db.add(item)
+        sort_order += 1
+    
+    # Add items from missing movies
+    for mm in missing_movies:
+        item = MovieListItem(
+            movie_list_id=movie_list.id,
+            movie_id=None,
+            title=mm.get("name", "Unknown"),
+            year=mm.get("year"),
+            ai_comment=mm.get("ai_comment"),
+            is_in_library=False,
+            sort_order=sort_order
+        )
+        db.add(item)
+        sort_order += 1
+    
+    db.commit()
+    logger.info(f"Saved movie list: id={movie_list.id}, slug={slug}, title={unique_title}")
+    return movie_list
+
+
 @app.post("/api/ai_search")
 async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks):
+    """AI search endpoint that streams progress updates via SSE."""
     openai_key, anthropic_key = load_api_keys()
     
     if request.provider == "openai" and not openai_key:
@@ -2916,229 +3329,559 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         raise HTTPException(status_code=400, detail="Anthropic API key not found in settings.json")
 
     interaction_id = str(uuid.uuid4())
-    logger.info(f"AI interaction {interaction_id} received: provider={request.provider}, query={request.query}")
-
-    prompt = f"""
-    The user is asking about movies. Your goal is to return a structured JSON list of movies matching their query.
     
-    User Query: "{request.query}"
-    
-    Guidance:
-    - Do not add a comment unless you genuinely have something useful or interesting to say.
-    - NEVER rephrase the user's query, acknowledge that you are responding, or summarize that you have provided an answer.
-    - Leaving the comment blank is acceptable unless explicitly asked otherwise.
-    
-    Return JSON format:
-    {{
-        "comment": "Optional overall comment.",
-        "movies": [
-            {{
-                "name": "Movie Title",
-                "year": 1999,
-                "comment": "Optional relevant comment."
-            }}
-        ]
-    }}
-    
-    If the query is not about movies, return an empty 'movies' list.
-    """
-    logger.info(f"AI interaction {interaction_id} prompt payload:\n{prompt.strip()}")
-    
-    response_data = {"comment": "", "movies": []}
-    cost_cents = None
-    cost_usd = None
-    cost_details = "Cost not available."
-    
-    try:
-        if request.provider == "openai":
-            provider_key = "openai"
-            model_name = "gpt-5.1"
-            client = openai.OpenAI(api_key=openai_key)
-            logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "You are a helpful movie assistant. Return JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}
-            )
-            
-            content = completion.choices[0].message.content
-            logger.info(f"AI interaction {interaction_id} <- response from {provider_key} ({model_name}): {content}")
-            response_data = parse_ai_response_json(content, interaction_id, f"{provider_key} ({model_name})")
-            
-            if completion.usage:
-                in_tokens = completion.usage.prompt_tokens or 0
-                out_tokens = completion.usage.completion_tokens or 0
-                cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
-                usd_display = f"${cost_usd:.6f}" if cost_usd is not None else "unknown"
-                logger.info(
-                    f"AI interaction {interaction_id} usage: provider={provider_key}, "
-                    f"input_tokens={in_tokens}, output_tokens={out_tokens}, est_cost_usd={usd_display}"
-                )
-            else:
-                model_label = AI_PRICING[provider_key]["model"]
-                cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
-                logger.warning(f"AI interaction {interaction_id} missing usage data from {provider_key}")
-            
-        elif request.provider == "anthropic":
-            provider_key = "anthropic"
-            model_name = "claude-sonnet-4-5"
-            client = anthropic.Anthropic(api_key=anthropic_key)
-            logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
-            message = client.messages.create(
-                model=model_name,
-                max_tokens=4096,
-                system="You are a helpful movie assistant. Return JSON only.",
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            
-            content = message.content[0].text
-            logger.info(f"AI interaction {interaction_id} <- response from {provider_key} ({model_name}): {content}")
-            response_data = parse_ai_response_json(content, interaction_id, f"{provider_key} ({model_name})")
-            
-            if message.usage:
-                in_tokens = message.usage.input_tokens or 0
-                out_tokens = message.usage.output_tokens or 0
-                cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
-                usd_display = f"${cost_usd:.6f}" if cost_usd is not None else "unknown"
-                logger.info(
-                    f"AI interaction {interaction_id} usage: provider={provider_key}, "
-                    f"input_tokens={in_tokens}, output_tokens={out_tokens}, est_cost_usd={usd_display}"
-                )
-            else:
-                model_label = AI_PRICING[provider_key]["model"]
-                cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
-                logger.warning(f"AI interaction {interaction_id} missing usage data from {provider_key}")
-            
-    except Exception as e:
-        logger.error(f"AI interaction {interaction_id} error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    def generate_sse():
+        """Generator that yields SSE events with progress updates."""
         
-    # Remove duplicate movies returned by the model (ignore differing comments)
-    deduped_movies = []
-    seen_keys = set()
-    for movie in response_data.get("movies", []):
-        title = (movie.get("name") or "").strip()
-        if not title:
-            continue
-        year = movie.get("year")
-        norm_title = re.sub(r'[^\w\s]', '', title).lower()
-        key = (norm_title, year)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        deduped_movies.append(movie)
-    response_data["movies"] = deduped_movies
-    
-    # Match against DB
-    db = SessionLocal()
-    found_movies = []
-    missing_movies = []
-    
-    try:
-        all_movies = db.query(Movie).filter(Movie.hidden == False).all()
+        def send_progress(step: int, total: int, message: str):
+            event_data = json.dumps({"type": "progress", "step": step, "total": total, "message": message})
+            return f"data: {event_data}\n\n"
         
-        # Pre-process DB movies for faster matching
-        db_movie_map = {}
-        for m in all_movies:
-            norm_name = re.sub(r'[^\w\s]', '', m.name).lower().strip()
-            if norm_name not in db_movie_map:
-                db_movie_map[norm_name] = []
-            db_movie_map[norm_name].append(m)
+        def send_result(result: dict):
+            event_data = json.dumps({"type": "result", **result})
+            return f"data: {event_data}\n\n"
+        
+        def send_error(error_msg: str):
+            event_data = json.dumps({"type": "error", "detail": error_msg})
+            return f"data: {event_data}\n\n"
+        
+        logger.info(f"AI interaction {interaction_id} received: provider={request.provider}, query={request.query}")
+        
+        # Step 1: Preparing query
+        yield send_progress(1, 4, "Preparing query for AI...")
+        
+        prompt = f"""
+        The user is asking about movies. Your goal is to return a structured JSON list of movies matching their query.
+        
+        User Query: "{request.query}"
+        
+        Guidance:
+        - Generate a SHORT, CONCISE title (max 6-8 words) that summarizes this movie list. Do NOT repeat the query verbatim.
+        - Do not add a comment unless you genuinely have something useful or interesting to say.
+        - NEVER rephrase the user's query, acknowledge that you are responding, or summarize that you have provided an answer.
+        - Leaving the comment blank is acceptable unless explicitly asked otherwise.
+        
+        Return JSON format:
+        {{
+            "title": "Concise list title (6-8 words max)",
+            "comment": "Optional overall comment.",
+            "movies": [
+                {{
+                    "name": "Movie Title",
+                    "year": 1999,
+                    "comment": "Optional relevant comment."
+                }}
+            ]
+        }}
+        
+        If the query is not about movies, return an empty 'movies' list but still provide a title.
+        """
+        logger.info(f"AI interaction {interaction_id} prompt payload:\n{prompt.strip()}")
+        
+        response_data = {"comment": "", "movies": []}
+        cost_cents = None
+        cost_usd = None
+        cost_details = "Cost not available."
+        
+        # Step 2: Calling AI
+        provider_display = "OpenAI" if request.provider == "openai" else "Anthropic"
+        yield send_progress(2, 4, f"Waiting for {provider_display} response...")
+        
+        try:
+            if request.provider == "openai":
+                provider_key = "openai"
+                model_name = "gpt-5.1"
+                client = openai.OpenAI(api_key=openai_key)
+                logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful movie assistant. Return JSON only."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"}
+                )
+                
+                content = completion.choices[0].message.content
+                logger.info(f"AI interaction {interaction_id} <- response from {provider_key} ({model_name}): {content}")
+                response_data = parse_ai_response_json(content, interaction_id, f"{provider_key} ({model_name})")
+                
+                if completion.usage:
+                    in_tokens = completion.usage.prompt_tokens or 0
+                    out_tokens = completion.usage.completion_tokens or 0
+                    cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                    usd_display = f"${cost_usd:.6f}" if cost_usd is not None else "unknown"
+                    logger.info(
+                        f"AI interaction {interaction_id} usage: provider={provider_key}, "
+                        f"input_tokens={in_tokens}, output_tokens={out_tokens}, est_cost_usd={usd_display}"
+                    )
+                else:
+                    model_label = AI_PRICING[provider_key]["model"]
+                    cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
+                    logger.warning(f"AI interaction {interaction_id} missing usage data from {provider_key}")
+                
+            elif request.provider == "anthropic":
+                provider_key = "anthropic"
+                model_name = "claude-sonnet-4-5"
+                client = anthropic.Anthropic(api_key=anthropic_key)
+                logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
+                message = client.messages.create(
+                    model=model_name,
+                    max_tokens=4096,
+                    system="You are a helpful movie assistant. Return JSON only.",
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                
+                content = message.content[0].text
+                logger.info(f"AI interaction {interaction_id} <- response from {provider_key} ({model_name}): {content}")
+                response_data = parse_ai_response_json(content, interaction_id, f"{provider_key} ({model_name})")
+                
+                if message.usage:
+                    in_tokens = message.usage.input_tokens or 0
+                    out_tokens = message.usage.output_tokens or 0
+                    cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                    usd_display = f"${cost_usd:.6f}" if cost_usd is not None else "unknown"
+                    logger.info(
+                        f"AI interaction {interaction_id} usage: provider={provider_key}, "
+                        f"input_tokens={in_tokens}, output_tokens={out_tokens}, est_cost_usd={usd_display}"
+                    )
+                else:
+                    model_label = AI_PRICING[provider_key]["model"]
+                    cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
+                    logger.warning(f"AI interaction {interaction_id} missing usage data from {provider_key}")
+                
+        except Exception as e:
+            logger.error(f"AI interaction {interaction_id} error: {e}")
+            yield send_error(str(e))
+            return
+        
+        # Step 3: Processing AI response
+        num_movies = len(response_data.get("movies", []))
+        yield send_progress(3, 4, f"Matching {num_movies} movies against your library...")
             
-        for ai_movie in response_data.get("movies", []):
-            title = ai_movie.get("name", "")
-            year = ai_movie.get("year")
-            comment = ai_movie.get("comment", "")
-            
+        # Remove duplicate movies returned by the model (ignore differing comments)
+        deduped_movies = []
+        seen_keys = set()
+        for movie in response_data.get("movies", []):
+            title = (movie.get("name") or "").strip()
             if not title:
                 continue
+            year = movie.get("year")
+            norm_title = re.sub(r'[^\w\s]', '', title).lower()
+            key = (norm_title, year)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped_movies.append(movie)
+        response_data["movies"] = deduped_movies
+        
+        # Match against DB
+        db = SessionLocal()
+        found_movies = []
+        missing_movies = []
+        
+        try:
+            all_movies = db.query(Movie).filter(Movie.hidden == False).all()
+            
+            # Pre-process DB movies for faster matching
+            db_movie_map = {}
+            for m in all_movies:
+                norm_name = re.sub(r'[^\w\s]', '', m.name).lower().strip()
+                if norm_name not in db_movie_map:
+                    db_movie_map[norm_name] = []
+                db_movie_map[norm_name].append(m)
+                
+            for ai_movie in response_data.get("movies", []):
+                title = ai_movie.get("name", "")
+                year = ai_movie.get("year")
+                comment = ai_movie.get("comment", "")
+                
+                if not title:
+                    continue
 
-            # 1. Try exact normalized match
-            norm_title = re.sub(r'[^\w\s]', '', title).lower().strip()
-            candidates = db_movie_map.get(norm_title, [])
-            
-            match = None
-            
-            # 2. If no exact match, try fuzzy match
-            if not candidates and db_movie_map:
-                # Get best match from keys
-                best_match_result = process.extractOne(norm_title, list(db_movie_map.keys()), scorer=fuzz.token_sort_ratio)
-                if best_match_result:
-                    best_match_name, score = best_match_result
-                    if score > 85:
-                        candidates = db_movie_map[best_match_name]
-            
-            if candidates:
-                # Disambiguate by year
-                matches = []
-                if year and len(candidates) > 1:
-                    try:
-                        target_year = int(year)
-                        for cand in candidates:
-                            if cand.year and abs(cand.year - target_year) <= 1:
-                                matches.append(cand)
-                    except (ValueError, TypeError):
-                        pass
-                    
-                    if not matches:
-                        # If year doesn't match any, but names match, include all candidates (uncertain)
+                # 1. Try exact normalized match
+                norm_title = re.sub(r'[^\w\s]', '', title).lower().strip()
+                candidates = db_movie_map.get(norm_title, [])
+                
+                match = None
+                
+                # 2. If no exact match, try fuzzy match
+                if not candidates and db_movie_map:
+                    # Get best match from keys
+                    best_match_result = process.extractOne(norm_title, list(db_movie_map.keys()), scorer=fuzz.token_sort_ratio)
+                    if best_match_result:
+                        best_match_name, score = best_match_result
+                        if score > 85:
+                            candidates = db_movie_map[best_match_name]
+                
+                if candidates:
+                    # Disambiguate by year
+                    matches = []
+                    if year and len(candidates) > 1:
+                        try:
+                            target_year = int(year)
+                            for cand in candidates:
+                                if cand.year and abs(cand.year - target_year) <= 1:
+                                    matches.append(cand)
+                        except (ValueError, TypeError):
+                            pass
+                        
+                        if not matches:
+                            # If year doesn't match any, but names match, include all candidates (uncertain)
+                            matches = candidates
+                    else:
                         matches = candidates
                 else:
-                    matches = candidates
-            else:
-                matches = []
+                    matches = []
+                
+                if matches:
+                    # Build standardized movie cards for all matched movies
+                    movie_cards = build_movie_cards(db, matches)
+                    
+                    for match in matches:
+                        # Get the standardized card
+                        card = movie_cards.get(match.id)
+                        if card:
+                            # Add AI-specific fields
+                            card["ai_comment"] = comment
+                            found_movies.append(card)
+                else:
+                    missing_movies.append({
+                        "name": title,
+                        "year": year,
+                        "ai_comment": comment
+                    })
+                    
+        except Exception as e:
+            logger.error(f"Error processing AI results: {e}")
+            response_data["comment"] += f" (Error processing results: {str(e)})"
             
-            if matches:
-                # Build standardized movie cards for all matched movies
-                movie_cards = build_movie_cards(db, matches)
-                
-                for match in matches:
-                    # Get the standardized card
-                    card = movie_cards.get(match.id)
-                    if card:
-                        # Add AI-specific fields
-                        card["ai_comment"] = comment
-                        found_movies.append(card)
-            else:
-                missing_movies.append({
-                    "name": title,
-                    "year": year,
-                    "ai_comment": comment
-                })
-                
-    except Exception as e:
-        logger.error(f"Error processing AI results: {e}")
-        response_data["comment"] += f" (Error processing results: {str(e)})"
+        finally:
+            db.close()
+
+        # Step 4: Building results and saving movie list
+        yield send_progress(4, 4, "Saving movie list...")
+
+        cost_cents_payload = round(cost_cents, 4) if cost_cents is not None else None
+        cost_usd_payload = round(cost_usd, 6) if cost_usd is not None else None
+        usd_display = (
+            f"${cost_usd_payload:.6f}" if isinstance(cost_usd_payload, (int, float)) else "unknown"
+        )
+        logger.info(
+            f"AI interaction {interaction_id} completed: found={len(found_movies)}, "
+            f"missing={len(missing_movies)}, est_cost_usd={usd_display}"
+        )
+
+        # Update search history (can't use background_tasks in generator, so do it inline)
+        try:
+            update_search_history_bg(request.query, len(deduped_movies))
+        except Exception as e:
+            logger.warning(f"Failed to update search history: {e}")
         
+        # Extract title from AI response, fallback to query
+        ai_title = response_data.get("title", "").strip()
+        if not ai_title:
+            # Generate a simple title from the query
+            ai_title = request.query[:60]
+            if len(request.query) > 60:
+                ai_title += "..."
+        
+        # Save as movie list
+        movie_list_slug = None
+        movie_list_id = None
+        try:
+            save_db = SessionLocal()
+            try:
+                movie_list = save_movie_list(
+                    db=save_db,
+                    query=request.query,
+                    title=ai_title,
+                    provider=request.provider,
+                    comment=response_data.get("comment", ""),
+                    cost_usd=cost_usd_payload,
+                    found_movies=found_movies,
+                    missing_movies=missing_movies,
+                    deduped_ai_movies=deduped_movies
+                )
+                movie_list_slug = movie_list.slug
+                movie_list_id = movie_list.id
+            finally:
+                save_db.close()
+        except Exception as e:
+            logger.error(f"Failed to save movie list: {e}")
+            
+        yield send_result({
+            "comment": response_data.get("comment", ""),
+            "title": ai_title,
+            "found_movies": found_movies,
+            "missing_movies": missing_movies,
+            "cost_cents": cost_cents_payload,
+            "cost_usd": cost_usd_payload,
+            "cost_details": cost_details,
+            "movie_list_slug": movie_list_slug,
+            "movie_list_id": movie_list_id
+        })
+    
+    return StreamingResponse(
+        generate_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+# ============================================================================
+# Movie Lists API Endpoints
+# ============================================================================
+
+@app.get("/api/movie-lists")
+async def get_movie_lists(
+    favorites_only: bool = Query(False, description="Filter to favorites only"),
+    search: str = Query(None, description="Search query for filtering lists"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0)
+):
+    """Get all movie lists with optional filters."""
+    db = SessionLocal()
+    try:
+        query = db.query(MovieList).filter(MovieList.is_deleted == False)
+        
+        if favorites_only:
+            query = query.filter(MovieList.is_favorite == True)
+        
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(
+                (MovieList.title.ilike(search_pattern)) |
+                (MovieList.query.ilike(search_pattern))
+            )
+        
+        # Get total count
+        total = query.count()
+        
+        # Order by created desc (newest first) and paginate
+        lists = query.order_by(MovieList.created.desc()).offset(offset).limit(limit).all()
+        
+        return {
+            "lists": [
+                {
+                    "id": ml.id,
+                    "slug": ml.slug,
+                    "title": ml.title,
+                    "query": ml.query,
+                    "provider": ml.provider,
+                    "comment": ml.comment,
+                    "cost_usd": ml.cost_usd,
+                    "is_favorite": ml.is_favorite,
+                    "movies_count": ml.movies_count,
+                    "in_library_count": ml.in_library_count,
+                    "created": ml.created.isoformat() if ml.created else None
+                }
+                for ml in lists
+            ],
+            "total": total,
+            "offset": offset,
+            "limit": limit
+        }
     finally:
         db.close()
 
-    cost_cents_payload = round(cost_cents, 4) if cost_cents is not None else None
-    cost_usd_payload = round(cost_usd, 6) if cost_usd is not None else None
-    usd_display = (
-        f"${cost_usd_payload:.6f}" if isinstance(cost_usd_payload, (int, float)) else "unknown"
-    )
-    logger.info(
-        f"AI interaction {interaction_id} completed: found={len(found_movies)}, "
-        f"missing={len(missing_movies)}, est_cost_usd={usd_display}"
-    )
 
-    # Update history in background
-    background_tasks.add_task(update_search_history_bg, request.query, len(deduped_movies))
+@app.get("/api/movie-lists/suggestions")
+async def get_movie_list_suggestions(
+    q: str = Query("", description="Current search/query text for suggestions")
+):
+    """Get suggestions for 'did you mean' and recent lists."""
+    db = SessionLocal()
+    try:
+        suggestions = []
+        recent_lists = []
         
-    return {
-        "comment": response_data.get("comment", ""),
-        "found_movies": found_movies,
-        "missing_movies": missing_movies,
-        "cost_cents": cost_cents_payload,
-        "cost_usd": cost_usd_payload,
-        "cost_details": cost_details
-    }
+        # Get recent lists (last 5)
+        recent = db.query(MovieList).filter(
+            MovieList.is_deleted == False
+        ).order_by(MovieList.created.desc()).limit(5).all()
+        
+        recent_lists = [
+            {
+                "id": ml.id,
+                "slug": ml.slug,
+                "title": ml.title,
+                "movies_count": ml.movies_count
+            }
+            for ml in recent
+        ]
+        
+        # If user is typing, find similar past queries
+        if q and len(q) >= 3:
+            # Get all non-deleted lists for fuzzy matching
+            all_lists = db.query(MovieList).filter(
+                MovieList.is_deleted == False
+            ).all()
+            
+            if all_lists:
+                # Use fuzzy matching on query and title
+                query_matches = []
+                for ml in all_lists:
+                    # Check query similarity
+                    query_score = fuzz.partial_ratio(q.lower(), ml.query.lower())
+                    title_score = fuzz.partial_ratio(q.lower(), ml.title.lower())
+                    best_score = max(query_score, title_score)
+                    
+                    if best_score > 60:  # Threshold for suggestions
+                        query_matches.append((ml, best_score))
+                
+                # Sort by score and take top 3
+                query_matches.sort(key=lambda x: x[1], reverse=True)
+                suggestions = [
+                    {
+                        "id": ml.id,
+                        "slug": ml.slug,
+                        "title": ml.title,
+                        "query": ml.query,
+                        "movies_count": ml.movies_count,
+                        "score": score
+                    }
+                    for ml, score in query_matches[:3]
+                ]
+        
+        return {
+            "suggestions": suggestions,
+            "recent_lists": recent_lists
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/movie-lists/{slug}")
+async def get_movie_list(slug: str):
+    """Get a specific movie list with all its items."""
+    db = SessionLocal()
+    try:
+        movie_list = db.query(MovieList).filter(
+            MovieList.slug == slug,
+            MovieList.is_deleted == False
+        ).first()
+        
+        if not movie_list:
+            raise HTTPException(status_code=404, detail="Movie list not found")
+        
+        # Get all items for this list
+        items = db.query(MovieListItem).filter(
+            MovieListItem.movie_list_id == movie_list.id
+        ).order_by(MovieListItem.sort_order).all()
+        
+        # For items in library, get full movie cards
+        in_library_ids = [item.movie_id for item in items if item.is_in_library and item.movie_id]
+        movie_cards = {}
+        if in_library_ids:
+            movies = db.query(Movie).filter(Movie.id.in_(in_library_ids)).all()
+            movie_cards = build_movie_cards(db, movies)
+        
+        # Build response items
+        found_movies = []
+        missing_movies = []
+        
+        for item in items:
+            if item.is_in_library and item.movie_id and item.movie_id in movie_cards:
+                card = movie_cards[item.movie_id].copy()
+                card["ai_comment"] = item.ai_comment
+                found_movies.append(card)
+            else:
+                missing_movies.append({
+                    "name": item.title,
+                    "year": item.year,
+                    "ai_comment": item.ai_comment
+                })
+        
+        return {
+            "id": movie_list.id,
+            "slug": movie_list.slug,
+            "title": movie_list.title,
+            "query": movie_list.query,
+            "provider": movie_list.provider,
+            "comment": movie_list.comment,
+            "cost_usd": movie_list.cost_usd,
+            "is_favorite": movie_list.is_favorite,
+            "movies_count": movie_list.movies_count,
+            "in_library_count": movie_list.in_library_count,
+            "created": movie_list.created.isoformat() if movie_list.created else None,
+            "found_movies": found_movies,
+            "missing_movies": missing_movies
+        }
+    finally:
+        db.close()
+
+
+@app.patch("/api/movie-lists/{slug}")
+async def update_movie_list(slug: str, request: MovieListUpdateRequest):
+    """Update a movie list (title, favorite status)."""
+    db = SessionLocal()
+    try:
+        movie_list = db.query(MovieList).filter(
+            MovieList.slug == slug,
+            MovieList.is_deleted == False
+        ).first()
+        
+        if not movie_list:
+            raise HTTPException(status_code=404, detail="Movie list not found")
+        
+        if request.title is not None:
+            # Handle duplicate titles
+            unique_title = get_unique_movie_list_title(request.title, db)
+            # But if it's the same list, use the title as-is
+            if movie_list.title != request.title:
+                existing = db.query(MovieList).filter(
+                    MovieList.title == request.title,
+                    MovieList.is_deleted == False,
+                    MovieList.id != movie_list.id
+                ).first()
+                if existing:
+                    movie_list.title = unique_title
+                else:
+                    movie_list.title = request.title
+            else:
+                movie_list.title = request.title
+        
+        if request.is_favorite is not None:
+            movie_list.is_favorite = request.is_favorite
+        
+        db.commit()
+        
+        return {
+            "id": movie_list.id,
+            "slug": movie_list.slug,
+            "title": movie_list.title,
+            "is_favorite": movie_list.is_favorite
+        }
+    finally:
+        db.close()
+
+
+@app.delete("/api/movie-lists/{slug}")
+async def delete_movie_list(slug: str):
+    """Soft delete a movie list."""
+    db = SessionLocal()
+    try:
+        movie_list = db.query(MovieList).filter(
+            MovieList.slug == slug,
+            MovieList.is_deleted == False
+        ).first()
+        
+        if not movie_list:
+            raise HTTPException(status_code=404, detail="Movie list not found")
+        
+        movie_list.is_deleted = True
+        db.commit()
+        
+        return {"status": "deleted", "slug": slug}
+    finally:
+        db.close()
+
 
 # Mount static files directory (favicon, etc.)
 # Must be mounted AFTER specific routes to avoid shadowing root path

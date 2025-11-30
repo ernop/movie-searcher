@@ -252,12 +252,12 @@ async function loadLanguageFilters() {
             return nameA.localeCompare(nameB);
         });
         
-        let html = '<span style="margin-right: 8px; font-weight: 600; white-space: nowrap;">Audio language:</span>';
+        let html = '<span class="language-label">Audio language:</span>';
         for (const code of sortedLanguages) {
             const count = mergedCounts[code];
             const displayName = languageNames[code] || (code ? code : 'unknown');
             const isActive = code === 'all' ? 'active' : '';
-            html += `<button type="button" class="btn ${isActive}" style="white-space:nowrap;margin:0;border-radius:0;" data-language="${code}" onclick="setExploreLanguageFilter('${code}', this)">${displayName} (${count})</button>`;
+            html += `<button type="button" class="btn ${isActive}" data-language="${code}" onclick="setExploreLanguageFilter('${code}', this)">${displayName} (${count})</button>`;
         }
         
         languageGroup.innerHTML = html;

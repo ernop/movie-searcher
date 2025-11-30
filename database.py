@@ -15,6 +15,7 @@ from models import (
     Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, 
     IndexedPath, Config, Screenshot, SchemaVersion, MovieAudio,
     Playlist, PlaylistItem, ExternalMovie, Person, MovieCredit,
+    MovieList, MovieListItem,
     CURRENT_SCHEMA_VERSION
 )
 
@@ -666,6 +667,59 @@ def migrate_db_schema():
             
             set_schema_version(12, "Added playlists and offline metadata tables")
             current_version = 12
+        
+        if current_version < 13:
+            # Create movie_lists and movie_list_items tables
+            logger.info("Creating movie_lists and movie_list_items tables...")
+            with engine.begin() as conn:
+                # Create movie_lists table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS movie_lists (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        slug VARCHAR UNIQUE NOT NULL,
+                        query VARCHAR NOT NULL,
+                        title VARCHAR NOT NULL,
+                        provider VARCHAR,
+                        comment TEXT,
+                        cost_usd FLOAT,
+                        is_favorite BOOLEAN NOT NULL DEFAULT 0,
+                        is_deleted BOOLEAN NOT NULL DEFAULT 0,
+                        movies_count INTEGER NOT NULL DEFAULT 0,
+                        in_library_count INTEGER NOT NULL DEFAULT 0,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_slug ON movie_lists (slug)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_query ON movie_lists (query)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_title ON movie_lists (title)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_is_favorite ON movie_lists (is_favorite)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_is_deleted ON movie_lists (is_deleted)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_created ON movie_lists (created)"))
+                
+                # Create movie_list_items table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS movie_list_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        movie_list_id INTEGER NOT NULL,
+                        movie_id INTEGER,
+                        title VARCHAR NOT NULL,
+                        year INTEGER,
+                        ai_comment TEXT,
+                        is_in_library BOOLEAN NOT NULL DEFAULT 0,
+                        sort_order INTEGER NOT NULL DEFAULT 0,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY (movie_list_id) REFERENCES movie_lists(id) ON DELETE CASCADE,
+                        FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE SET NULL
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_list_items_movie_list_id ON movie_list_items (movie_list_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_list_items_movie_id ON movie_list_items (movie_id)"))
+                logger.info("Migration complete: created movie_lists and movie_list_items tables")
+            
+            set_schema_version(13, "Added movie_lists and movie_list_items tables for AI search results")
+            current_version = 13
         
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
