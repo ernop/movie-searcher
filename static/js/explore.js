@@ -394,12 +394,12 @@ function renderYearFilter(yearCounts, activeYear) {
         const earlierYear = currentIndex < availableYears.length - 1 ? availableYears[currentIndex + 1] : null; // Earlier year (right button, -1, larger index = smaller year)
         
         yearChipContainer.innerHTML = `
-            <button class="year-nav-btn" ${!laterYear ? 'disabled' : ''} onclick="navigateToAdjacentYear(${laterYear || 'null'}, 'later')" title="Later year (${laterYear || 'N/A'})">◀</button>
+            <button class="year-nav-btn" ${!earlierYear ? 'disabled' : ''} onclick="navigateToAdjacentYear(${earlierYear || 'null'}, 'earlier')" title="Earlier year (${earlierYear || 'N/A'})">◀</button>
             <div class="year-chip" data-year="${activeYear}">
                 <span>${activeYear}</span>
                 <span class="year-chip-close" onclick="clearYearFilter()" title="Clear year filter">×</span>
             </div>
-            <button class="year-nav-btn" ${!earlierYear ? 'disabled' : ''} onclick="navigateToAdjacentYear(${earlierYear || 'null'}, 'earlier')" title="Earlier year (${earlierYear || 'N/A'})">▶</button>
+            <button class="year-nav-btn" ${!laterYear ? 'disabled' : ''} onclick="navigateToAdjacentYear(${laterYear || 'null'}, 'later')" title="Later year (${laterYear || 'N/A'})">▶</button>
         `;
         yearInput.value = '';
     } else {

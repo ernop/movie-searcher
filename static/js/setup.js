@@ -381,6 +381,8 @@ function loadSetupPage() {
     loadCurrentFolder();
     loadStats();
     loadSystemStatus();
+    loadVlcOptimizationStatus();
+    loadVlcHardwareAccelSetting();
     
     // Clear dynamic lists to avoid staleness
     const hiddenContainer = document.getElementById('hiddenMoviesList');
@@ -398,6 +400,7 @@ async function recheckSystemStatus() {
     await loadSystemStatus();
 }
 
+<<<<<<< Current (Your changes)
 // Local Target Folder Functions
 
 function showLocalTargetDialog() {
@@ -605,5 +608,198 @@ async function checkCopyStatus(movieId) {
     } catch (error) {
         console.error('Error checking copy status:', error);
         return { status: 'error', message: error.message };
+=======
+// =============================================================================
+// VLC Optimization Functions
+// =============================================================================
+
+async function loadVlcOptimizationStatus() {
+    const statusEl = document.getElementById('vlcOptimizationStatus');
+    const applyBtn = document.getElementById('btnApplyVlcOptimization');
+    const removeBtn = document.getElementById('btnRemoveVlcOptimization');
+    
+    if (!statusEl) return;
+    
+    statusEl.innerHTML = '<div class="loading">Checking VLC optimization status...</div>';
+    
+    try {
+        const response = await fetch('/api/vlc/optimization/status');
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.detail || 'Failed to load status');
+        }
+        
+        const status = data.status;
+        let statusHtml = '';
+        
+        if (status.is_optimized) {
+            statusHtml = `
+                <div style="display: flex; align-items: center; gap: 10px; color: #4caf50;">
+                    <span style="font-size: 20px;">✓</span>
+                    <div>
+                        <div style="font-weight: 500;">System-wide optimization active</div>
+                        <div style="font-size: 12px; color: #999; margin-top: 3px;">
+                            VLC config optimized: ${status.path ? escapeHtml(status.path) : 'Unknown path'}
+                        </div>
+                        ${status.backup_exists ? '<div style="font-size: 12px; color: #4caf50; margin-top: 3px;">✓ Backup available for restore</div>' : ''}
+                    </div>
+                </div>
+            `;
+            if (applyBtn) applyBtn.style.display = 'none';
+            if (removeBtn) removeBtn.style.display = 'inline-block';
+        } else if (status.exists) {
+            statusHtml = `
+                <div style="display: flex; align-items: center; gap: 10px; color: #f0ad4e;">
+                    <span style="font-size: 20px;">○</span>
+                    <div>
+                        <div style="font-weight: 500;">VLC config found - not optimized</div>
+                        <div style="font-size: 12px; color: #999; margin-top: 3px;">
+                            Path: ${status.path ? escapeHtml(status.path) : 'Unknown'}
+                        </div>
+                        <div style="font-size: 12px; color: #888; margin-top: 3px;">
+                            Command-line optimizations are active for Movie Searcher launches.
+                            Click "Apply System-Wide Optimization" to optimize all VLC usage.
+                        </div>
+                    </div>
+                </div>
+            `;
+            if (applyBtn) applyBtn.style.display = 'inline-block';
+            if (removeBtn) removeBtn.style.display = 'none';
+        } else {
+            statusHtml = `
+                <div style="display: flex; align-items: center; gap: 10px; color: #888;">
+                    <span style="font-size: 20px;">○</span>
+                    <div>
+                        <div style="font-weight: 500;">VLC config file not found</div>
+                        <div style="font-size: 12px; color: #999; margin-top: 3px;">
+                            VLC may not have been run yet. Run VLC once to create its config file, then return here.
+                        </div>
+                        <div style="font-size: 12px; color: #888; margin-top: 3px;">
+                            Command-line optimizations are still active for Movie Searcher launches.
+                        </div>
+                    </div>
+                </div>
+            `;
+            if (applyBtn) applyBtn.style.display = 'inline-block';
+            if (removeBtn) removeBtn.style.display = 'none';
+        }
+        
+        statusEl.innerHTML = statusHtml;
+        
+    } catch (error) {
+        statusEl.innerHTML = `
+            <div style="color: #f44336;">
+                <div style="font-weight: 500;">Error checking VLC optimization status</div>
+                <div style="font-size: 12px; color: #999; margin-top: 5px;">${escapeHtml(error.message)}</div>
+            </div>
+        `;
+        if (applyBtn) applyBtn.style.display = 'none';
+        if (removeBtn) removeBtn.style.display = 'none';
+    }
+}
+
+async function applyVlcOptimization() {
+    const statusEl = document.getElementById('vlcOptimizationStatus');
+    
+    // Confirm with user
+    if (!confirm('This will modify VLC\'s global configuration file to optimize startup speed.\n\nChanges will affect ALL VLC usage on your system, not just Movie Searcher.\n\nA backup of your current settings will be created.\n\nContinue?')) {
+        return;
+    }
+    
+    statusEl.innerHTML = '<div class="loading">Applying VLC optimizations...</div>';
+    
+    try {
+        const response = await fetch('/api/vlc/optimization/apply', {
+            method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.detail || 'Failed to apply optimizations');
+        }
+        
+        if (data.success) {
+            showStatus(data.message || 'VLC optimizations applied successfully', 'success');
+            loadVlcOptimizationStatus();
+        } else {
+            throw new Error(data.message || 'Unknown error');
+        }
+        
+    } catch (error) {
+        showStatus('Failed to apply VLC optimizations: ' + error.message, 'error');
+        loadVlcOptimizationStatus();
+    }
+}
+
+async function removeVlcOptimization() {
+    const statusEl = document.getElementById('vlcOptimizationStatus');
+    
+    if (!confirm('This will restore VLC\'s original configuration.\n\nContinue?')) {
+        return;
+    }
+    
+    statusEl.innerHTML = '<div class="loading">Restoring VLC settings...</div>';
+    
+    try {
+        const response = await fetch('/api/vlc/optimization/remove', {
+            method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.detail || 'Failed to restore settings');
+        }
+        
+        if (data.success) {
+            showStatus(data.message || 'VLC settings restored successfully', 'success');
+            loadVlcOptimizationStatus();
+        } else {
+            throw new Error(data.message || 'Unknown error');
+        }
+        
+    } catch (error) {
+        showStatus('Failed to restore VLC settings: ' + error.message, 'error');
+        loadVlcOptimizationStatus();
+    }
+}
+
+async function saveVlcHardwareAccelSetting(enabled) {
+    try {
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                settings: {
+                    vlc_hardware_acceleration: enabled
+                }
+            })
+        });
+        
+        if (response.ok) {
+            showStatus(enabled ? 'Hardware acceleration enabled' : 'Hardware acceleration disabled', 'success');
+        } else {
+            const data = await response.json();
+            showStatus('Failed to save setting: ' + (data.detail || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showStatus('Failed to save setting: ' + error.message, 'error');
+    }
+}
+
+async function loadVlcHardwareAccelSetting() {
+    try {
+        const response = await fetch('/api/config');
+        const data = await response.json();
+        
+        if (response.ok && data.settings) {
+            const checkbox = document.getElementById('setupVlcHardwareAccel');
+            if (checkbox && data.settings.vlc_hardware_acceleration !== undefined) {
+                checkbox.checked = data.settings.vlc_hardware_acceleration;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading VLC hardware acceleration setting:', error);
+>>>>>>> Incoming (Background Agent changes)
     }
 }

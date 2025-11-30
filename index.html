@@ -320,6 +320,53 @@
                         the movie. When disabled, movies will launch without subtitles unless manually selected.
                     </div>
                 </div>
+                <div class="setup-option" style="margin-top: 15px;">
+                    <label>
+                        <input type="checkbox" id="setupVlcHardwareAccel" onchange="saveVlcHardwareAccelSetting(this.checked)">
+                        Enable hardware acceleration (experimental)
+                    </label>
+                    <div class="setup-option-description">
+                        Use GPU hardware decoding for faster video rendering. May cause issues on some systems.
+                        Only affects movies launched from Movie Searcher.
+                    </div>
+                </div>
+            </div>
+
+            <div class="setup-section">
+                <h3>VLC Fast Startup Optimization</h3>
+                <p>Optimize VLC for faster time-to-first-frame when playing movies.</p>
+                
+                <div id="vlcOptimizationStatus" style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 15px;">
+                    <div class="loading">Checking VLC optimization status...</div>
+                </div>
+                
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn btn-success" id="btnApplyVlcOptimization" onclick="applyVlcOptimization()" style="display: none;">
+                        Apply System-Wide Optimization
+                    </button>
+                    <button class="btn btn-secondary" id="btnRemoveVlcOptimization" onclick="removeVlcOptimization()" style="display: none;">
+                        Restore Original Settings
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadVlcOptimizationStatus()">
+                        Refresh Status
+                    </button>
+                </div>
+                
+                <details style="margin-top: 15px; color: #999;">
+                    <summary style="cursor: pointer; color: #aaa;">What does this do?</summary>
+                    <div style="margin-top: 10px; padding: 10px; background: #1a1a1a; border-radius: 6px; font-size: 13px;">
+                        <p style="margin-bottom: 10px;"><strong>Command-line optimizations (always active):</strong></p>
+                        <ul style="margin-left: 20px; margin-bottom: 15px;">
+                            <li>Reduced file caching (1200ms → 300ms)</li>
+                            <li>Fast seeking for timestamps</li>
+                            <li>Disabled metadata network lookups</li>
+                            <li>Disabled auto-preparsing</li>
+                        </ul>
+                        <p style="margin-bottom: 10px;"><strong>System-wide optimization (optional):</strong></p>
+                        <p>Modifies VLC's config file (vlcrc) to apply optimizations to ALL VLC usage. Creates a backup first. These settings affect VLC even when launched outside of Movie Searcher.</p>
+                        <p style="margin-top: 10px; color: #f0ad4e;"><strong>Note:</strong> If VLC startup is still slow, check if your movie drive is an HDD that may need spin-up time, or if antivirus is scanning files.</p>
+                    </div>
+                </details>
             </div>
 
             <div class="setup-section">

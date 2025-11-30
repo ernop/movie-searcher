@@ -131,11 +131,12 @@ def setup_vlc():
                 print(f"WARNING: Failed to save VLC config: {e}")
                 return
     
-    print("ERROR: VLC not found. Install from https://www.videolan.org/")
+    print("WARNING: VLC not found. Install from https://www.videolan.org/")
     print("Checked locations:")
     for path in common_paths[:3]:  # Show first 3 common paths
         print(f"  - {path}")
-    sys.exit(1)
+    # Exit with 0 - VLC is optional (app works for browsing without it)
+    sys.exit(0)
 
 if __name__ == "__main__":
     setup_vlc()

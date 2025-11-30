@@ -12,7 +12,7 @@ import logging
 import threading
 from pathlib import Path
 from datetime import datetime
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 import time
 import json
@@ -736,14 +736,15 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     steps = []
     results = []
     
-    # Load config to check launch_with_subtitles_on setting
+    # Load config for launch settings
+    config = {}  # Default empty config
     try:
         from config import load_config
         config = load_config()
-        launch_with_subtitles_on = config.get("launch_with_subtitles_on", True)
     except Exception as e:
-        logger.warning(f"Failed to load config for launch_with_subtitles_on: {e}. Defaulting to True.")
-        launch_with_subtitles_on = True
+        logger.warning(f"Failed to load config: {e}. Using defaults.")
+    
+    launch_with_subtitles_on = config.get("launch_with_subtitles_on", True)
     
     # Step 1: Verify file exists
     steps.append("Step 1: Verifying movie file exists")
@@ -850,11 +851,52 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         steps.append("Step 2.5: Skipping close existing VLC (option disabled)")
         results.append({"step": 2.5, "status": "info", "message": "Close existing VLC option disabled"})
     
-    # Step 3: Build VLC command
+    # Step 3: Build VLC command with fast startup optimizations
     steps.append("Step 3: Building VLC command")
-    vlc_cmd = [vlc_exe, movie_path]
-    steps.append(f"  Base command: {vlc_exe} {movie_path}")
-    results.append({"step": 3, "status": "success", "message": f"Command prepared: {vlc_exe}"})
+    
+    # Fast startup optimization flags - always applied for best performance
+    # These significantly reduce time-to-first-frame by:
+    # - Reducing file caching from default 1200ms to 300ms (local files don't need much)
+    # - Using fast seeking (less accurate but much faster for --start-time)
+    # - Disabling network metadata lookups
+    # - Disabling auto-preparsing of files
+    # - Disabling media library scanning
+    # - Disabling Lua extensions (can slow startup)
+    # - Disabling album art fetching
+    fast_startup_opts = [
+        "--file-caching=300",       # Reduce file caching (default 1200ms)
+        "--input-fast-seek",        # Fast seeking for --start-time (less accurate but faster)
+        "--no-metadata-network-access",  # Don't fetch online metadata
+        "--no-auto-preparse",       # Don't preparse playlist files
+        "--no-media-library",       # Don't use media library
+        "--no-lua",                 # Disable Lua extensions
+        "--no-video-title-show",    # Don't show video title on screen
+        "--no-qt-updates-notif",    # Disable update notifications
+        "--no-qt-privacy-ask",      # Skip privacy dialog
+        "--no-album-art",           # Don't fetch album art
+    ]
+    
+    # Check config for hardware acceleration setting (opt-in for safety)
+    # Hardware acceleration can fail on some systems, so we only enable if user opts in
+    try:
+        hw_accel = config.get("vlc_hardware_acceleration", False)
+        if hw_accel:
+            if os.name == 'nt':
+                # Windows: prefer d3d11va (modern) with d3d11 video output
+                fast_startup_opts.extend([
+                    "--avcodec-hw=d3d11va",
+                    "--vout=direct3d11",
+                ])
+            else:
+                # Linux: try VAAPI first (works with Intel/AMD)
+                fast_startup_opts.append("--avcodec-hw=vaapi")
+            steps.append("  Hardware acceleration enabled")
+    except Exception as e:
+        logger.debug(f"Error checking hardware acceleration config: {e}")
+    
+    vlc_cmd = [vlc_exe] + fast_startup_opts + [movie_path]
+    steps.append(f"  Base command: {vlc_exe} [+{len(fast_startup_opts)} optimization flags] {movie_path}")
+    results.append({"step": 3, "status": "success", "message": f"Command prepared with {len(fast_startup_opts)} fast-startup optimizations"})
     
     # Step 4: Handle subtitles
     steps.append("Step 4: Checking for subtitles")
@@ -1058,3 +1100,456 @@ def get_currently_playing_movies():
         return playing
     finally:
         db.close()
+
+
+# =============================================================================
+# VLC Configuration Optimization
+# =============================================================================
+# These functions modify VLC's vlcrc configuration file for faster startup.
+# They require explicit user opt-in and create backups before making changes.
+
+# Optimization settings to apply to vlcrc
+# Format: (key, value, description)
+VLC_OPTIMIZATION_SETTINGS = [
+    # Performance optimizations
+    ("file-caching", "300", "Reduced file caching for faster local file playback"),
+    ("input-fast-seek", "1", "Fast (but less accurate) seeking"),
+    ("metadata-network-access", "0", "Disable network metadata lookups"),
+    ("auto-preparse", "0", "Disable automatic file preparsing"),
+    ("media-library", "0", "Disable media library"),
+    
+    # UI optimizations
+    ("video-title-show", "0", "Disable on-screen video title"),
+    ("qt-privacy-ask", "0", "Skip privacy dialog"),
+    ("qt-updates-notif", "0", "Disable update notifications"),
+    ("album-art", "0", "Disable album art fetching"),
+    
+    # Note: Hardware acceleration is NOT included here as it can cause issues
+    # on some systems. It's offered as a separate opt-in option via command line.
+]
+
+
+def get_vlcrc_path():
+    """
+    Get the path to VLC's configuration file (vlcrc) based on OS.
+    
+    Returns:
+        Path object to vlcrc file, or None if not found
+    """
+    if os.name == 'nt':  # Windows
+        # Windows: %APPDATA%\vlc\vlcrc
+        appdata = os.environ.get('APPDATA')
+        if appdata:
+            vlcrc = Path(appdata) / 'vlc' / 'vlcrc'
+            return vlcrc
+    else:
+        # Linux/Mac: ~/.config/vlc/vlcrc
+        config_home = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+        vlcrc = Path(config_home) / 'vlc' / 'vlcrc'
+        return vlcrc
+    
+    return None
+
+
+def get_vlcrc_backup_path():
+    """Get the path for the vlcrc backup file."""
+    vlcrc = get_vlcrc_path()
+    if vlcrc:
+        return vlcrc.with_suffix('.vlcrc.backup')
+    return None
+
+
+def check_vlcrc_status():
+    """
+    Check the current status of VLC configuration.
+    
+    Returns:
+        dict with:
+        - exists: bool - whether vlcrc file exists
+        - path: str - path to vlcrc
+        - backup_exists: bool - whether backup file exists
+        - backup_path: str - path to backup file
+        - is_optimized: bool - whether file appears to already have optimizations
+        - size: int - file size in bytes
+    """
+    vlcrc = get_vlcrc_path()
+    backup = get_vlcrc_backup_path()
+    
+    status = {
+        "exists": False,
+        "path": str(vlcrc) if vlcrc else None,
+        "backup_exists": False,
+        "backup_path": str(backup) if backup else None,
+        "is_optimized": False,
+        "size": 0
+    }
+    
+    if vlcrc and vlcrc.exists():
+        status["exists"] = True
+        status["size"] = vlcrc.stat().st_size
+        
+        # Check if already optimized by looking for our marker comment
+        try:
+            content = vlcrc.read_text(encoding='utf-8', errors='ignore')
+            status["is_optimized"] = "# Movie Searcher Optimization" in content
+        except Exception:
+            pass
+    
+    if backup and backup.exists():
+        status["backup_exists"] = True
+    
+    return status
+
+
+def create_vlcrc_backup():
+    """
+    Create a backup of the current vlcrc file.
+    
+    Returns:
+        dict with success status and message
+    """
+    vlcrc = get_vlcrc_path()
+    backup = get_vlcrc_backup_path()
+    
+    if not vlcrc or not vlcrc.exists():
+        return {
+            "success": False,
+            "message": "VLC configuration file not found. VLC may not have been run yet."
+        }
+    
+    try:
+        shutil.copy2(vlcrc, backup)
+        return {
+            "success": True,
+            "message": f"Backup created at: {backup}",
+            "backup_path": str(backup)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to create backup: {e}"
+        }
+
+
+def restore_vlcrc_backup():
+    """
+    Restore vlcrc from backup.
+    
+    Returns:
+        dict with success status and message
+    """
+    vlcrc = get_vlcrc_path()
+    backup = get_vlcrc_backup_path()
+    
+    if not backup or not backup.exists():
+        return {
+            "success": False,
+            "message": "No backup file found to restore from."
+        }
+    
+    try:
+        shutil.copy2(backup, vlcrc)
+        return {
+            "success": True,
+            "message": "VLC configuration restored from backup."
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to restore backup: {e}"
+        }
+
+
+def apply_vlcrc_optimizations():
+    """
+    Apply fast-startup optimizations to vlcrc file.
+    Creates a backup first if one doesn't exist.
+    
+    Returns:
+        dict with success status, message, and details of changes made
+    """
+    from datetime import datetime
+    
+    vlcrc = get_vlcrc_path()
+    
+    if not vlcrc:
+        return {
+            "success": False,
+            "message": "Could not determine VLC configuration path for this OS."
+        }
+    
+    # Ensure vlc config directory exists
+    vlcrc.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Create backup if vlcrc exists and backup doesn't
+    backup = get_vlcrc_backup_path()
+    if vlcrc.exists() and backup and not backup.exists():
+        backup_result = create_vlcrc_backup()
+        if not backup_result["success"]:
+            return {
+                "success": False,
+                "message": f"Failed to create backup before optimization: {backup_result['message']}"
+            }
+    
+    # Read existing content or start fresh
+    if vlcrc.exists():
+        try:
+            content = vlcrc.read_text(encoding='utf-8', errors='ignore')
+            lines = content.split('\n')
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to read vlcrc: {e}"
+            }
+    else:
+        lines = []
+    
+    # Parse existing settings into a dict
+    settings = {}
+    setting_lines = {}  # Track which line each setting is on
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#') and '=' in stripped:
+            key, _, value = stripped.partition('=')
+            key = key.strip()
+            value = value.strip()
+            settings[key] = value
+            setting_lines[key] = i
+    
+    # Apply optimizations
+    changes_made = []
+    
+    for key, value, description in VLC_OPTIMIZATION_SETTINGS:
+        old_value = settings.get(key)
+        
+        if old_value != value:
+            if key in setting_lines:
+                # Update existing line
+                line_num = setting_lines[key]
+                lines[line_num] = f"{key}={value}"
+                changes_made.append(f"Updated {key}: {old_value} → {value} ({description})")
+            else:
+                # Add new setting
+                lines.append(f"{key}={value}")
+                changes_made.append(f"Added {key}={value} ({description})")
+            
+            settings[key] = value
+    
+    # Add marker comment if not present
+    marker = "# Movie Searcher Optimization"
+    if marker not in '\n'.join(lines):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines.insert(0, f"{marker} applied on {timestamp}")
+        lines.insert(1, "# Original settings backed up. Use Movie Searcher settings to restore.")
+        lines.insert(2, "")
+    
+    # Write back
+    try:
+        vlcrc.write_text('\n'.join(lines), encoding='utf-8')
+        return {
+            "success": True,
+            "message": f"Applied {len(changes_made)} optimizations to VLC configuration.",
+            "changes": changes_made,
+            "vlcrc_path": str(vlcrc)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to write vlcrc: {e}"
+        }
+
+
+def remove_vlcrc_optimizations():
+    """
+    Remove Movie Searcher optimizations from vlcrc.
+    If a backup exists, restores from backup.
+    Otherwise, removes the specific settings we added.
+    
+    Returns:
+        dict with success status and message
+    """
+    backup = get_vlcrc_backup_path()
+    
+    # If backup exists, restore from it
+    if backup and backup.exists():
+        return restore_vlcrc_backup()
+    
+    # No backup - try to reset just our settings
+    vlcrc = get_vlcrc_path()
+    
+    if not vlcrc or not vlcrc.exists():
+        return {
+            "success": True,
+            "message": "VLC configuration file not found. Nothing to remove."
+        }
+    
+    try:
+        content = vlcrc.read_text(encoding='utf-8', errors='ignore')
+        lines = content.split('\n')
+        
+        # Get list of our optimization keys
+        opt_keys = {key for key, _, _ in VLC_OPTIMIZATION_SETTINGS}
+        
+        # Filter out our settings and marker comments
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            
+            # Skip our marker comments
+            if "Movie Searcher Optimization" in stripped:
+                continue
+            if "Original settings backed up" in stripped:
+                continue
+            
+            # Skip our optimization settings
+            if stripped and not stripped.startswith('#') and '=' in stripped:
+                key = stripped.partition('=')[0].strip()
+                if key in opt_keys:
+                    continue
+            
+            new_lines.append(line)
+        
+        vlcrc.write_text('\n'.join(new_lines), encoding='utf-8')
+        
+        return {
+            "success": True,
+            "message": "Removed Movie Searcher optimizations from VLC configuration."
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to remove optimizations: {e}"
+        }
+
+
+def get_vlcrc_optimization_info():
+    """
+    Get information about what optimizations would be applied.
+    
+    Returns:
+        dict with optimization details
+    """
+    return {
+        "settings": [
+            {
+                "key": key,
+                "value": value,
+                "description": description
+            }
+            for key, value, description in VLC_OPTIMIZATION_SETTINGS
+        ],
+        "description": """
+These optimizations modify VLC's global configuration to reduce startup time:
+
+1. **File Caching**: Reduced from 1200ms to 300ms for faster local file playback
+2. **Fast Seeking**: Uses faster (but less frame-accurate) seeking when jumping to timestamps
+3. **Metadata**: Disables network lookups for metadata and album art
+4. **Preparsing**: Disables automatic file scanning
+5. **Media Library**: Disables VLC's built-in media library
+6. **UI Elements**: Disables on-screen title display and update notifications
+
+Note: These changes affect ALL VLC usage, not just launches from Movie Searcher.
+A backup of your original settings is created before applying changes.
+        """.strip(),
+        "notes": [
+            "Hardware acceleration is NOT included as it can cause issues on some systems",
+            "Changes affect all VLC usage system-wide",
+            "A backup is created before any changes",
+            "You can restore original settings at any time"
+        ]
+    }
+
+
+# =============================================================================
+# VLC Optimization API Router
+# =============================================================================
+
+vlc_optimization_router = APIRouter(prefix="/api/vlc/optimization", tags=["vlc"])
+
+
+@vlc_optimization_router.get("/status")
+async def get_vlc_optimization_status():
+    """
+    Get the current VLC optimization status.
+    Returns info about vlcrc file, backup status, and whether optimizations are applied.
+    """
+    try:
+        status = check_vlcrc_status()
+        info = get_vlcrc_optimization_info()
+        
+        return {
+            "status": status,
+            "optimization_info": info,
+            "command_line_optimizations": {
+                "enabled": True,
+                "description": "Command-line optimizations are always applied when launching movies from Movie Searcher. These don't affect VLC when launched separately."
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error checking VLC optimization status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@vlc_optimization_router.post("/apply")
+async def apply_vlc_optimization():
+    """
+    Apply VLC fast-startup optimizations to vlcrc config file.
+    This affects ALL VLC usage system-wide, not just Movie Searcher launches.
+    Creates a backup before making changes.
+    """
+    try:
+        status = check_vlcrc_status()
+        
+        if status["is_optimized"]:
+            return {
+                "success": True,
+                "message": "VLC configuration is already optimized.",
+                "already_optimized": True
+            }
+        
+        result = apply_vlcrc_optimizations()
+        return result
+    except Exception as e:
+        logger.error(f"Error applying VLC optimization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@vlc_optimization_router.post("/remove")
+async def remove_vlc_optimization():
+    """
+    Remove VLC optimizations and restore original settings.
+    If a backup exists, restores from backup.
+    """
+    try:
+        result = remove_vlcrc_optimizations()
+        return result
+    except Exception as e:
+        logger.error(f"Error removing VLC optimization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@vlc_optimization_router.post("/backup")
+async def create_vlc_backup_endpoint():
+    """
+    Create a backup of the current VLC configuration.
+    """
+    try:
+        result = create_vlcrc_backup()
+        return result
+    except Exception as e:
+        logger.error(f"Error creating VLC backup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@vlc_optimization_router.post("/restore")
+async def restore_vlc_backup_endpoint():
+    """
+    Restore VLC configuration from backup.
+    """
+    try:
+        result = restore_vlcrc_backup()
+        return result
+    except Exception as e:
+        logger.error(f"Error restoring VLC backup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

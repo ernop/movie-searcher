@@ -216,15 +216,13 @@ def main():
             print("WARNING: VLC not found in PATH.")
             print("Please install VLC manually.")
     
-    # Run setup/setup_vlc.py to detect and save VLC path
+    # Run setup/setup_vlc.py to detect and save VLC path (optional - app works without it)
     if not run_setup_vlc():
         print()
-        print("ERROR: VLC setup failed! VLC is required to launch movies.")
-        print("Please install VLC from https://www.videolan.org/vlc/")
-        print("Or use: winget install --id=VideoLAN.VLC")
+        print("WARNING: VLC not configured. Movie playback will not work.")
+        print("You can still browse your movie collection.")
+        print("To enable playback, install VLC from https://www.videolan.org/vlc/")
         print()
-        input("Press Enter to exit...")
-        return 1
     
     # Start the server (blocks until Ctrl+C, opens browser when ready)
     try:

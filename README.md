@@ -2,6 +2,46 @@
 
 A personal video library browser. Faster than Netflix, Amazon, Plex. Instant scrubbing, instant loading, instant stopping. Changes how you watch movies.
 
+## Quick Start
+
+**Windows:** Double-click `run.bat`
+
+**Any platform:** 
+```bash
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python start.py
+```
+
+That's it. The launcher handles everything else (ffmpeg, VLC detection/installation).
+
+## First Time Setup
+
+1. Create a `movies` folder in the project directory (or configure a custom path)
+2. Click "Scan Movies Folder" in the web interface
+3. Install VLC Media Player for playback (auto-installed on Windows if missing)
+
+## Per-Machine Configuration
+
+Edit `settings.json` to configure paths for each machine:
+
+```json
+{
+  "movies_folder": "D:\\Movies",
+  "local_target_folder": "C:\\LocalMovies"
+}
+```
+
+This file is gitignored, so each installation can have its own paths.
+
+## Stopping
+
+- Press `Ctrl+C` in the server window, or
+- Run `python stop.py`
+
+---
+
 ## Speed
 
 No slow loading. No waiting. Type and see results immediately. Launch movies instantly. Faster than streaming services because everything runs locally on your computer.
@@ -52,20 +92,6 @@ Filter and organize by rating. Find your favorites quickly. Build a personal col
 
 Type any part of a movie name. See results instantly as you type. Autocomplete suggests titles. No loading screens.
 
-## Getting Started
-
-1. Run `python start.py` (or `start.bat` on Windows) to launch the application
-2. Click "Scan Movies Folder" to index your collection the first time
-3. Start searching and exploring
-
-Your movies should be in a folder called `movies` in the same location as the application.
-
-For playback, install VLC Media Player (free from videolan.org).
-
-**Adding More Movies:** Just add files to your movies folder and click "Scan Movies Folder" again. Only new or changed files are processed.
-
-**Stopping:** Close the server window or run `stop.bat` (Windows) or press Ctrl+C.
-
 ## Technical Details
 
 Requires Python 3.8+. Optional: VLC Media Player for playback.
@@ -73,5 +99,5 @@ Requires Python 3.8+. Optional: VLC Media Player for playback.
 **Automatic Setup:**
 - Python: https://www.python.org/downloads/
 - ffmpeg: **Automatically installed and configured** - no manual setup needed!
-- The application will automatically detect, install (via winget on Windows), and configure ffmpeg on first startup
+- VLC: **Automatically installed on Windows** if missing
 - See `docs/installation.md` for detailed setup instructions

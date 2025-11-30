@@ -8,7 +8,9 @@ FastAPI backend with static HTML frontend. State persisted in SQLite database (`
 
 - `main.py`: FastAPI application, API endpoints, business logic
 - `server.py`: Uvicorn server configuration and startup
-- `start.py`: Cross-platform startup script (replaces start.bat)
+- `start.py`: Cross-platform startup script with auto-setup (ffmpeg, VLC)
+- `run.bat`: Windows launcher (creates venv, installs deps, runs start.py)
+- `stop.py`: Cross-platform server stop script
 - `index.html`: Frontend interface, search UI, autocomplete
 - `database.py`: Database setup, migrations, utilities
 - `models.py`: SQLAlchemy database models (table definitions)

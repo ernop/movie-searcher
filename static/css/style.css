@@ -1033,7 +1033,7 @@
             display: flex;
             gap: 0;
             flex-wrap: wrap;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
             padding: 0;
             background: transparent;
             border-radius: 0;
@@ -1049,28 +1049,28 @@
         }
         
         .language-nav .btn {
-            padding: 2px 5px !important;
-            font-size: 11px;
+            padding: 5px 10px !important;
+            font-size: 13px;
             border-radius: 0 !important;
-            border: 1px solid #444 !important;
+            border: 1px solid #4a4a4a !important;
             border-left-width: 0 !important;
-            background: #333 !important;
-            color: #bbb !important;
+            background: #3a3a3a !important;
+            color: #e0e0e0 !important;
         }
         
         .language-nav .btn:first-of-type {
             border-left-width: 1px !important;
-            border-top-left-radius: 3px !important;
-            border-bottom-left-radius: 3px !important;
+            border-top-left-radius: 6px !important;
+            border-bottom-left-radius: 6px !important;
         }
         
         .language-nav .btn:last-of-type {
-            border-top-right-radius: 3px !important;
-            border-bottom-right-radius: 3px !important;
+            border-top-right-radius: 6px !important;
+            border-bottom-right-radius: 6px !important;
         }
         
         .language-nav .btn:hover {
-            background: #4a9eff !important;
+            background: #4a4a4a !important;
             color: #fff !important;
         }
         
@@ -1082,17 +1082,17 @@
         
         .language-nav .language-label {
             font-weight: 600;
-            color: #777;
-            margin-right: 6px;
+            color: #888;
+            margin-right: 8px;
             white-space: nowrap;
-            font-size: 11px;
+            font-size: 13px;
         }
         
         .letter-nav {
             display: flex;
             gap: 0;
             flex-wrap: wrap;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
             padding: 0;
             background: transparent;
             border-radius: 0;
@@ -1100,14 +1100,14 @@
         }
         
         .letter-btn {
-            background: #333;
-            color: #bbb;
-            border: 1px solid #444;
+            background: #3a3a3a;
+            color: #e0e0e0;
+            border: 1px solid #4a4a4a;
             border-left-width: 0;
-            padding: 2px 4px;
+            padding: 5px 10px;
             border-radius: 0;
             cursor: pointer;
-            font-size: 11px;
+            font-size: 13px;
             transition: all 0s;
             min-width: 0;
             text-align: center;
@@ -1115,17 +1115,17 @@
         
         .letter-btn:first-child {
             border-left-width: 1px;
-            border-top-left-radius: 3px;
-            border-bottom-left-radius: 3px;
+            border-top-left-radius: 6px;
+            border-bottom-left-radius: 6px;
         }
         
         .letter-btn:last-child {
-            border-top-right-radius: 3px;
-            border-bottom-right-radius: 3px;
+            border-top-right-radius: 6px;
+            border-bottom-right-radius: 6px;
         }
         
         .letter-btn:hover:not(:disabled) {
-            background: #4a9eff;
+            background: #4a4a4a;
             color: #fff;
         }
         
@@ -1136,9 +1136,9 @@
         }
         
         .letter-btn:disabled {
-            background: #252525;
-            color: #444;
-            border-color: #333;
+            background: #2a2a2a;
+            color: #555;
+            border-color: #3a3a3a;
             cursor: not-allowed;
         }
         
@@ -1146,7 +1146,7 @@
             display: flex;
             gap: 0;
             flex-wrap: wrap;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
             padding: 0;
             background: transparent;
             border-radius: 0;
@@ -1154,14 +1154,14 @@
         }
         
         .decade-btn {
-            background: #333;
-            color: #bbb;
-            border: 1px solid #444;
+            background: #3a3a3a;
+            color: #e0e0e0;
+            border: 1px solid #4a4a4a;
             border-left-width: 0;
-            padding: 2px 5px;
+            padding: 5px 10px;
             border-radius: 0;
             cursor: pointer;
-            font-size: 11px;
+            font-size: 13px;
             transition: all 0s;
             min-width: 0;
             text-align: center;
@@ -1169,17 +1169,17 @@
         
         .decade-btn:first-child {
             border-left-width: 1px;
-            border-top-left-radius: 3px;
-            border-bottom-left-radius: 3px;
+            border-top-left-radius: 6px;
+            border-bottom-left-radius: 6px;
         }
         
         .decade-btn:last-child {
-            border-top-right-radius: 3px;
-            border-bottom-right-radius: 3px;
+            border-top-right-radius: 6px;
+            border-bottom-right-radius: 6px;
         }
         
         .decade-btn:hover:not(:disabled) {
-            background: #4a9eff;
+            background: #4a4a4a;
             color: #fff;
         }
         
@@ -1190,9 +1190,9 @@
         }
         
         .decade-btn:disabled {
-            background: #252525;
-            color: #444;
-            border-color: #333;
+            background: #2a2a2a;
+            color: #555;
+            border-color: #3a3a3a;
             cursor: not-allowed;
         }
         

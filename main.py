@@ -61,7 +61,8 @@ from video_processing import (
 # Import VLC integration
 from vlc_integration import (
     launch_movie_in_vlc, get_currently_playing_movies,
-    has_been_launched, find_subtitle_file
+    has_been_launched, find_subtitle_file,
+    vlc_optimization_router
 )
 
 # Import scanning module
@@ -423,6 +424,9 @@ from core.models import (
     ScreenshotsIntervalRequest, AiSearchRequest, PlaylistCreateRequest,
     PlaylistAddMovieRequest, MovieListUpdateRequest
 )
+
+# Include VLC optimization routes
+app.include_router(vlc_optimization_router)
 
 @app.post("/api/frames/start")
 async def start_frame_worker():
@@ -2427,11 +2431,13 @@ async def explore_movies(
         ).filter(*all_filters, Movie.year.isnot(None)).group_by(Movie.year).all()
         year_counts = {yr: cnt for yr, cnt in year_counts_rows}
         
-        # Decade counts via SQL GROUP BY (year / 10 * 10)
+        # Decade counts via SQL GROUP BY - use cast to ensure integer division
+        from sqlalchemy import cast, Integer
+        decade_expr = cast(Movie.year / 10, Integer) * 10
         decade_counts_rows = db.query(
-            (Movie.year / 10 * 10).label('decade'),
+            decade_expr.label('decade'),
             func.count(Movie.id)
-        ).filter(*all_filters, Movie.year.isnot(None)).group_by(Movie.year / 10 * 10).all()
+        ).filter(*all_filters, Movie.year.isnot(None)).group_by(decade_expr).all()
         decade_counts = {int(dec): cnt for dec, cnt in decade_counts_rows if dec}
         
         # No year count
@@ -3881,6 +3887,7 @@ async def delete_movie_list(slug: str):
         return {"status": "deleted", "slug": slug}
     finally:
         db.close()
+
 
 
 # Mount static files directory (favicon, etc.)
