@@ -65,14 +65,14 @@ function normalizePath(path) {
 function isValidAbsolutePath(path) {
     if (!path || !path.trim()) return false;
     path = path.trim();
-    // Windows: Check for drive letter (C:\) or UNC path (\\)
+    // Windows: Check for drive letter (C:\ or C:/) or UNC path (\\)
+    // Must have drive letter followed by colon and slash to be a valid absolute path
+    // Examples: D:\movies, C:/Movies, \\server\share
     if (path.match(/^[A-Za-z]:[\\/]/) || path.startsWith('\\\\')) {
         return true;
     }
-    // Unix-like: Check for leading /
-    if (path.startsWith('/')) {
-        return true;
-    }
+    // Note: We do NOT accept Unix-style paths (starting with /) on Windows
+    // because they get normalized to \path which is not a valid absolute path
     return false;
 }
 
@@ -90,34 +90,15 @@ function getMovieSlug(movie) {
 }
 
 function getMovieImageUrl(movie) {
-    let imageUrl = '';
+    // Primary: use screenshot_id via API endpoint (most reliable)
     if (movie.screenshot_id) {
-        // Use API endpoint - most reliable, handles path issues correctly
-        imageUrl = `/api/screenshot/${movie.screenshot_id}`;
-    } else if (movie.image_path) {
-        // Use movie.image_path directly - check if it's a screenshot or movie image
-        const filename = getFilename(movie.image_path);
-        if (filename && movie.image_path.includes('screenshots')) {
-            // Screenshot: use /screenshots/ endpoint
-            imageUrl = `/screenshots/${encodeURIComponent(filename)}`;
-        } else {
-            // Movie image: use image_path_url if available (relative path from backend), otherwise extract from absolute path
-            if (movie.image_path_url) {
-                imageUrl = `/movies/${encodeURIComponent(movie.image_path_url)}`;
-            } else {
-                // Fallback: extract relative path manually (shouldn't happen if backend is correct)
-                const pathParts = movie.image_path.replace(/\\/g, '/').split('/');
-                const moviesIndex = pathParts.findIndex(p => p.toLowerCase().includes('movies') || p.toLowerCase().includes('movie'));
-                if (moviesIndex >= 0 && moviesIndex < pathParts.length - 1) {
-                    const relativePath = pathParts.slice(moviesIndex + 1).join('/');
-                    imageUrl = `/movies/${encodeURIComponent(relativePath)}`;
-                } else {
-                    imageUrl = `/movies/${encodeURIComponent(filename)}`;
-                }
-            }
-        }
+        return `/api/screenshot/${movie.screenshot_id}`;
     }
-    return imageUrl;
+    // Fallback: use movie image endpoint (ID-based, no paths exposed)
+    if (movie.id) {
+        return `/api/movie/${movie.id}/image`;
+    }
+    return '';
 }
 
 function formatDate(dateString) {
@@ -327,6 +308,42 @@ function stopCurrentlyPlayingPolling() {
     if (currentlyPlayingInterval) {
         clearInterval(currentlyPlayingInterval);
         currentlyPlayingInterval = null;
+    }
+}
+
+// Server Uptime Display
+
+let serverUptimeInterval = null;
+
+async function updateServerUptime() {
+    const uptimeEl = document.getElementById('serverUptime');
+    if (!uptimeEl) return;
+    
+    try {
+        const response = await fetch('/api/health', { cache: 'no-store' });
+        if (response.ok) {
+            const data = await response.json();
+            uptimeEl.textContent = `up ${data.uptime_formatted}`;
+            uptimeEl.title = `Server uptime: ${data.uptime_formatted} (${Math.round(data.uptime_seconds)}s)`;
+        } else {
+            uptimeEl.textContent = 'server?';
+            uptimeEl.title = 'Server not responding';
+        }
+    } catch (error) {
+        uptimeEl.textContent = 'offline';
+        uptimeEl.title = 'Cannot connect to server';
+    }
+}
+
+function startServerUptimePolling() {
+    // Update every 30 seconds
+    serverUptimeInterval = setInterval(updateServerUptime, 30000);
+}
+
+function stopServerUptimePolling() {
+    if (serverUptimeInterval) {
+        clearInterval(serverUptimeInterval);
+        serverUptimeInterval = null;
     }
 }
 

@@ -69,11 +69,12 @@ def get_uvicorn_log_config():
         },
     }
 
-def run_server(open_browser_url: str | None = None):
+def run_server(open_browser_url: str | None = None, dev: bool = False):
     """Run the uvicorn server with configured settings
     
     Args:
         open_browser_url: If set, opens this URL in browser once server is ready
+        dev: If True, enables auto-reload on .py file changes
     """
     # Set browser URL in main module (checked during lifespan startup)
     if open_browser_url:
@@ -94,15 +95,30 @@ def run_server(open_browser_url: str | None = None):
         logger.info("=" * 60)
         logger.info("Starting Movie Searcher server")
         logger.info("Server URL: http://127.0.0.1:8002")
+        if dev:
+            logger.info("DEV MODE: Auto-reload enabled for *.py files")
         logger.info("=" * 60)
-        uvicorn.run(
-            "main:app",
-            host="127.0.0.1",
-            port=8002,
-            reload=False,
-            use_colors=False,
-            log_config=uvicorn_log_config
-        )
+        
+        # Build uvicorn config
+        uvicorn_kwargs = {
+            "app": "main:app",
+            "host": "127.0.0.1",
+            "port": 8002,
+            "use_colors": False,
+            "log_config": uvicorn_log_config,
+        }
+        
+        if dev:
+            # Dev mode: enable reload watching only .py files
+            uvicorn_kwargs.update({
+                "reload": True,
+                "reload_includes": ["*.py"],
+                "reload_excludes": ["*.pyc", "__pycache__/*", ".git/*"],
+            })
+        else:
+            uvicorn_kwargs["reload"] = False
+        
+        uvicorn.run(**uvicorn_kwargs)
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received, shutting down...")
         shutdown_flag.set()
@@ -110,5 +126,12 @@ def run_server(open_browser_url: str | None = None):
         sys.exit(0)
 
 if __name__ == "__main__":
-    run_server()
+    import argparse
+    parser = argparse.ArgumentParser(description="Movie Searcher Server")
+    parser.add_argument("--dev", action="store_true", help="Enable dev mode with auto-reload on .py changes")
+    parser.add_argument("--open-browser", action="store_true", help="Open browser on startup")
+    args = parser.parse_args()
+    
+    browser_url = "http://127.0.0.1:8002" if args.open_browser else None
+    run_server(open_browser_url=browser_url, dev=args.dev)
 

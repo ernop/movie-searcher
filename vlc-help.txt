@@ -1,5 +1,5 @@
-﻿VLC version 3.0.21 Vetinari (3.0.21-1-0-g9c4768291e)
-Compiled by videolan on runner-sgapdqg-project-435-concurrent-1 (Jun  8 2024 21:20:21)
+﻿VLC version 3.0.20 Vetinari (3.0.20-0-g6f0d0ab126)
+Compiled by videolan on runner-sgapdqg-project-435-concurrent-0 (Oct 30 2023 08:47:37)
 Compiler: gcc version 6.4.0 (GCC)
 This program comes with NO WARRANTY, to the extent permitted by law.
 You may redistribute it under the terms of the GNU General Public License;

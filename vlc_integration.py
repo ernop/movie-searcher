@@ -851,52 +851,15 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         steps.append("Step 2.5: Skipping close existing VLC (option disabled)")
         results.append({"step": 2.5, "status": "info", "message": "Close existing VLC option disabled"})
     
-    # Step 3: Build VLC command with fast startup optimizations
+    # Step 3: Build VLC command
     steps.append("Step 3: Building VLC command")
     
-    # Fast startup optimization flags - always applied for best performance
-    # These significantly reduce time-to-first-frame by:
-    # - Reducing file caching from default 1200ms to 300ms (local files don't need much)
-    # - Using fast seeking (less accurate but much faster for --start-time)
-    # - Disabling network metadata lookups
-    # - Disabling auto-preparsing of files
-    # - Disabling media library scanning
-    # - Disabling Lua extensions (can slow startup)
-    # - Disabling album art fetching
-    fast_startup_opts = [
-        "--file-caching=300",       # Reduce file caching (default 1200ms)
-        "--input-fast-seek",        # Fast seeking for --start-time (less accurate but faster)
-        "--no-metadata-network-access",  # Don't fetch online metadata
-        "--no-auto-preparse",       # Don't preparse playlist files
-        "--no-media-library",       # Don't use media library
-        "--no-lua",                 # Disable Lua extensions
-        "--no-video-title-show",    # Don't show video title on screen
-        "--no-qt-updates-notif",    # Disable update notifications
-        "--no-qt-privacy-ask",      # Skip privacy dialog
-        "--no-album-art",           # Don't fetch album art
-    ]
-    
-    # Check config for hardware acceleration setting (opt-in for safety)
-    # Hardware acceleration can fail on some systems, so we only enable if user opts in
-    try:
-        hw_accel = config.get("vlc_hardware_acceleration", False)
-        if hw_accel:
-            if os.name == 'nt':
-                # Windows: prefer d3d11va (modern) with d3d11 video output
-                fast_startup_opts.extend([
-                    "--avcodec-hw=d3d11va",
-                    "--vout=direct3d11",
-                ])
-            else:
-                # Linux: try VAAPI first (works with Intel/AMD)
-                fast_startup_opts.append("--avcodec-hw=vaapi")
-            steps.append("  Hardware acceleration enabled")
-    except Exception as e:
-        logger.debug(f"Error checking hardware acceleration config: {e}")
-    
-    vlc_cmd = [vlc_exe] + fast_startup_opts + [movie_path]
-    steps.append(f"  Base command: {vlc_exe} [+{len(fast_startup_opts)} optimization flags] {movie_path}")
-    results.append({"step": 3, "status": "success", "message": f"Command prepared with {len(fast_startup_opts)} fast-startup optimizations"})
+    # SIMPLIFIED: No optimization flags for now - get basic launching working first
+    # Optimization flags were causing "command line options invalid" errors on some systems
+    # TODO: Re-add optimizations one by one after confirming basic launch works
+    vlc_cmd = [vlc_exe, movie_path]
+    steps.append(f"  Command: {vlc_exe} {movie_path}")
+    results.append({"step": 3, "status": "success", "message": "Command prepared (no optimization flags)"})
     
     # Step 4: Handle subtitles
     steps.append("Step 4: Checking for subtitles")
@@ -941,19 +904,86 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     # Step 5: Launch VLC
     steps.append("Step 5: Launching VLC")
     steps.append(f"  Full command: {' '.join(vlc_cmd)}")
+    logger.info(f"launch_movie_in_vlc: Launching VLC with command: {vlc_cmd}")
+    
+    # Capture stderr to diagnose VLC failures (but not stdout as that can be noisy)
+    # Use PIPE for stderr so we can read error messages if VLC fails
     try:
-        process = subprocess.Popen(vlc_cmd, shell=False)
+        process = subprocess.Popen(
+            vlc_cmd, 
+            shell=False,
+            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,  # Discard stdout (noisy)
+            # Don't use text=True here; we'll decode manually to handle encoding issues
+        )
+        logger.info(f"launch_movie_in_vlc: VLC process started with PID: {process.pid}")
         steps.append(f"  VLC process started (PID: {process.pid})")
         results.append({"step": 5, "status": "success", "message": f"VLC launched successfully (PID: {process.pid})"})
+    except FileNotFoundError as e:
+        error_msg = f"VLC executable not found at '{vlc_exe}': {e}"
+        logger.error(f"launch_movie_in_vlc: {error_msg}")
+        steps.append(f"  ERROR: {error_msg}")
+        results.append({"step": 5, "status": "error", "message": error_msg})
+        raise
+    except PermissionError as e:
+        error_msg = f"Permission denied launching VLC '{vlc_exe}': {e}"
+        logger.error(f"launch_movie_in_vlc: {error_msg}")
+        steps.append(f"  ERROR: {error_msg}")
+        results.append({"step": 5, "status": "error", "message": error_msg})
+        raise
     except Exception as e:
-        error_msg = f"Failed to launch VLC: {str(e)}"
+        error_msg = f"Failed to launch VLC: {type(e).__name__}: {str(e)}"
+        logger.error(f"launch_movie_in_vlc: {error_msg}")
         steps.append(f"  ERROR: {error_msg}")
         results.append({"step": 5, "status": "error", "message": error_msg})
         raise
 
+    # Step 5.05: Verify VLC process is still running (health check)
+    # VLC might crash immediately if there's a configuration issue
+    time.sleep(0.5)  # Brief pause to let VLC initialize
+    poll_result = process.poll()
+    if poll_result is not None:
+        # Process has already exited - this is a problem
+        # Try to read stderr for diagnostic info
+        vlc_stderr = ""
+        try:
+            stderr_bytes = process.stderr.read() if process.stderr else b""
+            vlc_stderr = stderr_bytes.decode('utf-8', errors='replace').strip()
+        except Exception as e:
+            logger.warning(f"launch_movie_in_vlc: Could not read VLC stderr: {e}")
+        
+        error_msg = f"VLC process exited immediately with code {poll_result}"
+        logger.error(f"launch_movie_in_vlc: {error_msg}")
+        logger.error(f"launch_movie_in_vlc: VLC command was: {' '.join(vlc_cmd)}")
+        if vlc_stderr:
+            logger.error(f"launch_movie_in_vlc: VLC stderr output:\n{vlc_stderr}")
+            steps.append(f"  VLC stderr: {vlc_stderr[:500]}")  # Truncate for UI
+        steps.append(f"  ERROR: {error_msg}")
+        results.append({
+            "step": 5.05, 
+            "status": "error", 
+            "message": error_msg,
+            "vlc_stderr": vlc_stderr[:1000] if vlc_stderr else None
+        })
+        # Don't raise - continue to provide diagnostic info
+    else:
+        logger.info(f"launch_movie_in_vlc: VLC process health check passed (PID {process.pid} still running)")
+        steps.append(f"  VLC process health check: OK (still running)")
+        results.append({"step": 5.05, "status": "success", "message": "Process health check passed"})
+        # Close stderr pipe since we don't need it anymore (VLC is running fine)
+        # We do this in a thread to avoid blocking
+        def close_stderr():
+            try:
+                if process.stderr:
+                    process.stderr.close()
+            except Exception:
+                pass
+        threading.Thread(target=close_stderr, daemon=True).start()
+
     # Step 5.1: Bring VLC to foreground on Windows
     if os.name == 'nt':
         steps.append("Step 5.1: Bringing VLC window to foreground (Windows)")
+        logger.info(f"launch_movie_in_vlc: Attempting to bring VLC window to foreground (PID: {process.pid})")
         try:
             focused = bring_vlc_to_foreground(
                 wait_timeout_seconds=3.0, 
@@ -962,12 +992,22 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
                 target_rect=existing_rect
             )
             if focused:
+                logger.info(f"launch_movie_in_vlc: VLC window brought to foreground successfully")
                 steps.append("  VLC window brought to foreground")
                 results.append({"step": 5.1, "status": "success", "message": "Foreground set"})
             else:
-                steps.append("  WARNING: Unable to bring VLC to foreground")
-                results.append({"step": 5.1, "status": "warning", "message": "Failed to set foreground"})
+                # Check if process is still running
+                poll_result = process.poll()
+                if poll_result is not None:
+                    logger.warning(f"launch_movie_in_vlc: VLC process exited (code {poll_result}) - cannot bring to foreground")
+                    steps.append(f"  WARNING: VLC process exited with code {poll_result}")
+                    results.append({"step": 5.1, "status": "error", "message": f"VLC exited (code {poll_result})"})
+                else:
+                    logger.warning(f"launch_movie_in_vlc: Unable to find VLC window for PID {process.pid}")
+                    steps.append("  WARNING: Unable to bring VLC to foreground (window not found)")
+                    results.append({"step": 5.1, "status": "warning", "message": "Window not found"})
         except Exception as e:
+            logger.warning(f"launch_movie_in_vlc: Error bringing VLC to foreground: {e}")
             steps.append(f"  WARNING: Error attempting foreground: {str(e)}")
             results.append({"step": 5.1, "status": "warning", "message": f"Foreground error: {str(e)}"})
     
@@ -1039,6 +1079,38 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
          finally:
              db.close()
     
+    # Final process verification
+    final_poll = process.poll()
+    if final_poll is not None:
+        # Try to get any stderr that might still be available
+        vlc_stderr = ""
+        try:
+            if process.stderr and not process.stderr.closed:
+                stderr_bytes = process.stderr.read()
+                vlc_stderr = stderr_bytes.decode('utf-8', errors='replace').strip()
+        except Exception:
+            pass
+        
+        logger.error(f"launch_movie_in_vlc: LAUNCH FAILED - VLC exited with code {final_poll}")
+        if vlc_stderr:
+            logger.error(f"launch_movie_in_vlc: VLC stderr: {vlc_stderr}")
+        steps.append(f"LAUNCH FAILED: VLC exited with code {final_poll}")
+        if vlc_stderr:
+            steps.append(f"VLC error output: {vlc_stderr[:500]}")
+        
+        return {
+            "status": "failed",
+            "error": f"VLC exited immediately with code {final_poll}",
+            "vlc_stderr": vlc_stderr[:1000] if vlc_stderr else None,
+            "subtitle": subtitle_path,
+            "steps": steps,
+            "results": results,
+            "vlc_path": vlc_exe,
+            "command": " ".join(vlc_cmd),
+            "process_id": process.pid,
+            "exit_code": final_poll
+        }
+    
     # Final summary
     steps.append("=" * 50)
     steps.append("LAUNCH COMPLETE")
@@ -1047,6 +1119,8 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     steps.append(f"Subtitle: {subtitle_path or 'None'}")
     steps.append(f"Process ID: {process.pid}")
     steps.append("=" * 50)
+    
+    logger.info(f"launch_movie_in_vlc: LAUNCH COMPLETE - PID {process.pid} playing {Path(movie_path).name}")
     
     return {
         "status": "launched",

@@ -1,42 +1,121 @@
 // Setup Page Functions
 
+async function restartServer() {
+    const btn = document.getElementById('restartServerBtn');
+    const statusEl = document.getElementById('restartStatus');
+    
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⟳ Restarting...';
+    }
+    if (statusEl) {
+        statusEl.textContent = 'Sending restart signal...';
+        statusEl.style.color = '#f0ad4e';
+    }
+    
+    try {
+        const response = await fetch('/api/server/restart', { method: 'POST' });
+        const data = await response.json();
+        
+        if (response.ok) {
+            if (statusEl) {
+                statusEl.textContent = 'Server is restarting, waiting for reconnect...';
+            }
+            
+            // Wait for server to come back up
+            await waitForServerRestart();
+            
+            if (statusEl) {
+                statusEl.textContent = 'Server restarted successfully!';
+                statusEl.style.color = '#4caf50';
+            }
+            
+            // Reload the page after a brief moment
+            setTimeout(() => {
+                window.location.reload();
+            }, 500);
+        } else {
+            throw new Error(data.detail || 'Failed to restart server');
+        }
+    } catch (error) {
+        if (statusEl) {
+            // If we get a fetch error, the server may have already restarted
+            if (error.name === 'TypeError' || error.message.includes('fetch')) {
+                statusEl.textContent = 'Server restarting, waiting for reconnect...';
+                await waitForServerRestart();
+                statusEl.textContent = 'Server restarted successfully!';
+                statusEl.style.color = '#4caf50';
+                setTimeout(() => {
+                    window.location.reload();
+                }, 500);
+            } else {
+                statusEl.textContent = 'Error: ' + error.message;
+                statusEl.style.color = '#f44336';
+            }
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '⟳ Restart Server';
+        }
+    }
+}
+
+async function waitForServerRestart(maxAttempts = 30, interval = 500) {
+    for (let i = 0; i < maxAttempts; i++) {
+        try {
+            const response = await fetch('/api/stats', { 
+                method: 'GET',
+                cache: 'no-store'
+            });
+            if (response.ok) {
+                return true;  // Server is back up
+            }
+        } catch (e) {
+            // Server not yet available, continue waiting
+        }
+        await new Promise(resolve => setTimeout(resolve, interval));
+    }
+    throw new Error('Server did not restart within expected time');
+}
+
 async function loadCurrentFolder() {
     const setupCurrentFolderEl = document.getElementById('setupCurrentFolder');
     const setupLocalTargetFolderEl = document.getElementById('setupLocalTargetFolder');
-    
+
     if (setupCurrentFolderEl) {
         setupCurrentFolderEl.textContent = 'Loading...';
     }
     if (setupLocalTargetFolderEl) {
         setupLocalTargetFolderEl.textContent = 'Loading...';
     }
-    
+
     try {
         const response = await fetch('/api/config', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({})  // Empty body to get current config
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             const folderPath = data.movies_folder || 'Not set';
             const localTargetPath = data.local_target_folder || 'Not set';
-            
+
             if (setupCurrentFolderEl) {
                 setupCurrentFolderEl.textContent = folderPath;
             }
             if (setupLocalTargetFolderEl) {
                 setupLocalTargetFolderEl.textContent = localTargetPath;
             }
-            
+
             // Also update setup checkboxes if present
             if (data.settings) {
                 const closeVlcEl = document.getElementById('setupCloseExistingVlc');
                 const launchSubsEl = document.getElementById('setupLaunchWithSubtitlesOn');
                 const showAllMoviesEl = document.getElementById('setupShowAllMoviesTab');
-                
+
                 if (closeVlcEl && data.settings.close_existing_vlc !== undefined) {
                     closeVlcEl.checked = data.settings.close_existing_vlc;
                 }
@@ -47,11 +126,11 @@ async function loadCurrentFolder() {
                     // Default to false if not set
                     showAllMoviesEl.checked = data.settings.show_all_movies_tab === true;
                 }
-                
+
                 // Update nav visibility
                 updateAllMoviesNavVisibility(data.settings.show_all_movies_tab === true);
             }
-            
+
             return folderPath;
         } else {
             if (setupCurrentFolderEl) {
@@ -76,21 +155,21 @@ async function loadCurrentFolder() {
 async function loadStats() {
     const setupStatsEl = document.getElementById('setupStats');
     const statsEl = document.getElementById('stats');
-    
+
     try {
         const response = await fetch('/api/stats');
         const data = await response.json();
-        
+
         if (!response.ok) {
             console.error('Failed to load stats');
             return;
         }
-        
+
         // Format numbers
         const totalMovies = data.total_movies || 0;
         const watchedCount = data.watched_count || 0;
         const watchedPercent = totalMovies > 0 ? Math.round((watchedCount / totalMovies) * 100) : 0;
-        
+
         const statsHtml = `
             <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
                 <div class="stat-card" style="background: #1a1a1a; padding: 15px; border-radius: 6px; border: 1px solid #3a3a3a;">
@@ -103,18 +182,18 @@ async function loadStats() {
                 </div>
             </div>
         `;
-        
+
         if (setupStatsEl) {
             setupStatsEl.innerHTML = statsHtml;
         }
-        
+
         if (statsEl) {
             statsEl.innerHTML = `
                 <div>Total Movies: <span style="color: #fff;">${totalMovies}</span></div>
                 <div>Watched: <span style="color: #4caf50;">${watchedCount}</span> (${watchedPercent}%)</div>
             `;
         }
-        
+
     } catch (error) {
         console.error('Error loading stats:', error);
     }
@@ -123,30 +202,30 @@ async function loadStats() {
 async function saveFolderPath() {
     const input = document.getElementById('folderPathInput');
     let folderPath = input.value.trim();
-    
+
     if (!folderPath) {
         showStatus('Please enter a folder path', 'error');
         return;
     }
-    
+
     // Validate absolute path before normalizing
     if (typeof isValidAbsolutePath === 'function' && !isValidAbsolutePath(folderPath)) {
         showStatus('Path must be absolute (e.g., D:\\movies or C:\\Movies)', 'error');
         return;
     }
-    
+
     // Normalize the path (handle /, \, \\)
     folderPath = normalizePath(folderPath);
-    
+
     try {
         const response = await fetch('/api/config', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({movies_folder: folderPath})
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ movies_folder: folderPath })
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             showStatus('Movies folder updated successfully', 'success');
             loadCurrentFolder();
@@ -191,7 +270,7 @@ async function loadHiddenMovies() {
 
         // Initialize star ratings
         initAllStarRatings();
-        
+
         // Restore scroll position if available
         if (typeof restoreScrollPosition === 'function') {
             restoreScrollPosition();
@@ -249,17 +328,17 @@ async function loadDuplicateMovies() {
         });
         html += '</div>';
         container.innerHTML = html;
-        
+
         // Initialize star ratings for the new cards
         if (typeof initAllStarRatings === 'function') {
             initAllStarRatings();
         }
-        
+
         // Restore scroll position if available
         if (typeof restoreScrollPosition === 'function') {
             restoreScrollPosition();
         }
-        
+
     } catch (error) {
         container.innerHTML = `<div class="status-message error">Error: ${error.message}</div>`;
     }
@@ -268,13 +347,13 @@ async function loadDuplicateMovies() {
 async function loadSystemStatus() {
     const statusEl = document.getElementById('systemStatus');
     if (!statusEl) return;
-    
+
     try {
         const [ffmpegResponse, vlcResponse] = await Promise.all([
             fetch('/api/test-ffmpeg'),
             fetch('/api/test-vlc')
         ]);
-        
+
         if (!ffmpegResponse.ok) {
             const statusText = ffmpegResponse.statusText || `HTTP ${ffmpegResponse.status}`;
             let errorDetail = '';
@@ -289,7 +368,7 @@ async function loadSystemStatus() {
             } catch {
                 errorDetail = statusText;
             }
-            
+
             statusEl.innerHTML = `
                 <div style="color: #f44336;">
                     <div style="font-weight: 500;">Server error checking system status</div>
@@ -300,7 +379,7 @@ async function loadSystemStatus() {
             `;
             return;
         }
-        
+
         let ffmpegResult, vlcResult;
         try {
             ffmpegResult = await ffmpegResponse.json();
@@ -316,11 +395,11 @@ async function loadSystemStatus() {
             `;
             return;
         }
-        
+
         let statusHtml = '';
         const allOk = ffmpegResult.ok && vlcResult.ok;
         const allErrors = [...(ffmpegResult.errors || []), ...(vlcResult.errors || [])];
-        
+
         if (allOk) {
             statusHtml = `
                 <div style="display: flex; align-items: center; gap: 10px; color: #4caf50;">
@@ -351,12 +430,12 @@ async function loadSystemStatus() {
                 </div>
             `;
         }
-        
+
         statusEl.innerHTML = statusHtml;
     } catch (error) {
         let errorTitle = 'Error checking system status';
         let errorMessage = error.message;
-        
+
         if (error.name === 'TypeError' && error.message.includes('fetch')) {
             errorTitle = 'Network error: Cannot reach server';
             errorMessage = 'Failed to connect to the server. Make sure the server is running and accessible.';
@@ -367,7 +446,7 @@ async function loadSystemStatus() {
             errorTitle = 'Network error';
             errorMessage = 'Network request failed. Check your connection.';
         }
-        
+
         statusEl.innerHTML = `
             <div style="color: #f44336;">
                 <div style="font-weight: 500;">${errorTitle}</div>
@@ -383,11 +462,11 @@ function loadSetupPage() {
     loadSystemStatus();
     loadVlcOptimizationStatus();
     loadVlcHardwareAccelSetting();
-    
+
     // Clear dynamic lists to avoid staleness
     const hiddenContainer = document.getElementById('hiddenMoviesList');
     if (hiddenContainer) hiddenContainer.style.display = 'none';
-    
+
     const recleanStatus = document.getElementById('recleanStatus');
     if (recleanStatus) recleanStatus.style.display = 'none';
 }
@@ -400,7 +479,6 @@ async function recheckSystemStatus() {
     await loadSystemStatus();
 }
 
-<<<<<<< Current (Your changes)
 // Local Target Folder Functions
 
 function showLocalTargetDialog() {
@@ -429,32 +507,32 @@ function browseLocalTargetFolder() {
 async function saveLocalTargetPath() {
     const input = document.getElementById('localTargetPathInput');
     let folderPath = input.value.trim();
-    
+
     if (!folderPath) {
         showStatus('Please enter a folder path', 'error');
         return;
     }
-    
+
     // Validate absolute path before normalizing
     if (typeof isValidAbsolutePath === 'function' && !isValidAbsolutePath(folderPath)) {
         showStatus('Path must be absolute (e.g., D:\\LocalMovies or C:\\Offline)', 'error');
         return;
     }
-    
+
     // Normalize the path (handle /, \, \\)
     if (typeof normalizePath === 'function') {
         folderPath = normalizePath(folderPath);
     }
-    
+
     try {
         const response = await fetch('/api/config', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({local_target_folder: folderPath})
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ local_target_folder: folderPath })
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             showStatus('Local target folder updated successfully', 'success');
             loadCurrentFolder();
@@ -478,7 +556,7 @@ function showCopyProgress(movieName) {
     const messageEl = document.getElementById('copyProgressMessage');
     const barEl = document.getElementById('copyProgressBar');
     const percentEl = document.getElementById('copyProgressPercent');
-    
+
     if (toast) {
         toast.style.display = 'block';
         if (titleEl) titleEl.textContent = `Copying: ${movieName}`;
@@ -492,7 +570,7 @@ function updateCopyProgress(progress, message) {
     const barEl = document.getElementById('copyProgressBar');
     const percentEl = document.getElementById('copyProgressPercent');
     const messageEl = document.getElementById('copyProgressMessage');
-    
+
     if (barEl) barEl.style.width = `${progress}%`;
     if (percentEl) percentEl.textContent = `${Math.round(progress)}%`;
     if (messageEl && message) messageEl.textContent = message;
@@ -514,12 +592,12 @@ function showCopyComplete(message, isError = false) {
     const titleEl = document.getElementById('copyProgressTitle');
     const messageEl = document.getElementById('copyProgressMessage');
     const barEl = document.getElementById('copyProgressBar');
-    
+
     if (titleEl) titleEl.textContent = isError ? 'Copy Failed' : 'Copy Complete';
     if (messageEl) messageEl.textContent = message;
     if (barEl) barEl.style.width = isError ? '0%' : '100%';
     if (barEl) barEl.style.background = isError ? '#f44336' : '#4caf50';
-    
+
     // Auto-hide after 5 seconds
     setTimeout(() => {
         const barEl = document.getElementById('copyProgressBar');
@@ -533,41 +611,41 @@ async function copyMovieToLocal(movieId, movieName) {
         showStatus('Copy already in progress', 'info');
         return;
     }
-    
+
     activeCopyMovieId = movieId;
     showCopyProgress(movieName);
-    
+
     try {
         // Start the copy
         const response = await fetch(`/api/movie/${movieId}/copy-to-local`, {
             method: 'POST'
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'already_copied') {
             showCopyComplete(data.message);
             return;
         }
-        
+
         if (data.status === 'complete') {
             showCopyComplete(data.message);
             return;
         }
-        
+
         if (data.status === 'in_progress') {
             // Start polling for progress
             startCopyProgressPolling(movieId);
             return;
         }
-        
+
         if (!response.ok) {
             showCopyComplete(data.detail || 'Copy failed', true);
             return;
         }
-        
+
         showCopyComplete(data.message || 'Copy complete');
-        
+
     } catch (error) {
         showCopyComplete('Error: ' + error.message, true);
     }
@@ -577,12 +655,12 @@ function startCopyProgressPolling(movieId) {
     if (copyProgressPollInterval) {
         clearInterval(copyProgressPollInterval);
     }
-    
+
     copyProgressPollInterval = setInterval(async () => {
         try {
             const response = await fetch(`/api/movie/${movieId}/copy-status`);
             const data = await response.json();
-            
+
             if (data.status === 'in_progress') {
                 updateCopyProgress(data.progress || 0, data.message);
             } else if (data.status === 'complete' || data.status === 'already_copied') {
@@ -608,7 +686,9 @@ async function checkCopyStatus(movieId) {
     } catch (error) {
         console.error('Error checking copy status:', error);
         return { status: 'error', message: error.message };
-=======
+    }
+}
+
 // =============================================================================
 // VLC Optimization Functions
 // =============================================================================
@@ -617,22 +697,22 @@ async function loadVlcOptimizationStatus() {
     const statusEl = document.getElementById('vlcOptimizationStatus');
     const applyBtn = document.getElementById('btnApplyVlcOptimization');
     const removeBtn = document.getElementById('btnRemoveVlcOptimization');
-    
+
     if (!statusEl) return;
-    
+
     statusEl.innerHTML = '<div class="loading">Checking VLC optimization status...</div>';
-    
+
     try {
         const response = await fetch('/api/vlc/optimization/status');
         const data = await response.json();
-        
+
         if (!response.ok) {
             throw new Error(data.detail || 'Failed to load status');
         }
-        
+
         const status = data.status;
         let statusHtml = '';
-        
+
         if (status.is_optimized) {
             statusHtml = `
                 <div style="display: flex; align-items: center; gap: 10px; color: #4caf50;">
@@ -684,9 +764,9 @@ async function loadVlcOptimizationStatus() {
             if (applyBtn) applyBtn.style.display = 'inline-block';
             if (removeBtn) removeBtn.style.display = 'none';
         }
-        
+
         statusEl.innerHTML = statusHtml;
-        
+
     } catch (error) {
         statusEl.innerHTML = `
             <div style="color: #f44336;">
@@ -701,31 +781,31 @@ async function loadVlcOptimizationStatus() {
 
 async function applyVlcOptimization() {
     const statusEl = document.getElementById('vlcOptimizationStatus');
-    
+
     // Confirm with user
     if (!confirm('This will modify VLC\'s global configuration file to optimize startup speed.\n\nChanges will affect ALL VLC usage on your system, not just Movie Searcher.\n\nA backup of your current settings will be created.\n\nContinue?')) {
         return;
     }
-    
+
     statusEl.innerHTML = '<div class="loading">Applying VLC optimizations...</div>';
-    
+
     try {
         const response = await fetch('/api/vlc/optimization/apply', {
             method: 'POST'
         });
         const data = await response.json();
-        
+
         if (!response.ok) {
             throw new Error(data.detail || 'Failed to apply optimizations');
         }
-        
+
         if (data.success) {
             showStatus(data.message || 'VLC optimizations applied successfully', 'success');
             loadVlcOptimizationStatus();
         } else {
             throw new Error(data.message || 'Unknown error');
         }
-        
+
     } catch (error) {
         showStatus('Failed to apply VLC optimizations: ' + error.message, 'error');
         loadVlcOptimizationStatus();
@@ -734,30 +814,30 @@ async function applyVlcOptimization() {
 
 async function removeVlcOptimization() {
     const statusEl = document.getElementById('vlcOptimizationStatus');
-    
+
     if (!confirm('This will restore VLC\'s original configuration.\n\nContinue?')) {
         return;
     }
-    
+
     statusEl.innerHTML = '<div class="loading">Restoring VLC settings...</div>';
-    
+
     try {
         const response = await fetch('/api/vlc/optimization/remove', {
             method: 'POST'
         });
         const data = await response.json();
-        
+
         if (!response.ok) {
             throw new Error(data.detail || 'Failed to restore settings');
         }
-        
+
         if (data.success) {
             showStatus(data.message || 'VLC settings restored successfully', 'success');
             loadVlcOptimizationStatus();
         } else {
             throw new Error(data.message || 'Unknown error');
         }
-        
+
     } catch (error) {
         showStatus('Failed to restore VLC settings: ' + error.message, 'error');
         loadVlcOptimizationStatus();
@@ -768,14 +848,14 @@ async function saveVlcHardwareAccelSetting(enabled) {
     try {
         const response = await fetch('/api/config', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 settings: {
                     vlc_hardware_acceleration: enabled
                 }
             })
         });
-        
+
         if (response.ok) {
             showStatus(enabled ? 'Hardware acceleration enabled' : 'Hardware acceleration disabled', 'success');
         } else {
@@ -791,7 +871,7 @@ async function loadVlcHardwareAccelSetting() {
     try {
         const response = await fetch('/api/config');
         const data = await response.json();
-        
+
         if (response.ok && data.settings) {
             const checkbox = document.getElementById('setupVlcHardwareAccel');
             if (checkbox && data.settings.vlc_hardware_acceleration !== undefined) {
@@ -800,6 +880,5 @@ async function loadVlcHardwareAccelSetting() {
         }
     } catch (error) {
         console.error('Error loading VLC hardware acceleration setting:', error);
->>>>>>> Incoming (Background Agent changes)
     }
 }

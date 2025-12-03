@@ -26,12 +26,46 @@ def check_port_in_use(port: int) -> bool:
             return True
 
 def check_ffmpeg() -> bool:
-    """Check if ffmpeg is available in PATH"""
-    return shutil.which("ffmpeg") is not None
+    """Check if ffmpeg is available in PATH or already configured in settings"""
+    # First check PATH
+    if shutil.which("ffmpeg") is not None:
+        return True
+    
+    # Check if already configured in settings.json
+    settings_path = Path(__file__).parent / "settings.json"
+    if settings_path.exists():
+        try:
+            import json
+            with open(settings_path, "r") as f:
+                settings = json.load(f)
+            ffmpeg_path = settings.get("ffmpeg_path")
+            if ffmpeg_path and Path(ffmpeg_path).exists():
+                return True
+        except Exception:
+            pass
+    
+    return False
 
 def check_vlc() -> bool:
-    """Check if VLC is available in PATH"""
-    return shutil.which("vlc") is not None
+    """Check if VLC is available in PATH or already configured in settings"""
+    # First check PATH
+    if shutil.which("vlc") is not None:
+        return True
+    
+    # Check if already configured in settings.json
+    settings_path = Path(__file__).parent / "settings.json"
+    if settings_path.exists():
+        try:
+            import json
+            with open(settings_path, "r") as f:
+                settings = json.load(f)
+            vlc_path = settings.get("vlc_path")
+            if vlc_path and Path(vlc_path).exists():
+                return True
+        except Exception:
+            pass
+    
+    return False
 
 def try_install_ffmpeg() -> bool:
     """Try to install ffmpeg via winget (Windows only)"""
@@ -153,20 +187,29 @@ def run_setup_vlc() -> bool:
         print(f"ERROR: Failed to run setup/setup_vlc.py: {e}")
         return False
 
-def start_server(open_browser_url: str | None = None):
+def start_server(open_browser_url: str | None = None, dev: bool = False):
     """Start the server by importing and running it"""
     print("Starting Movie Searcher server...")
     print(f"Server will be available at {SERVER_URL}")
+    if dev:
+        print("DEV MODE: Auto-reload enabled for *.py files")
     print("Press Ctrl+C to stop the server")
     print("=" * 60)
     
     # Import and run the server
     from server import run_server
-    run_server(open_browser_url=open_browser_url)
+    run_server(open_browser_url=open_browser_url, dev=dev)
 
 def main():
     """Main startup logic"""
+    import argparse
+    parser = argparse.ArgumentParser(description="Movie Searcher Launcher")
+    parser.add_argument("--dev", action="store_true", help="Enable dev mode with auto-reload on .py changes")
+    args = parser.parse_args()
+    
     print("Movie Searcher Launcher")
+    if args.dev:
+        print("[DEV MODE]")
     print()
     
     # Change to script directory
@@ -226,7 +269,7 @@ def main():
     
     # Start the server (blocks until Ctrl+C, opens browser when ready)
     try:
-        start_server(open_browser_url=SERVER_URL)
+        start_server(open_browser_url=SERVER_URL, dev=args.dev)
     except KeyboardInterrupt:
         print("\n\nServer stopped by user.")
         return 0

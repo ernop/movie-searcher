@@ -56,7 +56,7 @@ class ScreenshotsIntervalRequest(BaseModel):
 
 class AiSearchRequest(BaseModel):
     query: str
-    provider: Literal["openai", "anthropic"] = "openai"
+    provider: Literal["openai", "anthropic"] = "anthropic"
 
 
 class PlaylistCreateRequest(BaseModel):

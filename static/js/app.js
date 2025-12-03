@@ -7,6 +7,8 @@ loadStats();
 loadLanguageFilters();
 loadCurrentFolder();
 updateCurrentlyPlaying();
+updateServerUptime();
+startServerUptimePolling();
 
 // Update All Movies nav visibility based on setting
 function updateAllMoviesNavVisibility(show) {

@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Movie Searcher</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/css/style.css?v=5">
+    <link rel="stylesheet" href="/css/style.css?v=6">
 </head>
 
 <body>
@@ -34,6 +34,7 @@
             <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
                 <div id="statusMessage"></div>
                 <div id="currentlyPlaying" class="currently-playing">nothing playing</div>
+                <div id="serverUptime" class="server-uptime" title="Server uptime">up 0m</div>
                 <a href="#/setup" class="nav-link" id="navSetup">Setup</a>
             </div>
         </div>
@@ -78,7 +79,7 @@
                         onkeypress="if(event.key === 'Enter') performAiSearch()">
                     <select id="aiProviderSelect"
                         style="padding: 0 15px; background: #1a1a1a; border: 1px solid #333; color: white; border-radius: 4px;">
-                        <option value="anthropic" selected>Claude 4.5 Sonnet</option>
+                        <option value="anthropic" selected>Claude Opus 4.5</option>
                         <option value="openai">GPT-5.1</option>
                     </select>
                     <button class="btn" id="aiSearchButton" onclick="performAiSearch()">Ask AI</button>
@@ -233,6 +234,16 @@
         <!-- Setup Page -->
         <div class="page" id="pageSetup">
             <h1>Setup</h1>
+
+            <!-- Server Control -->
+            <div class="setup-section" id="serverControlSection" style="margin-bottom: 20px;">
+                <h3>Server Control</h3>
+                <p>Restart the server to apply changes or recover from issues.</p>
+                <button class="btn" id="restartServerBtn" onclick="restartServer()" style="background: #e65100;">
+                    ⟳ Restart Server
+                </button>
+                <span id="restartStatus" style="margin-left: 12px; color: #888;"></span>
+            </div>
 
             <!-- System Status -->
             <div class="setup-section" id="systemStatusSection" style="margin-bottom: 20px;">
@@ -484,21 +495,21 @@
             </div>
         </div>
 
-        <script src="/js/utils.js?v=2"></script>
-        <script src="/js/routing.js?v=2"></script>
-        <script src="/js/movie-menu.js?v=2"></script>
-        <script src="/js/components.js?v=2"></script>
-        <script src="/js/search.js?v=2"></script>
-        <script src="/js/explore.js?v=2"></script>
-        <script src="/js/all-movies.js?v=2"></script>
-        <script src="/js/movie-details.js?v=2"></script>
-        <script src="/js/playlists.js?v=2"></script>
-        <script src="/js/media.js?v=2"></script>
-        <script src="/js/history.js?v=2"></script>
-        <script src="/js/setup.js?v=2"></script>
-        <script src="/js/ai-search.js?v=2"></script>
-        <script src="/js/movie-lists.js?v=2"></script>
-        <script src="/js/app.js?v=2"></script>
+        <script src="/js/utils.js?v=5"></script>
+        <script src="/js/routing.js?v=3"></script>
+        <script src="/js/movie-menu.js?v=3"></script>
+        <script src="/js/components.js?v=3"></script>
+        <script src="/js/search.js?v=3"></script>
+        <script src="/js/explore.js?v=3"></script>
+        <script src="/js/all-movies.js?v=3"></script>
+        <script src="/js/movie-details.js?v=4"></script>
+        <script src="/js/playlists.js?v=3"></script>
+        <script src="/js/media.js?v=3"></script>
+        <script src="/js/history.js?v=3"></script>
+        <script src="/js/setup.js?v=3"></script>
+        <script src="/js/ai-search.js?v=3"></script>
+        <script src="/js/movie-lists.js?v=3"></script>
+        <script src="/js/app.js?v=3"></script>
 </body>
 
 </html>

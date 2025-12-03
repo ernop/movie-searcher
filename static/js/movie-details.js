@@ -258,26 +258,31 @@ async function launchMovie(movieId) {
             })
         });
 
-        if (response.ok) {
+        const data = await response.json();
+        
+        // Check for failed status even on 200 response (VLC can start but exit immediately)
+        if (response.ok && data.status === 'launched') {
             showStatus('Movie launched', 'success');
             updateCurrentlyPlaying();
         } else {
             let errorMessage = 'Unknown error';
-            try {
-                const data = await response.json();
-                if (data.detail) {
-                    errorMessage = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
-                } else if (data.message) {
-                    errorMessage = data.message;
-                } else if (data.error) {
-                    errorMessage = data.error;
-                }
-            } catch (jsonError) {
-                // If JSON parsing fails, use status text
-                errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-                console.error('Failed to parse error response:', jsonError);
+            
+            if (data.detail) {
+                errorMessage = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+            } else if (data.error) {
+                errorMessage = data.error;
+            } else if (data.message) {
+                errorMessage = data.message;
             }
-            console.error('Launch failed with response:', response.status, errorMessage);
+            
+            // Include VLC stderr if available (helps diagnose VLC-specific failures)
+            if (data.vlc_stderr) {
+                errorMessage += '\n\nVLC error: ' + data.vlc_stderr.substring(0, 200);
+                console.error('VLC stderr:', data.vlc_stderr);
+            }
+            
+            // Log full response for debugging
+            console.error('Launch failed with response:', response.status, data);
             showStatus('Failed to launch: ' + errorMessage, 'error');
         }
     } catch (error) {
@@ -330,35 +335,22 @@ async function loadMovieDetailsById(id) {
         const movie = await response.json();
 
         if (!response.ok) {
-            container.innerHTML = `<div class="empty-state">Error: ${movie.detail || 'Failed to load movie'}</div>`;
+            container.innerHTML = `
+                <div class="movie-not-found">
+                    <div class="not-found-icon">🎬</div>
+                    <h2>Movie Not Found</h2>
+                    <p>The movie with ID <strong>${id}</strong> doesn't exist in the database.</p>
+                    <p class="not-found-hint">It may have been removed, or the link might be incorrect.</p>
+                    <div class="not-found-actions">
+                        <a href="#/explore" class="btn">Browse Movies</a>
+                        <a href="#/home" class="btn btn-secondary">Go Home</a>
+                    </div>
+                </div>`;
             return;
         }
 
-        // Prefer API endpoint by screenshot_id for reliability, fallback to static files
-        let imageUrl = '';
-        if (movie.screenshot_id) {
-            // Use API endpoint - most reliable, handles path issues correctly
-            imageUrl = `/api/screenshot/${movie.screenshot_id}`;
-        } else if (movie.screenshot_path) {
-            // Fallback: use static files endpoint (handles URL encoding properly)
-            const filename = movie.screenshot_path.split(/[/\\]/).pop();
-            imageUrl = filename ? `/screenshots/${encodeURIComponent(filename)}` : '';
-        } else if (movie.image_path) {
-            const filename = getFilename(movie.image_path);
-            if (movie.image_path.includes('screenshots')) {
-                imageUrl = filename ? `/screenshots/${encodeURIComponent(filename)}` : '';
-            } else {
-                // Extract relative path from movies folder
-                const pathParts = movie.image_path.replace(/\\/g, '/').split('/');
-                const moviesIndex = pathParts.findIndex(p => p.toLowerCase().includes('movies') || p.toLowerCase().includes('movie'));
-                if (moviesIndex >= 0 && moviesIndex < pathParts.length - 1) {
-                    const relativePath = pathParts.slice(moviesIndex + 1).join('/');
-                    imageUrl = `/movies/${encodeURIComponent(relativePath)}`;
-                } else {
-                    imageUrl = `/movies/${encodeURIComponent(filename)}`;
-                }
-            }
-        }
+        // Use ID-based endpoint - no disk paths exposed in URLs
+        const imageUrl = `/api/movie/${movie.id}/image`;
         const externalLinks = generateExternalLinks(movie.name);
         const mediaGallery = renderMediaGallery(movie.images || [], movie.screenshots || [], movie.path, movie.id);
 

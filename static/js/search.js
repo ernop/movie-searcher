@@ -191,6 +191,14 @@ function setWatchFilter(filterValue, clickedBtn) {
     applyFilters();
 }
 
+function applyFilters() {
+    // Re-run search with current query and updated filters
+    const query = searchInput ? searchInput.value.trim() : '';
+    if (query) {
+        performSearch(query, true);
+    }
+}
+
 function setExploreLanguageFilter(languageValue, clickedBtn) {
     const languageGroup = document.getElementById('exploreLanguageFilterGroup');
     if (languageGroup) {
