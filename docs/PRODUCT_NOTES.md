@@ -16,9 +16,9 @@
 
 ### Screen Usage
 - Users have large landscape monitors (up to 5K pixels wide)
-- Content must use available width (percentage-based, not fixed pixels)
-- Minimal wasted space on sides
-- Some horizontal margin is fine, but content area should be generous
+- Content uses percentage-based width (65% of viewport) for focused reading
+- Page is centered with comfortable margins on both sides
+- Narrower width improves readability and reduces eye movement on ultra-wide displays
 
 ## Explore Page Filters
 
@@ -45,9 +45,16 @@
 - Testing environment (Cursor browser) is narrow - not representative of actual usage
 
 ## Don't Do
-- Don't use fixed pixel widths for content areas
-- Don't add spacing/padding that wastes screen space
+- Don't use fixed pixel widths for content areas (use percentage-based)
 - Don't hide filter options in dropdowns or popovers
 - Don't add loading delays or spinners that persist
 - Don't iterate over all movies in Python when SQL can do it
+
+## Movie Details Page
+
+### Same-Title Navigation
+- Shows badge next to title when other versions of the movie exist
+- Subtle styling: semi-transparent background, muted text color
+- Dropdown reveals all versions with file sizes and hidden status
+- Helps find smaller copies or alternative versions
 

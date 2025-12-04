@@ -2,6 +2,34 @@
 
 All notable changes to Movie Searcher are documented here.
 
+## [1.4.0] - 2024-12-04
+
+### New Features
+
+**Same-Title Movie Navigation**
+- Movie details page now shows when other versions of the same movie exist
+- Subtle badge next to title: "1 other version" / "X other versions"
+- Click to reveal dropdown with links to all copies (shows file size, hidden status)
+- Useful for finding smaller/hidden copies or alternative versions
+
+### UI Changes
+
+**Narrower Page Layout**
+- Reduced overall page width from 94% to 65% for a more focused reading experience
+- Content is now centered with generous margins on both sides
+- Applies to all pages (Home, Explore, Movie Details, etc.)
+
+### Technical Changes
+
+**API Endpoints**
+- `GET /api/movie/{id}/same-title` - Returns other movies with identical title
+
+**Frontend**
+- `movie-details.js` - Added `fetchSameTitleMovies()` and `renderSameTitleMovies()` functions
+- `style.css` - Added `.same-title-indicator`, `.same-title-toggle`, `.same-title-dropdown` styles
+
+---
+
 ## [1.3.0] - 2024-11-30
 
 ### New Features

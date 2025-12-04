@@ -26,8 +26,9 @@
 
 ### Width & Layout
 - **No fixed pixel widths** for main content - users have 5K monitors
-- Use percentage-based widths: `max-width: 94%` not `max-width: 1000px`
+- Use percentage-based widths: `max-width: 65%` (narrower for focused reading)
 - Body padding should be percentage: `padding: 20px 3%`
+- Content is centered with `margin: 0 auto`
 
 ### Filter Button Styling
 - Buttons should be **flush** (no gap between them)
@@ -71,8 +72,9 @@ The Explore page filters are organized in distinct rows:
 
 ### Screen Real Estate  
 - User has large landscape monitors (up to 5K width)
-- Wasted horizontal space is unacceptable
-- Content should scale with viewport, not be fixed-width
+- Content width is 65% of viewport for comfortable reading
+- Centered layout with generous margins improves focus
+- Content scales with viewport using percentage-based widths
 
 ### Responsiveness
 - Page loads must feel instant
