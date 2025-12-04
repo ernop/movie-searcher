@@ -428,8 +428,8 @@ async function loadMovieDetailsById(id) {
                 </div>
                 <div class="movie-details-info">
                     <div class="movie-details-title-row">
-                        ${sameTitleIndicator}
                         <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>
+                        ${sameTitleIndicator}
                     </div>
                     <div class="movie-details-meta">
                         ${movie.year ? `<span class="year-link" onclick="navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
