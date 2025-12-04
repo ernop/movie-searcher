@@ -2198,11 +2198,103 @@
             flex: 1;
         }
         
+        .movie-details-title-row {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        
         .movie-details-title {
             font-size: 32px;
             font-weight: 500;
             color: #fff;
-            margin-bottom: 10px;
+            margin-bottom: 0;
+        }
+        
+        /* Same-title indicator for other versions */
+        .same-title-indicator {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+        
+        .same-title-toggle {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #888;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+        }
+        
+        .same-title-toggle:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.25);
+            color: #aaa;
+        }
+        
+        .same-title-indicator.expanded .same-title-toggle {
+            background: rgba(255, 255, 255, 0.12);
+            color: #aaa;
+        }
+        
+        .same-title-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 6px;
+            background: #252525;
+            border: 1px solid #3a3a3a;
+            border-radius: 6px;
+            min-width: 180px;
+            z-index: 100;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            overflow: hidden;
+        }
+        
+        .same-title-indicator.expanded .same-title-dropdown {
+            display: block;
+        }
+        
+        .same-title-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            color: #ccc;
+            text-decoration: none;
+            transition: background 0.1s ease;
+            border-bottom: 1px solid #333;
+        }
+        
+        .same-title-item:last-child {
+            border-bottom: none;
+        }
+        
+        .same-title-item:hover {
+            background: #333;
+            color: #fff;
+        }
+        
+        .same-title-size {
+            font-size: 13px;
+            font-weight: 500;
+        }
+        
+        .same-title-hidden-badge {
+            font-size: 10px;
+            background: #5a4040;
+            color: #e0a0a0;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .movie-details-meta {
@@ -2371,6 +2463,54 @@
         
         .history-movie-card {
             width: 100%;
+        }
+        
+        /* Resume from where you left off - shown when we have playback position data */
+        .history-item.has-resume {
+            background: linear-gradient(135deg, rgba(74, 158, 255, 0.08) 0%, transparent 60%);
+            border-radius: 8px;
+            padding: 8px;
+            margin: -8px;
+        }
+        
+        .history-resume {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 4px;
+        }
+        
+        .resume-button {
+            background: linear-gradient(135deg, #4a9eff 0%, #3a8eef 100%);
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: transform 0.1s, box-shadow 0.1s;
+            box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
+        }
+        
+        .resume-button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+            background: linear-gradient(135deg, #5aaeff 0%, #4a9eff 100%);
+        }
+        
+        .resume-button:active {
+            transform: translateY(0);
+        }
+        
+        .resume-hint {
+            font-size: 11px;
+            color: #7ab3ff;
+            font-style: italic;
+            padding-left: 2px;
         }
         
         .all-movies-list {
@@ -2594,6 +2734,13 @@
             background: #1a2a3a;
             color: #8bc5ff;
             border-left: 3px solid #4a9eff;
+        }
+
+        .batch-queue-item.owned {
+            background: #1a2a1a;
+            color: #7cb87c;
+            border-left: 3px solid #4caf50;
+            opacity: 0.85;
         }
 
         .batch-queue-item.more {

@@ -83,9 +83,17 @@ function renderMediaGallery(images, screenshots, itemPath, movieId) {
             ? formatTimestamp(timestamp) 
             : '';
         
-        // Add break when transitioning from images to screenshots
-        if (isScreenshot && !hasSeenScreenshots && hasSeenImages) {
-            galleryHtml += '<div style="width: 100%; flex-basis: 100%;"></div>';
+        // Add break and screenshot button when transitioning from images to screenshots (or at first screenshot)
+        if (isScreenshot && !hasSeenScreenshots) {
+            if (hasSeenImages) {
+                galleryHtml += '<div style="width: 100%; flex-basis: 100%;"></div>';
+            }
+            // Add screenshot button on its own line before all screenshots
+            if (!screenshotButtonRendered && movieId) {
+                galleryHtml += renderScreenshotButton();
+                galleryHtml += '<div style="width: 100%; flex-basis: 100%;"></div>';
+                screenshotButtonRendered = true;
+            }
             hasSeenScreenshots = true;
         }
         if (!isScreenshot) {
@@ -94,63 +102,30 @@ function renderMediaGallery(images, screenshots, itemPath, movieId) {
             hasSeenScreenshots = true;
         }
         
-        if (idx === 0) {
-            // First item gets the "Get more" button
-            let launchBtnHtml = '';
-            if (isScreenshot && movieId) {
-                if (timestamp !== null && timestamp !== undefined) {
-                    launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo(${movieId}, ${timestamp});">Launch</button>`;
-                } else {
-                    launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie(${movieId});">Launch</button>`;
-                }
+        // Render the media item
+        let launchBtnHtml = '';
+        if (isScreenshot && movieId) {
+            if (timestamp !== null && timestamp !== undefined) {
+                launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo(${movieId}, ${timestamp});">Launch</button>`;
+            } else {
+                launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie(${movieId});">Launch</button>`;
             }
-            // Use API endpoints when IDs available for reliability, fallback to static files
-            const imageSrc = isScreenshot 
-                ? (media.id ? `/api/screenshot/${media.id}` : (media.filename ? `/screenshots/${encodeURIComponent(media.filename)}` : ''))
-                : (media.path ? (media.path.includes('screenshots') ? `/screenshots/${encodeURIComponent(getFilename(media.path))}` : `/movies/${encodeURIComponent(media.path)}`) : '');
-            galleryHtml += `
-                <div class="media-item" onclick="showMediaOverlay(${media.id || 'null'}, ${isScreenshot ? 'true' : 'false'}, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${idx})" style="position: relative;">
-                    ${launchBtnHtml}
-                    ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
-                    <img src="${imageSrc}" 
-                         alt="" 
-                         loading="lazy"
-                         onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'"
-                         onload="console.log('Loaded image:', '${escapeJsString(imageSrc)}')">
-                </div>
-            `;
-        } else {
-            // All other items
-            let launchBtnHtml = '';
-            if (isScreenshot && movieId) {
-                if (timestamp !== null && timestamp !== undefined) {
-                    launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); jumpToVideo(${movieId}, ${timestamp});">Launch</button>`;
-                } else {
-                    launchBtnHtml = `<button class="media-item-launch-btn" onclick="event.stopPropagation(); launchMovie(${movieId});">Launch</button>`;
-                }
-            }
-            // Use API endpoints when IDs available for reliability, fallback to static files
-            const imageSrc = isScreenshot 
-                ? (media.id ? `/api/screenshot/${media.id}` : (media.filename ? `/screenshots/${encodeURIComponent(media.filename)}` : ''))
-                : (media.path ? (media.path.includes('screenshots') ? `/screenshots/${encodeURIComponent(getFilename(media.path))}` : `/movies/${encodeURIComponent(media.path)}`) : '');
-            galleryHtml += `
-                <div class="media-item" onclick="showMediaOverlay(${media.id || 'null'}, ${isScreenshot ? 'true' : 'false'}, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${idx})" style="position: relative;">
-                    ${launchBtnHtml}
-                    ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
-                    <img src="${imageSrc}" 
-                         alt="" 
-                         loading="lazy"
-                         onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'"
-                         onload="console.log('Loaded image:', '${escapeJsString(imageSrc)}')">
-                </div>
-            `;
         }
-        
-        // Insert screenshot button after the first screenshot
-        if (isScreenshot && !screenshotButtonRendered && movieId) {
-            galleryHtml += renderScreenshotButton();
-            screenshotButtonRendered = true;
-        }
+        // Use API endpoints when IDs available for reliability, fallback to static files
+        const imageSrc = isScreenshot 
+            ? (media.id ? `/api/screenshot/${media.id}` : (media.filename ? `/screenshots/${encodeURIComponent(media.filename)}` : ''))
+            : (media.path ? (media.path.includes('screenshots') ? `/screenshots/${encodeURIComponent(getFilename(media.path))}` : `/movies/${encodeURIComponent(media.path)}`) : '');
+        galleryHtml += `
+            <div class="media-item" onclick="showMediaOverlay(${media.id || 'null'}, ${isScreenshot ? 'true' : 'false'}, ${timestamp !== null ? timestamp : 'null'}, ${movieId || 'null'}, ${idx})" style="position: relative;">
+                ${launchBtnHtml}
+                ${isScreenshot && timestampLabel ? `<div class="screenshot-timestamp" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(timestampLabel)}</div>` : ''}
+                <img src="${imageSrc}" 
+                     alt="" 
+                     loading="lazy"
+                     onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'"
+                     onload="console.log('Loaded image:', '${escapeJsString(imageSrc)}')">
+            </div>
+        `;
     });
     
     // If no screenshots were found (or media array was empty), add button at the end
@@ -267,36 +242,51 @@ async function updateScreenshotsGallery(movieId, existingScreenshotIds, updatePr
                 ? `/api/screenshot/${screenshot.id}` 
                 : `/screenshots/${encodeURIComponent(filename)}`;
             
-            // Find DOM insertion point: first screenshot element with timestamp > this timestamp
-            // Also check if we need to add a break before the first screenshot (if images exist)
+            // Find DOM insertion point: screenshots go AFTER the button/progress card and its break
+            // New layout: Images -> Break -> Button/Progress -> Break -> Screenshots
             let insertBeforeElement = null;
-            let needsBreak = false;
+            let insertAfterElement = null;
             let foundFirstScreenshot = false;
+            let hasImages = false;
+            
+            // Find the button/progress card and existing screenshots
+            let buttonOrProgress = null;
+            let buttonBreak = null;
+            
             for (const el of existingItems) {
                 const elOnclick = el.getAttribute('onclick');
                 const elTs = getTimestampFromElement(el);
                 const isElScreenshot = elTs !== null || (elOnclick && elOnclick.includes(', true,'));
-                if (isElScreenshot) {
+                
+                // Check if it's the screenshot generator button or progress card
+                const isButton = (elOnclick && elOnclick.includes('showScreenshotConfig')) || 
+                               el.id === 'screenshotProgressCard';
+                
+                if (isButton) {
+                    buttonOrProgress = el;
+                    // Find the break element after the button (next sibling with flex-basis: 100%)
+                    let next = el.nextElementSibling;
+                    if (next && next.style.flexBasis === '100%') {
+                        buttonBreak = next;
+                    }
+                } else if (isElScreenshot) {
                     foundFirstScreenshot = true;
+                    // Find insertion point: first screenshot with timestamp > this timestamp
                     if (elTs !== null && timestamp !== null && timestamp !== undefined && elTs > timestamp) {
                         insertBeforeElement = el;
                         break;
                     }
+                    // Track last screenshot for appending after
+                    insertAfterElement = el;
                 } else {
-                    // Check if it's the screenshot generator button or progress card
-                    const isButton = (el.getAttribute('onclick') && el.getAttribute('onclick').includes('showScreenshotConfig')) || 
-                                   el.id === 'screenshotProgressCard';
-                                   
-                    if (isButton && !foundFirstScreenshot) {
-                        insertBeforeElement = el;
-                        break;
-                    }
-
-                    // This is an image - if we haven't seen a screenshot yet, we'll need a break
-                    if (!foundFirstScreenshot) {
-                        needsBreak = true;
-                    }
+                    // This is an image
+                    hasImages = true;
                 }
+            }
+            
+            // If we didn't find a specific insertion point, append after the break following the button
+            if (!insertBeforeElement && !foundFirstScreenshot && buttonBreak) {
+                insertAfterElement = buttonBreak;
             }
             
             // Find insertion index in currentMediaArray (for navigation)
@@ -369,11 +359,17 @@ async function updateScreenshotsGallery(movieId, existingScreenshotIds, updatePr
                     const insertIdx = existingItems.indexOf(insertBeforeElement);
                     existingItems.splice(insertIdx, 0, newEl);
                 }
-            } else {
-                // If this is the first screenshot and images exist, add break first
-                if (needsBreak && !foundFirstScreenshot) {
-                    gallery.insertAdjacentHTML('beforeend', '<div style="width: 100%; flex-basis: 100%;"></div>');
+            } else if (insertAfterElement) {
+                // Insert after the break following the button, or after the last screenshot
+                insertAfterElement.insertAdjacentHTML('afterend', newItemHtml);
+                // Add to existingItems
+                const newEl = insertAfterElement.nextElementSibling;
+                if (newEl) {
+                    const insertIdx = existingItems.indexOf(insertAfterElement);
+                    existingItems.splice(insertIdx + 1, 0, newEl);
                 }
+            } else {
+                // Fallback: append to end of gallery
                 gallery.insertAdjacentHTML('beforeend', newItemHtml);
                 // Add to existingItems
                 const newEl = gallery.lastElementChild;

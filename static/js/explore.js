@@ -395,9 +395,9 @@ function renderYearFilter(yearCounts, activeYear) {
         
         yearChipContainer.innerHTML = `
             <button class="year-nav-btn" ${!earlierYear ? 'disabled' : ''} onclick="navigateToAdjacentYear(${earlierYear || 'null'}, 'earlier')" title="Earlier year (${earlierYear || 'N/A'})">◀</button>
-            <div class="year-chip" data-year="${activeYear}">
+            <div class="year-chip" data-year="${activeYear}" onclick="clearYearFilter()" title="Click to clear year filter" style="cursor: pointer;">
                 <span>${activeYear}</span>
-                <span class="year-chip-close" onclick="clearYearFilter()" title="Clear year filter">×</span>
+                <span class="year-chip-close" onclick="event.stopPropagation(); clearYearFilter()" title="Clear year filter">×</span>
             </div>
             <button class="year-nav-btn" ${!laterYear ? 'disabled' : ''} onclick="navigateToAdjacentYear(${laterYear || 'null'}, 'later')" title="Later year (${laterYear || 'N/A'})">▶</button>
         `;

@@ -74,3 +74,7 @@ class MovieListUpdateRequest(BaseModel):
 
 class OpenUrlsRequest(BaseModel):
     urls: list[str]
+
+
+class CheckMoviesRequest(BaseModel):
+    movies: list[str]  # List of "Title Year" strings

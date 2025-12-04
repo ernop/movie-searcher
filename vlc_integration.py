@@ -23,6 +23,16 @@ _last_launch_movie_id = None
 _last_launch_time = 0.0
 
 # =============================================================================
+# VLC HTTP Interface Configuration
+# =============================================================================
+# VLC can run an HTTP interface that exposes playback status. We use this to
+# capture the current playback position before closing/replacing VLC, enabling
+# "resume from where you left off" functionality in the history page.
+
+VLC_HTTP_PORT = 9090
+VLC_HTTP_PASSWORD = "moviesearcher"  # Required by VLC, localhost only so not a security concern
+
+# =============================================================================
 # VLC Flag Testing System
 # =============================================================================
 # Tests which VLC command-line flags are safe on this system.
@@ -488,8 +498,87 @@ def test_vlc_comprehensive(vlc_path=None):
         "checked_locations": vlc_search_info
     }
 
-def close_vlc_processes():
-    """Close all running VLC processes"""
+def get_vlc_playback_position():
+    """Query VLC's HTTP interface for current playback position.
+    
+    Returns:
+        dict with playback info if successful:
+            - position_seconds: Current position in seconds (int)
+            - length_seconds: Total length in seconds (int)
+            - position_percent: Position as 0.0-1.0 float
+            - state: 'playing', 'paused', or 'stopped'
+            - filename: Name of file being played
+        None if VLC HTTP interface is not available or query fails.
+    """
+    import urllib.request
+    import urllib.error
+    import base64
+    
+    try:
+        # VLC HTTP API uses password-only auth (empty username)
+        url = f"http://127.0.0.1:{VLC_HTTP_PORT}/requests/status.json"
+        
+        # Create request with basic auth
+        request = urllib.request.Request(url)
+        credentials = f":{VLC_HTTP_PASSWORD}"
+        b64_credentials = base64.b64encode(credentials.encode()).decode()
+        request.add_header("Authorization", f"Basic {b64_credentials}")
+        
+        with urllib.request.urlopen(request, timeout=1.0) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            
+            # Extract relevant fields
+            position_seconds = data.get("time", 0)
+            length_seconds = data.get("length", 0)
+            position_percent = data.get("position", 0.0)
+            state = data.get("state", "unknown")
+            
+            # Try to get filename from metadata
+            filename = None
+            info = data.get("information", {})
+            if info:
+                category = info.get("category", {})
+                meta = category.get("meta", {})
+                filename = meta.get("filename")
+            
+            logger.info(f"VLC playback position: {position_seconds}s / {length_seconds}s ({state})")
+            
+            return {
+                "position_seconds": position_seconds,
+                "length_seconds": length_seconds,
+                "position_percent": position_percent,
+                "state": state,
+                "filename": filename
+            }
+    except urllib.error.URLError as e:
+        # HTTP interface not available (VLC not running or HTTP not enabled)
+        logger.debug(f"VLC HTTP interface not available: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error querying VLC playback position: {e}")
+        return None
+
+
+def close_vlc_processes(capture_position=False):
+    """Close all running VLC processes.
+    
+    Args:
+        capture_position: If True, attempt to query playback position before killing.
+                         Returns the position info along with the count.
+    
+    Returns:
+        If capture_position is False: int (number of processes closed) or False on error
+        If capture_position is True: tuple of (count, position_info) where position_info
+                                     may be None if position could not be captured.
+    """
+    playback_info = None
+    
+    # If requested, try to capture position before killing
+    if capture_position:
+        playback_info = get_vlc_playback_position()
+        if playback_info:
+            logger.info(f"Captured VLC position before close: {playback_info['position_seconds']}s")
+    
     try:
         if os.name == 'nt':  # Windows
             # Find all VLC processes
@@ -512,6 +601,8 @@ def close_vlc_processes():
                     timeout=5
                 )
                 if kill_result.returncode == 0:
+                    if capture_position:
+                        return (process_count, playback_info)
                     return process_count
         else:
             # Linux/Mac - use pkill or killall
@@ -522,19 +613,29 @@ def close_vlc_processes():
                     timeout=5
                 )
                 if result.returncode == 0:
+                    if capture_position:
+                        return (True, playback_info)
                     return True
             except FileNotFoundError:
                 # Try killall if pkill unavailable
                 try:
                     subprocess.run(["killall", "vlc"], capture_output=True, timeout=5)
+                    if capture_position:
+                        return (True, playback_info)
                     return True
                 except FileNotFoundError:
                     logger.warning("Neither pkill nor killall available - cannot close VLC processes")
+                    if capture_position:
+                        return (False, playback_info)
                     return False
     except Exception as e:
         logger.warning(f"Error closing VLC processes: {e}")
+        if capture_position:
+            return (False, playback_info)
         return False
     
+    if capture_position:
+        return (0, playback_info)
     return 0
 
 def get_vlc_window_titles():
@@ -974,16 +1075,27 @@ def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1,
 	# Do this asynchronously so we don't block the response
 	if hwnd_found:
 		def finalize_window_position():
-			"""Background task to ensure window position sticks after VLC init."""
+			"""Background task to ensure window size and position stick after VLC init.
+			
+			Even with --no-qt-video-autoresize, VLC may still try to adjust the window
+			during video load. We apply the rect multiple times to ensure it sticks.
+			"""
 			try:
-				# Brief delay for VLC to finish any internal repositioning
-				time.sleep(0.15)
-				
 				if rect_applied and target_rect:
-					# Re-apply position in case VLC reset it during init
-					logger.debug(f"Re-applying window position: ({target_rect.left}, {target_rect.top})")
-					_set_window_rect(hwnd_found, target_rect)
+					# Apply multiple times as video loads (VLC may try to resize during decode)
+					target_width = target_rect.right - target_rect.left
+					target_height = target_rect.bottom - target_rect.top
+					logger.info(f"Preserving window size: {target_width}x{target_height} at ({target_rect.left}, {target_rect.top})")
+					
+					# Apply at staggered intervals during video load
+					# Delays: 0.15s, then 0.25s more (0.4s total), then 0.4s more (0.8s total)
+					delays = [0.15, 0.25, 0.4]
+					for i, delay in enumerate(delays):
+						time.sleep(delay)
+						_set_window_rect(hwnd_found, target_rect)
+						logger.debug(f"Re-applied window rect (attempt {i+1}/{len(delays)})")
 				else:
+					time.sleep(0.15)
 					_ensure_window_in_single_monitor(hwnd_found)
 			except Exception as e:
 				logger.warning(f"Background window finalization failed: {e}")
@@ -1138,13 +1250,48 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     t_close_start = time_module.perf_counter()
     
     # Step 2.5: Close existing VLC windows if requested
+    # When replacing VLC, we capture playback position first and save it to history
     if close_existing:
-        steps.append("Step 2.5: Closing existing VLC windows")
+        steps.append("Step 2.5: Closing existing VLC windows (with position capture)")
         try:
-            closed_count = close_vlc_processes()
+            # Capture position before killing, then close
+            close_result = close_vlc_processes(capture_position=True)
+            closed_count, playback_info = close_result
+            
             if closed_count:
                 steps.append(f"  Successfully closed {closed_count} VLC process(es)")
-                results.append({"step": 2.5, "status": "success", "message": f"Closed {closed_count} existing VLC process(es)"})
+                
+                # If we captured playback position, save it to the most recent launch history
+                if playback_info and playback_info.get("position_seconds", 0) > 0:
+                    position_secs = playback_info["position_seconds"]
+                    steps.append(f"  Captured playback position: {position_secs}s ({position_secs // 3600}h {(position_secs % 3600) // 60}m {position_secs % 60}s)")
+                    
+                    # Save to most recent launch history entry
+                    try:
+                        db = SessionLocal()
+                        try:
+                            # Get the most recent launch history entry
+                            last_launch = db.query(LaunchHistory).order_by(
+                                LaunchHistory.created.desc()
+                            ).first()
+                            
+                            if last_launch:
+                                last_launch.stopped_at_seconds = float(position_secs)
+                                db.commit()
+                                logger.info(f"Saved playback position {position_secs}s to launch history ID {last_launch.id}")
+                                steps.append(f"  Saved position to history entry ID {last_launch.id}")
+                            else:
+                                logger.warning("No launch history entry found to save position to")
+                                steps.append("  No history entry found to save position")
+                        finally:
+                            db.close()
+                    except Exception as e:
+                        logger.warning(f"Failed to save playback position to history: {e}")
+                        steps.append(f"  WARNING: Failed to save position: {e}")
+                else:
+                    steps.append("  No playback position captured (VLC may not have HTTP interface enabled)")
+                
+                results.append({"step": 2.5, "status": "success", "message": f"Closed {closed_count} VLC, position: {playback_info.get('position_seconds') if playback_info else 'unknown'}s"})
             else:
                 steps.append("  No existing VLC processes found")
                 results.append({"step": 2.5, "status": "info", "message": "No existing VLC processes to close"})
@@ -1163,8 +1310,15 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     # Get safe flags from our tested cache
     safe_flags = get_safe_vlc_flags()
     
-    # Build command with safe flags
-    vlc_cmd = [vlc_exe] + safe_flags + [movie_path]
+    # Build command with safe flags + HTTP interface for playback position tracking
+    # HTTP interface allows us to query current position before closing/replacing VLC
+    http_interface_flags = [
+        "--extraintf", "http",
+        "--http-port", str(VLC_HTTP_PORT),
+        "--http-password", VLC_HTTP_PASSWORD,
+    ]
+    
+    vlc_cmd = [vlc_exe] + safe_flags + http_interface_flags + [movie_path]
     
     if safe_flags:
         steps.append(f"  Using {len(safe_flags)} optimization flags")
@@ -1172,7 +1326,15 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     else:
         steps.append(f"  No optimization flags (none tested safe yet)")
     
-    results.append({"step": 3, "status": "success", "message": f"Command prepared with {len(safe_flags)} safe flags"})
+    # If we have a previous window size to restore, disable VLC's auto-resize
+    # This prevents VLC from overriding our SetWindowPos after the video loads
+    if existing_rect:
+        vlc_cmd.insert(1, "--no-qt-video-autoresize")
+        steps.append("  Disabled VLC auto-resize to preserve previous window size")
+        logger.info("launch_movie_in_vlc: Added --no-qt-video-autoresize to preserve window size")
+    
+    steps.append(f"  HTTP interface enabled on port {VLC_HTTP_PORT} for resume tracking")
+    results.append({"step": 3, "status": "success", "message": f"Command prepared with {len(safe_flags)} safe flags + HTTP interface"})
     
     # Step 4: Handle subtitles
     steps.append("Step 4: Checking for subtitles")

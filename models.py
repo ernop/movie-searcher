@@ -63,6 +63,7 @@ class LaunchHistory(Base):
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
     subtitle = Column(String, nullable=True)
+    stopped_at_seconds = Column(Float, nullable=True)  # Playback position when VLC was closed/replaced (NULL if unknown)
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -231,4 +232,4 @@ class Stat(Base):
 
 
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15

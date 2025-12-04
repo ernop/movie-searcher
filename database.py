@@ -743,6 +743,18 @@ def migrate_db_schema():
             set_schema_version(14, "Added stats table for performance tracking")
             current_version = 14
         
+        if current_version < 15:
+            logger.info("Migrating to schema version 15: Add stopped_at_seconds column to launch_history")
+            existing_columns = {col['name']: col for col in inspector.get_columns("launch_history")}
+            if "stopped_at_seconds" not in existing_columns:
+                with engine.begin() as conn:
+                    logger.info("Adding 'stopped_at_seconds' column to launch_history table...")
+                    conn.execute(text("ALTER TABLE launch_history ADD COLUMN stopped_at_seconds FLOAT"))
+                    logger.info("Migration complete: added 'stopped_at_seconds' column")
+            
+            set_schema_version(15, "Added stopped_at_seconds column to launch_history for resume playback")
+            current_version = 15
+        
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "

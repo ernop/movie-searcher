@@ -15,7 +15,13 @@ from scanning import clean_movie_name, load_cleaning_patterns
 # - expected_name is REQUIRED
 # - expected_year is OPTIONAL (omit or set to None if not asserting year)
 # Inputs should be full paths to test path-based cleaning
-# NOTE: All movie/show names are fictional to avoid trademark issues while preserving test value
+#
+# IMPORTANT: All movie/show names, years, episode titles, and release group names MUST be
+# fictional/randomized. Never use real movie names, show names, or recognizable release groups.
+# This avoids trademark issues and keeps test data generic. Examples of good fictional names:
+# - Movies: "Penguin With Hat", "Moonwaffles", "The Snickerdoodle Conspiracy"
+# - Shows: "Gerbil Titans", "The Noodle Dimension", "Gigglebox"
+# - Groups: "XYZ", "TRIAD", "AGLET" (not real scene group names)
 TEST_CASES: List[Dict[str, Optional[str]]] = [
     {
         # Tests: HDrip removal, basic title case correction
@@ -197,6 +203,27 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         # Tests: Complete folder tag, "Wumbo" episode title (tests generic pilot-like titles)
         "input": r"D:\movies\Discombobulated.Complete.1080p.WEB-DL Retic1337\Season 1\Discombobulated.S01E01.Wumbo.1080p.WEB-DL.mp4",
         "expected_name": "Discombobulated S01E01 Wumbo",
+        "expected_year": None,
+    },
+    {
+        # Tests: cryptic filename (group-abbreviation format), title extraction from parent folder
+        # Filename "xyz-pwh1080" looks like release group code, so use parent for title
+        "input": r"D:\movies\Penguin.With.Hat.1987.1080p.BluRay.x264-XYZ\xyz-pwh1080.mkv",
+        "expected_name": "Penguin with Hat",
+        "expected_year": 1987,
+    },
+    {
+        # Tests: genre descriptor removal ("Film Noir"), trailing dash cleanup, bracket codec removal
+        # Filename and folder are identical (common pattern)
+        "input": r"D:\movies\Rainy Sidewalk - Film Noir 1953 Eng Subs 1080p [H264-mp4]\Rainy Sidewalk - Film Noir 1953 Eng Subs 1080p [H264-mp4].mp4",
+        "expected_name": "Rainy Sidewalk",
+        "expected_year": 1953,
+    },
+    {
+        # Tests: hyphenated title preservation ("B-Squad"), SxxExx with episode title, nested season folders
+        # Must NOT remove "-Squad" as a release group suffix
+        "input": r"D:\movies\The B Squad S01-S05 (1987-)\The B-Squad S02 (360p re-dvdrip)\The B-Squad S02E08 Waffle Emergency.mp4",
+        "expected_name": "The B-Squad S02E08 Waffle Emergency",
         "expected_year": None,
     },
 ]

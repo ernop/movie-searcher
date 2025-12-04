@@ -331,7 +331,11 @@ async function loadMovieDetailsById(id) {
     container.innerHTML = '<div class="loading">Loading movie details...</div>';
 
     try {
-        const response = await fetch(`/api/movie/${encodeURIComponent(id)}`);
+        // Fetch movie details and same-title movies in parallel
+        const [response, sameTitleResponse] = await Promise.all([
+            fetch(`/api/movie/${encodeURIComponent(id)}`),
+            fetch(`/api/movie/${encodeURIComponent(id)}/same-title`)
+        ]);
         const movie = await response.json();
 
         if (!response.ok) {
@@ -347,6 +351,13 @@ async function loadMovieDetailsById(id) {
                     </div>
                 </div>`;
             return;
+        }
+
+        // Parse same-title movies
+        let sameTitleMovies = [];
+        if (sameTitleResponse.ok) {
+            const sameTitleData = await sameTitleResponse.json();
+            sameTitleMovies = sameTitleData.movies || [];
         }
 
         // Use ID-based endpoint - no disk paths exposed in URLs
@@ -382,6 +393,31 @@ async function loadMovieDetailsById(id) {
             subtitleIndicator = `<div style="font-size: 11px; color: #888; margin-top: 4px;">Subtitles: ${subtitleNames}${locations ? ` (${locations})` : ''}</div>`;
         }
 
+        // Build same-title movies indicator
+        let sameTitleIndicator = '';
+        if (sameTitleMovies.length > 0) {
+            const otherVersionsHtml = sameTitleMovies.map(m => {
+                const sizeStr = m.size ? formatSize(m.size) : 'unknown size';
+                const hiddenBadge = m.hidden ? '<span class="same-title-hidden-badge">hidden</span>' : '';
+                return `<a href="#/movie/${m.id}" class="same-title-item" title="${escapeHtml(m.path)}">
+                    <span class="same-title-size">${sizeStr}</span>
+                    ${hiddenBadge}
+                </a>`;
+            }).join('');
+            
+            const countLabel = sameTitleMovies.length === 1 ? '1 other version' : `${sameTitleMovies.length} other versions`;
+            sameTitleIndicator = `
+                <div class="same-title-indicator">
+                    <button class="same-title-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="Show other versions of this movie">
+                        ${countLabel}
+                    </button>
+                    <div class="same-title-dropdown">
+                        ${otherVersionsHtml}
+                    </div>
+                </div>
+            `;
+        }
+
         container.innerHTML = `
             <div class="movie-details" data-movie-id="${movie.id}">
                 <div class="movie-details-header">
@@ -391,7 +427,10 @@ async function loadMovieDetailsById(id) {
                     </div>
                 </div>
                 <div class="movie-details-info">
-                    <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>
+                    <div class="movie-details-title-row">
+                        ${sameTitleIndicator}
+                        <h1 class="movie-details-title">${escapeHtml(movie.name)}</h1>
+                    </div>
                     <div class="movie-details-meta">
                         ${movie.year ? `<span class="year-link" onclick="navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
                         ${movie.length ? `<span>${formatTime(movie.length)}</span>` : ''}
@@ -437,3 +476,11 @@ async function loadMovieDetailsById(id) {
         container.innerHTML = `<div class="empty-state">Error loading movie: ${error.message}</div>`;
     }
 }
+
+// Close same-title dropdown when clicking outside
+document.addEventListener('click', function(event) {
+    const indicator = document.querySelector('.same-title-indicator.expanded');
+    if (indicator && !indicator.contains(event.target)) {
+        indicator.classList.remove('expanded');
+    }
+});

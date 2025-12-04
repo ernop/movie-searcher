@@ -1,0 +1,50 @@
+
+[1m============================================================[0m
+[1m[96m  Movie Searcher Sanity Test Suite[0m
+[1m============================================================[0m
+[2m  Started: 2025-12-04 13:12:02[0m
+[2m  Server:  http://127.0.0.1:8002[0m
+[1m============================================================[0m
+
+[1m≡ƒöº Server Status[0m
+
+[1m≡ƒôí Core API Tests[0m
+  [92mΓ£ô PASS[0m Server Health [2m(109ms)[0m
+  [92mΓ£ô PASS[0m Server Uptime [2m(1ms)[0m
+  [92mΓ£ô PASS[0m Database Stats [2m(2ms)[0m
+  [92mΓ£ô PASS[0m FFmpeg Detection [2m(78ms)[0m
+  [92mΓ£ô PASS[0m VLC Detection [2m(3ms)[0m
+
+[1m≡ƒöì Search Tests[0m
+  [92mΓ£ô PASS[0m Search Validation [2m(2ms)[0m
+  [92mΓ£ô PASS[0m Search Query [2m(67ms)[0m
+
+[1m≡ƒÄ¼ Browse Tests[0m
+  [92mΓ£ô PASS[0m Explore Movies [2m(99ms)[0m
+  [92mΓ£ô PASS[0m Explore Filters [2m(243ms)[0m
+  [92mΓ£ô PASS[0m Movie Details [2m(37ms)[0m
+  [92mΓ£ô PASS[0m Random Movie [2m(30ms)[0m
+  [92mΓ£ô PASS[0m All Movies [2m(90ms)[0m
+  [92mΓ£ô PASS[0m Language Counts [2m(9ms)[0m
+
+[1m≡ƒôü Collection Tests[0m
+  [92mΓ£ô PASS[0m Playlists [2m(4ms)[0m
+  [92mΓ£ô PASS[0m Playlist Detail [2m(8ms)[0m
+  [92mΓ£ô PASS[0m Duplicates [2m(280ms)[0m
+  [92mΓ£ô PASS[0m Hidden Movies [2m(22ms)[0m
+
+[1m≡ƒô£ History Tests[0m
+  [92mΓ£ô PASS[0m History [2m(52ms)[0m
+  [92mΓ£ô PASS[0m Launch History [2m(206ms)[0m
+  [92mΓ£ô PASS[0m Currently Playing [2m(351ms)[0m
+
+[2mΓû╢∩╕Å  VLC Playback Tests (Skipped)[0m
+
+[1m============================================================[0m
+[1m  SUMMARY[0m
+[1m============================================================[0m
+[92m[1m  Γ£ô All 20 tests passed![0m
+
+[2m  Total time: 1.7s[0m
+[1m============================================================[0m
+

@@ -17,4 +17,5 @@ config.json
 screenshots/
 frames/
 settings.json
+cleaning_data.json
 *.code-workspace

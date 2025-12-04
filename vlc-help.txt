@@ -1,7 +1,1792 @@
-﻿VLC version 3.0.20 Vetinari (3.0.20-0-g6f0d0ab126)
-Compiled by videolan on runner-sgapdqg-project-435-concurrent-0 (Oct 30 2023 08:47:37)
-Compiler: gcc version 6.4.0 (GCC)
-This program comes with NO WARRANTY, to the extent permitted by law.
-You may redistribute it under the terms of the GNU General Public License;
-see the file named COPYING for details.
-Written by the VideoLAN team; see the AUTHORS file.
+﻿Usage: vlc [options] [stream] ...
+You can specify multiple streams on the commandline.
+They will be enqueued in the playlist.
+The first item specified will be played first.
+
+Options-styles:
+  --option  A global option that is set for the duration of the program.
+   -option  A single letter version of a global --option.
+   :option  An option that only applies to the stream directly before it
+            and that overrides previous settings.
+
+Stream MRL syntax:
+  [[access][/demux]://]URL[#[title][:chapter][-[title][:chapter]]]
+  [:option=value ...]
+
+  Many of the global --options can also be used as MRL specific :options.
+  Multiple :option=value pairs can be specified.
+
+URL syntax:
+  file:///path/file              Plain media file
+  http://host[:port]/file        HTTP URL
+  ftp://host[:port]/file         FTP URL
+  mms://host[:port]/file         MMS URL
+  screen://                      Screen capture
+  dvd://[device]                 DVD device
+  vcd://[device]                 VCD device
+  cdda://[device]                Audio CD device
+  udp://[[<source address>]@[<bind address>][:<bind port>]]
+                                 UDP stream sent by a streaming server
+  vlc://pause:<seconds>          Pause the playlist for a certain time
+  vlc://quit                     Special item to quit VLC
+
+
+ Visualizer filter (visual)
+   General:
+      --effect-list=<string>     Effects list
+          A list of visual effect, separated by commas. Current effects
+          include: dummy, scope, spectrum, spectrometer and vuMeter.
+      --effect-width=<integer>   Video width
+          The width of the effects video window, in pixels.
+      --effect-height=<integer>  Video height
+          The height of the effects video window, in pixels.
+      --effect-fft-window={none,hann,flattop,blackmanharris,kaiser} 
+                                 FFT window
+          The type of FFT window to use for spectrum-based visualizations.
+      --effect-kaiser-param=<float> 
+                                 Kaiser window parameter
+          The parameter alpha for the Kaiser window. Increasing alpha increases
+          the main-lobe width and decreases the side-lobe amplitude.
+   Spectrum analyser:
+      --visual-80-bands, --no-visual-80-bands 
+                                 Show 80 bands instead of 20
+                                 (default enabled)
+          Show 80 bands instead of 20
+      --visual-peaks, --no-visual-peaks 
+                                 Draw peaks in the analyzer
+                                 (default enabled)
+          Draw peaks in the analyzer
+   Spectrometer:
+      --spect-show-original, --no-spect-show-original 
+                                 Enable original graphic spectrum
+                                 (default disabled)
+          Enable the "flat" spectrum analyzer in the spectrometer.
+      --spect-show-base, --no-spect-show-base 
+                                 Draw the base of the bands
+                                 (default enabled)
+          Draw the base of the bands
+      --spect-radius=<integer>   Base pixel radius
+          Defines radius size in pixels, of base of bands(beginning).
+      --spect-sections=<integer [1 .. 2147483647]> 
+                                 Spectral sections
+          Determines how many sections of spectrum will exist.
+      --spect-color=<integer>    V-plane color
+          YUV-Color cube shifting across the V-plane ( 0 - 127 ).
+      --spect-show-bands, --no-spect-show-bands 
+                                 Draw bands in the spectrometer
+                                 (default enabled)
+          Draw bands in the spectrometer
+      --spect-80-bands, --no-spect-80-bands 
+                                 Show 80 bands instead of 20
+                                 (default enabled)
+          Show 80 bands instead of 20
+      --spect-separ=<integer>    Number of blank pixels between bands.
+          Number of blank pixels between bands.
+      --spect-amp=<integer>      Amplification
+          This is a coefficient that modifies the height of the bands.
+      --spect-show-peaks, --no-spect-show-peaks 
+                                 Draw peaks in the analyzer
+                                 (default enabled)
+          Draw peaks in the analyzer
+      --spect-peak-width=<integer> 
+                                 Peak extra width
+          Additions or subtractions of pixels on the peak width.
+      --spect-peak-height=<integer> 
+                                 Peak height
+          Total pixel height of the peak items.
+
+ libprojectM effect (projectm)
+      --projectm-preset-path=<string> 
+                                 projectM preset path
+          Path to the projectM preset directory
+      --projectm-title-font=<string> 
+                                 Title font
+          Font used for the titles
+      --projectm-menu-font=<string> 
+                                 Font menu
+          Font used for the menus
+      --projectm-width=<integer> Video width
+          The width of the video window, in pixels.
+      --projectm-height=<integer> 
+                                 Video height
+          The height of the video window, in pixels.
+      --projectm-meshx=<integer> Mesh width
+          The width of the mesh, in pixels.
+      --projectm-meshy=<integer> Mesh height
+          The height of the mesh, in pixels.
+      --projectm-texture-size=<integer> 
+                                 Texture size
+          The size of the texture, in pixels.
+
+ Goom effect (goom)
+      --goom-width=<integer>     Goom display width
+          This allows you to set the resolution of the Goom display (bigger
+          resolution will be prettier but more CPU intensive).
+      --goom-height=<integer>    Goom display height
+          This allows you to set the resolution of the Goom display (bigger
+          resolution will be prettier but more CPU intensive).
+      --goom-speed=<integer [1 .. 10]> 
+                                 Goom animation speed
+          This allows you to set the animation speed (between 1 and 10,
+          defaults to 6).
+
+ 3D OpenGL spectrum visualization (glspectrum)
+      --glspectrum-width=<integer> 
+                                 Video width
+          The width of the visualization window, in pixels.
+      --glspectrum-height=<integer> 
+                                 Video height
+          The height of the visualization window, in pixels.
+
+ Wall video filter (wall)
+      --wall-cols=<integer [1 .. 15]> 
+                                 Number of columns
+          Number of horizontal windows in which to split the video.
+      --wall-rows=<integer [1 .. 15]> 
+                                 Number of rows
+          Number of vertical windows in which to split the video.
+      --wall-active=<string>     Active windows
+          Comma-separated list of active windows, defaults to all
+      --wall-element-aspect=<string> 
+                                 Element aspect ratio
+          Aspect ratio of the individual displays building the wall.
+
+ Panoramix: wall with overlap video filter (panoramix)
+ Split the video in multiple windows to display on a wall of screens
+      --panoramix-cols=<integer [-1 .. 15]> 
+                                 Number of columns
+          Select the number of horizontal video windows in which to split the
+          video
+      --panoramix-rows=<integer [-1 .. 15]> 
+                                 Number of rows
+          Select the number of vertical video windows in which to split the
+          video
+      --panoramix-bz-length=<integer [0 .. 100]> 
+                                 length of the overlapping area (in %)
+          Select in percent the length of the blended zone
+      --panoramix-bz-height=<integer [0 .. 100]> 
+                                 height of the overlapping area (in %)
+          Select in percent the height of the blended zone (case of 2x2 wall)
+      --panoramix-attenuate, --no-panoramix-attenuate 
+                                 Attenuation
+                                 (default enabled)
+          Check this option if you want attenuate blended zone by this plug-in
+          (if option is unchecked, attenuate is made by opengl)
+      --panoramix-bz-begin=<integer [0 .. 100]> 
+                                 Attenuation, begin (in %)
+          Select in percent the Lagrange coefficient of the beginning blended
+          zone
+      --panoramix-bz-middle=<integer [0 .. 100]> 
+                                 Attenuation, middle (in %)
+          Select in percent the Lagrange coefficient of the middle of blended
+          zone
+      --panoramix-bz-end=<integer [0 .. 100]> 
+                                 Attenuation, end (in %)
+          Select in percent the Lagrange coefficient of the end of blended zone
+      --panoramix-bz-middle-pos=<integer [1 .. 99]> 
+                                 middle position (in %)
+          Select in percent (50 is center) the position of the middle point
+          (Lagrange) of blended zone
+      --panoramix-bz-gamma-red=<float [0.000000 .. 5.000000]> 
+                                 Gamma (Red) correction
+          Select the gamma for the correction of blended zone (Red or Y
+          component)
+      --panoramix-bz-gamma-green=<float [0.000000 .. 5.000000]> 
+                                 Gamma (Green) correction
+          Select the gamma for the correction of blended zone (Green or U
+          component)
+      --panoramix-bz-gamma-blue=<float [0.000000 .. 5.000000]> 
+                                 Gamma (Blue) correction
+          Select the gamma for the correction of blended zone (Blue or V
+          component)
+      --panoramix-bz-blackcrush-red=<integer [0 .. 255]> 
+                                 Black Crush for Red
+          Select the Black Crush of blended zone (Red or Y component)
+      --panoramix-bz-blackcrush-green=<integer [0 .. 255]> 
+                                 Black Crush for Green
+          Select the Black Crush of blended zone (Green or U component)
+      --panoramix-bz-blackcrush-blue=<integer [0 .. 255]> 
+                                 Black Crush for Blue
+          Select the Black Crush of blended zone (Blue or V component)
+      --panoramix-bz-whitecrush-red=<integer [0 .. 255]> 
+                                 White Crush for Red
+          Select the White Crush of blended zone (Red or Y component)
+      --panoramix-bz-whitecrush-green=<integer [0 .. 255]> 
+                                 White Crush for Green
+          Select the White Crush of blended zone (Green or U component)
+      --panoramix-bz-whitecrush-blue=<integer [0 .. 255]> 
+                                 White Crush for Blue
+          Select the White Crush of blended zone (Blue or V component)
+      --panoramix-bz-blacklevel-red=<integer [0 .. 255]> 
+                                 Black Level for Red
+          Select the Black Level of blended zone (Red or Y component)
+      --panoramix-bz-blacklevel-green=<integer [0 .. 255]> 
+                                 Black Level for Green
+          Select the Black Level of blended zone (Green or U component)
+      --panoramix-bz-blacklevel-blue=<integer [0 .. 255]> 
+                                 Black Level for Blue
+          Select the Black Level of blended zone (Blue or V component)
+      --panoramix-bz-whitelevel-red=<integer [0 .. 255]> 
+                                 White Level for Red
+          Select the White Level of blended zone (Red or Y component)
+      --panoramix-bz-whitelevel-green=<integer [0 .. 255]> 
+                                 White Level for Green
+          Select the White Level of blended zone (Green or U component)
+      --panoramix-bz-whitelevel-blue=<integer [0 .. 255]> 
+                                 White Level for Blue
+          Select the White Level of blended zone (Blue or V component)
+      --panoramix-active=<string> 
+                                 Active windows
+          Comma-separated list of active windows, defaults to all
+
+ Clone video filter (clone)
+ Duplicate your video to multiple windows and/or video output modules
+      --clone-count=<integer>    Number of clones
+          Number of video windows in which to clone the video.
+      --clone-vout-list=<string> Video output modules
+          You can use specific video output modules for the clones. Use a
+          comma-separated list of modules.
+
+ YUV video output (yuv)
+      --yuv-file=<string>        device, fifo or filename
+          device, fifo or filename to write yuv frames too.
+      --yuv-chroma=<string>      Chroma used
+          Force use of a specific chroma for output.
+      --yuv-yuv4mpeg2, --no-yuv-yuv4mpeg2 
+                                 Add a YUV4MPEG2 header
+                                 (default disabled)
+          The YUV4MPEG2 header is compatible with mplayer yuv video output and
+          requires YV12/I420 fourcc.
+
+ WGL extension for OpenGL (wgl)
+      --gpu-affinity=<integer>   GPU affinity
+          GPU affinity
+
+ Video memory output (vmem)
+      --vmem-width=<integer>     Width
+          Video memory buffer width.
+      --vmem-height=<integer>    Height
+          Video memory buffer height.
+      --vmem-pitch=<integer>     Pitch
+          Video memory buffer pitch in bytes.
+      --vmem-chroma=<string>     Chroma
+          Output chroma for the memory image as a 4-character string, eg.
+          "RV32".
+
+ Dummy video output (vdummy)
+      --dummy-chroma=<string>    Dummy image chroma format
+          Force the dummy video output to create images using a specific chroma
+          format instead of trying to improve performances by using the most
+          efficient one.
+
+ OpenGL video output (gl)
+      --gl={any,wgl,none}        OpenGL extension
+          Extension through which to use the Open Graphics Library (OpenGL).
+      --glconv={any,glinterop_dxva2,none} 
+                                 Open GL/GLES hardware converter
+          Force a "glconv" module.
+   Colorspace conversion:
+      --rendering-intent={0 (Perceptual), 1 (Relative colorimetric), 2 (Absolute colorimetric), 3 (Saturation)} 
+                                 Rendering intent for color conversion
+          The algorithm used to convert between color spaces
+      --target-prim={0 (Unknown primaries), 1 (ITU-R Rec. BT.601 (525-line = NTSC, SMPTE-C)), 2 (ITU-R Rec. BT.601 (625-line = PAL, SECAM)), 3 (ITU-R Rec. BT.709 (HD), also sRGB), 4 (ITU-R Rec. BT.470 M), 5 (ITU-R Rec. BT.2020 (UltraHD)), 6 (Apple RGB), 7 (Adobe RGB (1998)), 8 (ProPhoto RGB (ROMM)), 9 (CIE 1931 RGB primaries), 10 (DCI-P3 (Digital Cinema)), 11 (Panasonic V-Gamut (VARICAM)), 12 (Sony S-Gamut)} 
+                                 Display primaries
+          The primaries associated with the output display
+      --target-trc={0 (Unknown gamma), 1 (ITU-R Rec. BT.1886 (CRT emulation + OOTF)), 2 (IEC 61966-2-4 sRGB (CRT emulation)), 3 (Linear light content), 4 (Pure power gamma 1.8), 5 (Pure power gamma 2.2), 6 (Pure power gamma 2.8), 7 (ProPhoto RGB (ROMM)), 8 (ITU-R BT.2100 PQ (perceptual quantizer), aka SMPTE ST2048), 9 (ITU-R BT.2100 HLG (hybrid log-gamma), aka ARIB STD-B67), 10 (Panasonic V-Log (VARICAM)), 11 (Sony S-Log1), 12 (Sony S-Log2)} 
+                                 Display gamma / transfer function
+          The gamma/transfer function associated with the output display
+   Tone mapping:
+      --tone-mapping={3 (Hable (filmic mapping, recommended)), 1 (Mobius (linear + knee)), 2 (Reinhard (simple non-linear)), 4 (Gamma-Power law), 5 (Linear stretch (peak to peak)), 0 (Hard clip out-of-gamut)} 
+                                 Tone-mapping algorithm
+          Algorithm to use when converting from wide gamut to standard gamut,
+          or from HDR to SDR
+      --tone-mapping-param=<float> 
+                                 Tone-mapping parameter
+          This parameter can be used to tune the tone-mapping curve. Specifics
+          depend on the curve used.
+      --tone-mapping-warn, --no-tone-mapping-warn 
+                                 Highlight clipped pixels
+                                 (default disabled)
+          Debugging tool to indicate which pixels were clipped as part of the
+          tone mapping process.
+   Dithering:
+      --dither-algo={-1 (Disabled), 0 (Blue noise), 3 (White noise), 1 (Bayer matrix (ordered dither))} 
+                                 Dithering algorithm
+          The algorithm to use when dithering to a lower bit depth (degrades
+          performance on some platforms).
+      --dither-depth=<integer [0 .. 16]> 
+                                 Dither depth override (0 = framebuffer depth)
+          Overrides the detected framebuffer depth. Useful to dither to lower
+          bit depths than otherwise required.
+      --tone-mapping-desat=<float> 
+                                 Tone-mapping desaturation coefficient
+          How strongly to desaturate overbright colors towards white. 0.0
+          disables this behavior.
+
+ OpenGL video output for Windows (glwin32)
+      --glconv={any,glinterop_dxva2,none} 
+                                 Open GL/GLES hardware converter
+          Force a "glconv" module.
+   Colorspace conversion:
+      --rendering-intent={0 (Perceptual), 1 (Relative colorimetric), 2 (Absolute colorimetric), 3 (Saturation)} 
+                                 Rendering intent for color conversion
+          The algorithm used to convert between color spaces
+      --target-prim={0 (Unknown primaries), 1 (ITU-R Rec. BT.601 (525-line = NTSC, SMPTE-C)), 2 (ITU-R Rec. BT.601 (625-line = PAL, SECAM)), 3 (ITU-R Rec. BT.709 (HD), also sRGB), 4 (ITU-R Rec. BT.470 M), 5 (ITU-R Rec. BT.2020 (UltraHD)), 6 (Apple RGB), 7 (Adobe RGB (1998)), 8 (ProPhoto RGB (ROMM)), 9 (CIE 1931 RGB primaries), 10 (DCI-P3 (Digital Cinema)), 11 (Panasonic V-Gamut (VARICAM)), 12 (Sony S-Gamut)} 
+                                 Display primaries
+          The primaries associated with the output display
+      --target-trc={0 (Unknown gamma), 1 (ITU-R Rec. BT.1886 (CRT emulation + OOTF)), 2 (IEC 61966-2-4 sRGB (CRT emulation)), 3 (Linear light content), 4 (Pure power gamma 1.8), 5 (Pure power gamma 2.2), 6 (Pure power gamma 2.8), 7 (ProPhoto RGB (ROMM)), 8 (ITU-R BT.2100 PQ (perceptual quantizer), aka SMPTE ST2048), 9 (ITU-R BT.2100 HLG (hybrid log-gamma), aka ARIB STD-B67), 10 (Panasonic V-Log (VARICAM)), 11 (Sony S-Log1), 12 (Sony S-Log2)} 
+                                 Display gamma / transfer function
+          The gamma/transfer function associated with the output display
+   Tone mapping:
+      --tone-mapping={3 (Hable (filmic mapping, recommended)), 1 (Mobius (linear + knee)), 2 (Reinhard (simple non-linear)), 4 (Gamma-Power law), 5 (Linear stretch (peak to peak)), 0 (Hard clip out-of-gamut)} 
+                                 Tone-mapping algorithm
+          Algorithm to use when converting from wide gamut to standard gamut,
+          or from HDR to SDR
+      --tone-mapping-param=<float> 
+                                 Tone-mapping parameter
+          This parameter can be used to tune the tone-mapping curve. Specifics
+          depend on the curve used.
+      --tone-mapping-warn, --no-tone-mapping-warn 
+                                 Highlight clipped pixels
+                                 (default disabled)
+          Debugging tool to indicate which pixels were clipped as part of the
+          tone mapping process.
+   Dithering:
+      --dither-algo={-1 (Disabled), 0 (Blue noise), 3 (White noise), 1 (Bayer matrix (ordered dither))} 
+                                 Dithering algorithm
+          The algorithm to use when dithering to a lower bit depth (degrades
+          performance on some platforms).
+      --dither-depth=<integer [0 .. 16]> 
+                                 Dither depth override (0 = framebuffer depth)
+          Overrides the detected framebuffer depth. Useful to dither to lower
+          bit depths than otherwise required.
+      --tone-mapping-desat=<float> 
+                                 Tone-mapping desaturation coefficient
+          How strongly to desaturate overbright colors towards white. 0.0
+          disables this behavior.
+
+ Flaschen-Taschen video output (flaschen)
+      --flaschen-display=<string> 
+                                 Flaschen-Taschen display address
+          IP address or hostname of the Flaschen-Taschen display. Something
+          like ft.noise or ftkleine.noise
+      --flaschen-width=<integer> Width
+          Video width
+      --flaschen-height=<integer> 
+                                 Height
+          Video height
+
+ Embedded window video (drawable)
+      --drawable-hwnd=<integer>  Window handle (HWND)
+          Video will be embedded in this pre-existing window. If zero, a new
+          window will be created.
+
+ DirectX (DirectDraw) video output (directdraw)
+ Recommended video output for Windows XP. Incompatible with Vista's Aero interface
+      --directx-hw-yuv, --no-directx-hw-yuv 
+                                 Use hardware YUV->RGB conversions
+                                 (default enabled)
+          Try to use hardware acceleration for YUV->RGB conversions. This
+          option doesn't have any effect when using overlays.
+      --directx-overlay, --no-directx-overlay 
+                                 Overlay video output
+                                 (default enabled)
+          Overlay is the hardware acceleration capability of your video card
+          (ability to render video directly). VLC will try to use it by
+          default.
+      --directx-use-sysmem, --no-directx-use-sysmem 
+                                 Use video buffers in system memory
+                                 (default disabled)
+          Create video buffers in system memory instead of video memory. This
+          isn't recommended as usually using video memory allows benefiting
+          from more hardware acceleration (like rescaling or YUV->RGB
+          conversions). This option doesn't have any effect when using
+          overlays.
+      --directx-3buffering, --no-directx-3buffering 
+                                 Use triple buffering for overlays
+                                 (default enabled)
+          Try to use triple buffering when using YUV overlays. That results in
+          much better video quality (no flickering).
+      --directx-device={,display,\\.\DISPLAY1,\\.\DISPLAY2} 
+                                 Name of desired display device
+          In a multiple monitor configuration, you can specify the Windows
+          device name of the display that you want the video window to open on.
+          For example, "\\.\DISPLAY1" or "\\.\DISPLAY2".
+
+ Direct3D9 video output (direct3d9)
+ Recommended video output for Windows Vista and later versions
+      --direct3d9-hw-blending, --no-direct3d9-hw-blending 
+                                 Use hardware blending support
+                                 (default enabled)
+          Try to use hardware acceleration for subtitle/OSD blending.
+      --direct3d9-shader={Disabled,Invert,Grayscale,Convert601to709,GammaCorrection18,GammaCorrection22,GammaCorrectionBT709,WidenColorSpace,HLSL File} 
+                                 Pixel Shader
+          Choose a pixel shader to apply.
+      --direct3d9-shader-file=<string> 
+                                 Path to HLSL file
+          Path to an HLSL file containing a single pixel shader.
+
+ Direct3D11 video output (direct3d11)
+ Recommended video output for Windows 8 and later versions
+      --direct3d11-hw-blending, --no-direct3d11-hw-blending 
+                                 Use hardware blending support
+                                 (default enabled)
+          Try to use hardware acceleration for subtitle/OSD blending.
+      --winrt-d3dcontext=<integer> 
+                                 
+      --winrt-swapchain=<integer> 
+                                 
+      --d3d11-upscale-mode={linear,point,processor,super} 
+                                 Video Upscaling Mode
+          Select the upscaling mode for video.
+      --d3d11-hdr-mode={auto,never,always,generate} 
+                                 HDR Output Mode
+          Use HDR output even if the source is SDR.
+
+ Video transformation filter (transform)
+ Rotate or flip the video
+      --transform-type={90,180,270,hflip,vflip,transpose,antitranspose} 
+                                 Transform type
+          Transform type
+
+ Sharpen video filter (sharpen)
+ Augment contrast between contours.
+      --sharpen-sigma=<float [0.000000 .. 2.000000]> 
+                                 Sharpen strength (0-2)
+          Set the Sharpen strength, between 0 and 2. Defaults to 0.05.
+
+ Sepia video filter (sepia)
+ Gives video a warmer tone by applying sepia effect
+      --sepia-intensity=<integer [0 .. 255]> 
+                                 Sepia intensity
+          Intensity of sepia effect
+
+ Scene video filter (scene)
+ Send your video to picture files
+      --scene-format=<string>    Image format
+          Format of the output images (png, jpeg, ...).
+      --scene-width=<integer>    Image width
+          You can enforce the image width. By default (-1) VLC will adapt to
+          the video characteristics.
+      --scene-height=<integer>   Image height
+          You can enforce the image height. By default (-1) VLC will adapt to
+          the video characteristics.
+      --scene-prefix=<string>    Filename prefix
+          Prefix of the output images filenames. Output filenames will have the
+          "prefixNUMBER.format" form if replace is not true.
+      --scene-path=<string>      Directory path prefix
+          Directory path where images files should be saved. If not set, then
+          images will be automatically saved in users homedir.
+      --scene-replace, --no-scene-replace 
+                                 Always write to the same file
+                                 (default disabled)
+          Always write to the same file instead of creating one file per image.
+          In this case, the number is not appended to the filename.
+      --scene-ratio=<integer [1 .. 2147483647]> 
+                                 Recording ratio
+          Ratio of images to record. 3 means that one image out of three is
+          recorded.
+
+ Rotate video filter (rotate)
+      --rotate-angle=<float>     Angle in degrees
+          Angle in degrees (0 to 359)
+      --rotate-use-motion, --no-rotate-use-motion 
+                                 Use motion sensors
+                                 (default disabled)
+          Use HDAPS, AMS, APPLESMC or UNIMOTION motion sensors to rotate the
+          video
+
+ Puzzle interactive game video filter (puzzle)
+      --puzzle-rows=<integer [2 .. 42]> 
+                                 Number of puzzle rows
+          Number of puzzle rows
+      --puzzle-cols=<integer [2 .. 42]> 
+                                 Number of puzzle columns
+          Number of puzzle columns
+      --puzzle-border=<integer [0 .. 40]> 
+                                 Border
+          Unshuffled Border width.
+      --puzzle-preview, --no-puzzle-preview 
+                                 Small preview
+                                 (default disabled)
+          Show small preview.
+      --puzzle-preview-size=<integer [0 .. 100]> 
+                                 Small preview size
+          Show small preview size (percent of source).
+      --puzzle-shape-size=<integer [0 .. 100]> 
+                                 Piece edge shape size
+          Size of the curve along the piece's edge
+      --puzzle-auto-shuffle=<integer [0 .. 30000]> 
+                                 Auto shuffle
+          Auto shuffle delay during game
+      --puzzle-auto-solve=<integer [0 .. 30000]> 
+                                 Auto solve
+          Auto solve delay during game
+      --puzzle-rotation={0 (0), 1 (0/180), 2 (0/90/180/270), 3 (0/90/180/270/mirror)} 
+                                 Rotation
+          Rotation parameter: none;180;90-270;mirror
+      --puzzle-mode={0 (jigsaw puzzle), 1 (sliding puzzle), 2 (swap puzzle), 3 (exchange puzzle)} 
+                                 Game mode
+          Select game mode variation from jigsaw puzzle to sliding puzzle.
+
+ Video post processing filter (postproc)
+      --postproc-q=<integer [0 .. 6]> 
+                                 Post processing quality
+          Quality of post processing. Valid range is 0 (disabled) to 6
+          (highest) Higher levels require more CPU power, but produce higher
+          quality pictures. With default filter chain, the values map to the
+          following filters: 1: hb, 2-4: hb+vb, 5-6: hb+vb+dr
+      --postproc-name=<string>   FFmpeg post processing filter chains
+          FFmpeg post processing filter chains
+
+ Posterize video filter (posterize)
+ Posterize video by lowering the number of colors
+      --posterize-level=<integer [2 .. 256]> 
+                                 Posterize level
+          Posterize level (number of colors is cube of this value)
+
+ Motion blur filter (motionblur)
+      --blur-factor=<integer [1 .. 127]> 
+                                 Blur factor (1-127)
+          The degree of blurring from 1 to 127.
+
+ Mirror video filter (mirror)
+ Splits video in two same parts, like in a mirror
+      --mirror-split={0 (Vertical), 1 (Horizontal)} 
+                                 Mirror orientation
+          Defines orientation of the mirror splitting. Can be vertical or
+          horizontal.
+      --mirror-direction={0 (Left to right/Top to bottom), 1 (Right to left/Bottom to top)} 
+                                 Direction
+          Direction of the mirroring.
+
+ High Quality 3D Denoiser filter (hqdn3d)
+      --hqdn3d-luma-spat=<float [0.000000 .. 254.000000]> 
+                                 Spatial luma strength (0-254)
+          Spatial luma strength (0-254)
+      --hqdn3d-chroma-spat=<float [0.000000 .. 254.000000]> 
+                                 Spatial chroma strength (0-254)
+          Spatial chroma strength (0-254)
+      --hqdn3d-luma-temp=<float [0.000000 .. 254.000000]> 
+                                 Temporal luma strength (0-254)
+          Temporal luma strength (0-254)
+      --hqdn3d-chroma-temp=<float [0.000000 .. 254.000000]> 
+                                 Temporal chroma strength (0-254)
+          Temporal chroma strength (0-254)
+
+ Grain video filter (grain)
+ Adds filtered gaussian noise
+      --grain-variance=<float [0.000000 .. 10.000000]> 
+                                 Variance
+          Variance of the gaussian noise
+      --grain-period-min=<integer [1 .. 64]> 
+                                 Minimal period
+          Minimal period of the noise grain in pixel
+      --grain-period-max=<integer [1 .. 64]> 
+                                 Maximal period
+          Maximal period of the noise grain in pixel
+
+ Gradient video filter (gradient)
+ Apply color gradient or edge detection effects
+      --gradient-mode={gradient,edge,hough} 
+                                 Distort mode
+          Distort mode, one of "gradient", "edge" and "hough".
+      --gradient-type=<integer [0 .. 1]> 
+                                 Gradient image type
+          Gradient image type (0 or 1). 0 will turn the image to white while 1
+          will keep colors.
+      --gradient-cartoon, --no-gradient-cartoon 
+                                 Apply cartoon effect
+                                 (default enabled)
+          Apply cartoon effect. It is only used by "gradient" and "edge".
+
+ Gradfun video filter (gradfun)
+ Debanding algorithm
+      --gradfun-radius=<integer [4 .. 32]> 
+                                 Radius
+          Radius in pixels
+      --gradfun-strength=<float [0.510000 .. 255.000000]> 
+                                 Strength
+          Strength used to modify the value of a pixel
+
+ Gaussian blur video filter (gaussianblur)
+ Add a blurring effect
+      --gaussianblur-sigma=<float [0.010000 .. 4096.000000]> 
+                                 Gaussian's std deviation
+          Gaussian's standard deviation. The blurring will take into account
+          pixels up to 3*sigma away in any direction.
+
+ FPS conversion video filter (fps)
+      --fps-fps=<string>         Frame rate
+          Frame rate
+
+ Extract RGB component video filter (extract)
+      --extract-component={16711680 (Red), 65280 (Green), 255 (Blue)} 
+                                 RGB component to extract
+          RGB component to extract. 0 for Red, 1 for Green and 2 for Blue.
+
+ Erase video filter (erase)
+ Remove zones of the video using a picture as mask
+      --erase-mask=<string>      Image mask
+          Image mask. Pixels with an alpha value greater than 50% will be
+          erased.
+      --erase-x=<integer>        X coordinate
+          X coordinate of the mask.
+      --erase-y=<integer>        Y coordinate
+          Y coordinate of the mask.
+
+ Deinterlacing video filter (deinterlace)
+      --sout-deinterlace-mode={discard,blend,mean,bob,linear,x,yadif,yadif2x,phosphor,ivtc} 
+                                 Streaming deinterlace mode
+          Deinterlace method to use for streaming.
+      --sout-deinterlace-phosphor-chroma={1 (Latest), 2 (AltLine), 3 (Blend), 4 (Upconvert)} 
+                                 Phosphor chroma mode for 4:2:0 input
+          Choose handling for colours in those output frames that fall across
+          input frame boundaries.   Latest: take chroma from new (bright) field
+          only. Good for interlaced input, such as videos from a camcorder.  
+          AltLine: take chroma line 1 from top field, line 2 from bottom field,
+          etc.  Default, good for NTSC telecined input (anime DVDs, etc.).  
+          Blend: average input field chromas. May distort the colours of the
+          new (bright) field, too.   Upconvert: output in 4:2:2 format
+          (independent chroma for each field). Best simulation, but requires
+          more CPU and memory bandwidth.
+      --sout-deinterlace-phosphor-dimmer={1 (Off), 2 (Low), 3 (Medium), 4 (High)} 
+                                 Phosphor old field dimmer strength
+          This controls the strength of the darkening filter that simulates CRT
+          TV phosphor light decay for the old field in the Phosphor framerate
+          doubler. Default: Low.
+
+ Video cropping filter (croppadd)
+   Crop:
+      --croppadd-croptop=<integer [0 .. 2147483647]> 
+                                 Pixels to crop from top
+          Number of pixels to crop from the top of the image.
+      --croppadd-cropbottom=<integer [0 .. 2147483647]> 
+                                 Pixels to crop from bottom
+          Number of pixels to crop from the bottom of the image.
+      --croppadd-cropleft=<integer [0 .. 2147483647]> 
+                                 Pixels to crop from left
+          Number of pixels to crop from the left of the image.
+      --croppadd-cropright=<integer [0 .. 2147483647]> 
+                                 Pixels to crop from right
+          Number of pixels to crop from the right of the image.
+   Padd:
+      --croppadd-paddtop=<integer [0 .. 2147483647]> 
+                                 Pixels to padd to top
+          Number of pixels to padd to the top of the image after cropping.
+      --croppadd-paddbottom=<integer [0 .. 2147483647]> 
+                                 Pixels to padd to bottom
+          Number of pixels to padd to the bottom of the image after cropping.
+      --croppadd-paddleft=<integer [0 .. 2147483647]> 
+                                 Pixels to padd to left
+          Number of pixels to padd to the left of the image after cropping.
+      --croppadd-paddright=<integer [0 .. 2147483647]> 
+                                 Pixels to padd to right
+          Number of pixels to padd to the right of the image after cropping.
+
+ Color threshold filter (colorthres)
+ Select one color in the video
+      --colorthres-color={16711680 (Red), 16711935 (Fuchsia), 16776960 (Yellow), 65280 (Lime), 255 (Blue), 65535 (Aqua)} 
+                                 Color
+          Colors similar to this will be kept, others will be grayscaled. This
+          must be an hexadecimal (like HTML colors). The first two chars are
+          for red, then green, then blue. #000000 = black, #FF0000 = red,
+          #00FF00 = green, #FFFF00 = yellow (red + green), #FFFFFF = white
+      --colorthres-saturationthres=<integer> 
+                                 Saturation threshold
+      --colorthres-similaritythres=<integer> 
+                                 Similarity threshold
+
+ Canvas video filter (canvas)
+ Automatically resize and pad a video
+      --canvas-width=<integer [0 .. 2147483647]> 
+                                 Output width
+          Output (canvas) image width
+      --canvas-height=<integer [0 .. 2147483647]> 
+                                 Output height
+          Output (canvas) image height
+      --canvas-aspect=<string>   Output picture aspect ratio
+          Set the canvas' picture aspect ratio. If omitted, the canvas is
+          assumed to have the same SAR as the input.
+      --canvas-padd, --no-canvas-padd 
+                                 Pad video
+                                 (default enabled)
+          If enabled, video will be padded to fit in canvas after scaling.
+          Otherwise, video will be cropped to fix in canvas after scaling.
+
+ Bluescreen video filter (bluescreen)
+ This effect, also known as "greenscreen" or "chroma key" blends the "blue parts" of the foreground image of the mosaic on the background (like weather forecasts). You can choose the "key" color for blending (blue by default).
+      --bluescreen-u=<integer [0 .. 255]> 
+                                 Bluescreen U value
+          "U" value for the bluescreen key color (in YUV values). From 0 to
+          255. Defaults to 120 for blue.
+      --bluescreen-v=<integer [0 .. 255]> 
+                                 Bluescreen V value
+          "V" value for the bluescreen key color (in YUV values). From 0 to
+          255. Defaults to 90 for blue.
+      --bluescreen-ut=<integer [0 .. 255]> 
+                                 Bluescreen U tolerance
+          Tolerance of the bluescreen blender on color variations for the U
+          plane. A value between 10 and 20 seems sensible.
+      --bluescreen-vt=<integer [0 .. 255]> 
+                                 Bluescreen V tolerance
+          Tolerance of the bluescreen blender on color variations for the V
+          plane. A value between 10 and 20 seems sensible.
+
+ Blending benchmark filter (blendbench)
+   Benchmarking:
+      --blendbench-loops=<integer> 
+                                 Number of time to blend
+          The number of time the blend will be performed
+      --blendbench-alpha=<integer [0 .. 255]> 
+                                 Alpha of the blended image
+          Alpha with which the blend image is blended
+   Base image:
+      --blendbench-base-image=<string> 
+                                 Image to be blended onto
+          The image which will be used to blend onto
+      --blendbench-base-chroma=<string> 
+                                 Chroma for the base image
+          Chroma which the base image will be loaded in
+   Blend image:
+      --blendbench-blend-image=<string> 
+                                 Image which will be blended
+          The image blended onto the base image
+      --blendbench-blend-chroma=<string> 
+                                 Chroma for the blend image
+          Chroma which the blend image will be loaded in
+
+ Ball video filter (ball)
+ Augmented reality ball game
+      --ball-color={red,green,blue,white} 
+                                 Ball color
+          Ball color
+      --ball-speed=<integer [1 .. 15]> 
+                                 Ball speed
+          Set ball speed, the displacement value in number of pixels by frame.
+      --ball-size=<integer [5 .. 30]> 
+                                 Ball size
+          Set ball size giving its radius in number of pixels
+      --ball-gradient-threshold=<integer [1 .. 200]> 
+                                 Gradient threshold
+          Set gradient threshold for edge computation.
+      --ball-edge-visible, --no-ball-edge-visible 
+                                 Edge visible
+                                 (default enabled)
+          Set edge visibility.
+
+ antiflicker video filter (antiflicker)
+      --antiflicker-window-size=<integer [0 .. 100]> 
+                                 Window size
+          Number of frames (0 to 100)
+      --antiflicker-softening-size=<integer [0 .. 31]> 
+                                 Softening value
+          Number of frames consider for smoothening (0 to 30)
+
+ Convert 3D picture to anaglyph image video filter (anaglyph)
+      --anaglyph-scheme={red-green,red-blue,red-cyan,trioscopic,magenta-cyan} 
+                                 Color scheme
+          Define the glasses' color scheme
+
+ Alpha mask video filter (alphamask)
+ Use an image's alpha channel as a transparency mask.
+      --alphamask-mask=<string>  Transparency mask
+          Alpha blending transparency mask. Uses a png alpha channel.
+
+ Image properties filter (adjust)
+      --contrast=<float [0.000000 .. 2.000000]> 
+                                 Image contrast (0-2)
+          Set the image contrast, between 0 and 2. Defaults to 1.
+      --brightness=<float [0.000000 .. 2.000000]> 
+                                 Image brightness (0-2)
+          Set the image brightness, between 0 and 2. Defaults to 1.
+      --hue=<float [-180.000000 .. 180.000000]> 
+                                 Image hue (-180..180)
+          Set the image hue, between -180 and 180. Defaults to 0.
+      --saturation=<float [0.000000 .. 3.000000]> 
+                                 Image saturation (0-3)
+          Set the image saturation, between 0 and 3. Defaults to 1.
+      --gamma=<float [0.010000 .. 10.000000]> 
+                                 Image gamma (0-10)
+          Set the image gamma, between 0.01 and 10. Defaults to 1.
+      --brightness-threshold, --no-brightness-threshold 
+                                 Brightness threshold
+                                 (default disabled)
+          When this mode is enabled, pixels will be shown as black or white.
+          The threshold value will be the brightness defined below.
+
+ Video scaling filter (swscale)
+      --swscale-mode={0 (Fast bilinear), 1 (Bilinear), 2 (Bicubic (good quality)), 3 (Experimental), 4 (Nearest neighbour (bad quality)), 5 (Area), 6 (Luma bicubic / chroma bilinear), 7 (Gauss), 8 (SincR), 9 (Lanczos), 10 (Bicubic spline)} 
+                                 Scaling mode
+          Scaling mode to use.
+
+ Speech synthesis for Windows (sapi)
+      --sapi-voice=<integer>     Voice Index
+          Voice index
+
+ Freetype2 font renderer (freetype)
+      --freetype-font=<string>   Font
+          Font family for the font you want to use
+      --freetype-monofont=<string> 
+                                 Monospace Font
+          Font family for the font you want to use
+      --freetype-fontsize=<integer [0 .. 4096]> 
+                                 Font size in pixels
+          This is the default size of the fonts that will be rendered on the
+          video. If set to something different than 0 this option will override
+          the relative font size.
+      --freetype-rel-fontsize={0 (Auto), 20 (Smaller), 18 (Small), 16 (Normal), 12 (Large), 6 (Larger)} 
+                                 Relative font size
+          This is the relative default size of the fonts that will be rendered
+          on the video. If absolute font size is set, relative size will be
+          overridden.
+      --freetype-opacity=<integer [0 .. 255]> 
+                                 Text opacity
+          The opacity (inverse of transparency) of the text that will be
+          rendered on the video. 0 = transparent, 255 = totally opaque.
+      --freetype-color={0 (Black), 8421504 (Gray), 12632256 (Silver), 16777215 (White), 8388608 (Maroon), 16711680 (Red), 16711935 (Fuchsia), 16776960 (Yellow), 8421376 (Olive), 32768 (Green), 32896 (Teal), 65280 (Lime), 8388736 (Purple), 128 (Navy), 255 (Blue), 65535 (Aqua)} 
+                                 Text default color
+          The color of the text that will be rendered on the video. This must
+          be an hexadecimal (like HTML colors). The first two chars are for
+          red, then green, then blue. #000000 = black, #FF0000 = red, #00FF00 =
+          green, #FFFF00 = yellow (red + green), #FFFFFF = white
+      --freetype-bold, --no-freetype-bold 
+                                 Force bold
+                                 (default disabled)
+      --freetype-background-opacity=<integer [0 .. 255]> 
+                                 Background opacity
+      --freetype-background-color={0 (Black), 8421504 (Gray), 12632256 (Silver), 16777215 (White), 8388608 (Maroon), 16711680 (Red), 16711935 (Fuchsia), 16776960 (Yellow), 8421376 (Olive), 32768 (Green), 32896 (Teal), 65280 (Lime), 8388736 (Purple), 128 (Navy), 255 (Blue), 65535 (Aqua)} 
+                                 Background color
+      --freetype-outline-opacity=<integer [0 .. 255]> 
+                                 Outline opacity
+      --freetype-outline-color={0 (Black), 8421504 (Gray), 12632256 (Silver), 16777215 (White), 8388608 (Maroon), 16711680 (Red), 16711935 (Fuchsia), 16776960 (Yellow), 8421376 (Olive), 32768 (Green), 32896 (Teal), 65280 (Lime), 8388736 (Purple), 128 (Navy), 255 (Blue), 65535 (Aqua)} 
+                                 Outline color
+      --freetype-outline-thickness={0 (None), 2 (Thin), 4 (Normal), 6 (Thick)} 
+                                 Outline thickness
+      --freetype-shadow-opacity=<integer [0 .. 255]> 
+                                 Shadow opacity
+      --freetype-shadow-color={0 (Black), 8421504 (Gray), 12632256 (Silver), 16777215 (White), 8388608 (Maroon), 16711680 (Red), 16711935 (Fuchsia), 16776960 (Yellow), 8421376 (Olive), 32768 (Green), 32896 (Teal), 65280 (Lime), 8388736 (Purple), 128 (Navy), 255 (Blue), 65535 (Aqua)} 
+                                 Shadow color
+      --freetype-shadow-angle=<float [-360.000000 .. 360.000000]> 
+                                 Shadow angle
+      --freetype-shadow-distance=<float [0.000000 .. 1.000000]> 
+                                 Shadow distance
+      --freetype-yuvp, --no-freetype-yuvp 
+                                 Use YUVP renderer
+                                 (default disabled)
+          This renders the font using "paletized YUV". This option is only
+          needed if you want to encode into DVB subtitles
+      --freetype-text-direction={0 (Left to right), 1 (Right to left), 2 (Auto)} 
+                                 Text direction
+          Paragraph base direction for the Unicode bi-directional algorithm.
+
+ Transcode stream output (stream_out_transcode)
+   Video:
+      --sout-transcode-venc={any,png,jpeg,x265,x264,opus,g711,theora,araw,vorbis,twolame,schroedinger,lpcm,dvbsub,speex,t140,avcodec,flac,vpx,rtpvideo,dmo,edummy,x26410b,stats,qsv,none} 
+                                 Video encoder
+          This is the video encoder module that will be used (and its
+          associated options).
+      --sout-transcode-vcodec=<string> 
+                                 Destination video codec
+          This is the video codec that will be used.
+      --sout-transcode-vb=<integer> 
+                                 Video bitrate
+          Target bitrate of the transcoded video stream.
+      --sout-transcode-scale=<float> 
+                                 Video scaling
+          Scale factor to apply to the video while transcoding (eg: 0.25)
+      --sout-transcode-fps=<string> 
+                                 Video frame-rate
+          Target output frame rate for the video stream.
+      --sout-transcode-deinterlace, --no-sout-transcode-deinterlace 
+                                 Deinterlace video
+                                 (default disabled)
+          Deinterlace the video before encoding.
+      --sout-transcode-deinterlace-module={deinterlace,ffmpeg-deinterlace} 
+                                 Deinterlace module
+          Specify the deinterlace module to use.
+      --sout-transcode-width=<integer> 
+                                 Video width
+          Output video width.
+      --sout-transcode-height=<integer> 
+                                 Video height
+          Output video height.
+      --sout-transcode-maxwidth=<integer> 
+                                 Maximum video width
+          Maximum output video width.
+      --sout-transcode-maxheight=<integer> 
+                                 Maximum video height
+          Maximum output video height.
+      --sout-transcode-vfilter=<string> 
+                                 Video filter
+          Video filters will be applied to the video streams (after overlays
+          are applied). You can enter a colon-separated list of filters.
+   Audio:
+      --sout-transcode-aenc={any,png,jpeg,x265,x264,opus,g711,theora,araw,vorbis,twolame,schroedinger,lpcm,dvbsub,speex,t140,avcodec,flac,vpx,rtpvideo,dmo,edummy,x26410b,stats,qsv,none} 
+                                 Audio encoder
+          This is the audio encoder module that will be used (and its
+          associated options).
+      --sout-transcode-acodec=<string> 
+                                 Destination audio codec
+          This is the audio codec that will be used.
+      --sout-transcode-ab=<integer> 
+                                 Audio bitrate
+          Target bitrate of the transcoded audio stream.
+      --sout-transcode-alang=<string> 
+                                 Audio language
+          This is the language of the audio stream.
+      --sout-transcode-channels=<integer [0 .. 9]> 
+                                 Audio channels
+          Number of audio channels in the transcoded streams.
+      --sout-transcode-samplerate=<integer [0 .. 48000]> 
+                                 Audio sample rate
+          Sample rate of the transcoded audio stream (11250, 22500, 44100 or
+          48000).
+      --sout-transcode-afilter=<string> 
+                                 Audio filter
+          Audio filters will be applied to the audio streams (after conversion
+          filters are applied). You can enter a colon-separated list of
+          filters.
+   Overlays/Subtitles:
+      --sout-transcode-senc={any,png,jpeg,x265,x264,opus,g711,theora,araw,vorbis,twolame,schroedinger,lpcm,dvbsub,speex,t140,avcodec,flac,vpx,rtpvideo,dmo,edummy,x26410b,stats,qsv,none} 
+                                 Subtitle encoder
+          This is the subtitle encoder module that will be used (and its
+          associated options).
+      --sout-transcode-scodec=<string> 
+                                 Destination subtitle codec
+          This is the subtitle codec that will be used.
+      --sout-transcode-soverlay, --no-sout-transcode-soverlay 
+                                 Destination subtitle codec
+                                 (default disabled)
+          This is the subtitle codec that will be used.
+      --sout-transcode-sfilter=<string> 
+                                 Overlays
+          This allows you to add overlays (also known as "subpictures") on the
+          transcoded video stream. The subpictures produced by the filters will
+          be overlayed directly onto the video. You can specify a
+          colon-separated list of subpicture modules.
+   Miscellaneous:
+      --sout-transcode-threads=<integer> 
+                                 Number of threads
+          Number of threads used for the transcoding.
+      --sout-transcode-pool-size=<integer [1 .. 1000]> 
+                                 Picture pool size
+          Defines how many pictures we allow to be in pool between
+          decoder/encoder threads when threads > 0
+      --sout-transcode-high-priority, --no-sout-transcode-high-priority 
+                                 High priority
+                                 (default disabled)
+          Runs the optional encoder thread at the OUTPUT priority instead of
+          VIDEO.
+
+ Writes statistic info about stream (stats)
+      --sout-stats-output=<string> 
+                                 Output file
+          Writes stats to file instead of stdout
+      --sout-stats-prefix=<string> 
+                                 Prefix to show on output line
+          Prefix to show on output line
+
+ Standard stream output (stream_out_standard)
+      --sout-standard-access=<string> 
+                                 Output access method
+          Output method to use for the stream.
+      --sout-standard-mux=<string> 
+                                 Output muxer
+          Muxer to use for the stream.
+      --sout-standard-dst=<string> 
+                                 Output destination
+          Destination (URL) to use for the stream. Overrides path and bind
+          parameters
+      --sout-standard-bind=<string> 
+                                 Address to bind to (helper setting for dst)
+          address:port to bind vlc to listening incoming streams. Helper
+          setting for dst, dst=bind+'/'+path. dst-parameter overrides this.
+      --sout-standard-path=<string> 
+                                 Filename for stream (helper setting for dst)
+          Filename for stream. Helper setting for dst, dst=bind+'/'+path.
+          dst-parameter overrides this.
+      --sout-standard-sap, --no-sout-standard-sap 
+                                 SAP announcing
+                                 (default disabled)
+          Announce this session with SAP.
+      --sout-standard-name=<string> 
+                                 Session name
+          This is the name of the session that will be announced in the SDP
+          (Session Descriptor).
+      --sout-standard-description=<string> 
+                                 Session description
+          This allows you to give a short description with details about the
+          stream, that will be announced in the SDP (Session Descriptor).
+      --sout-standard-url=<string> 
+                                 Session URL
+          This allows you to give a URL with more details about the stream
+          (often the website of the streaming organization), that will be
+          announced in the SDP (Session Descriptor).
+      --sout-standard-email=<string> 
+                                 Session email
+          This allows you to give a contact mail address for the stream, that
+          will be announced in the SDP (Session Descriptor).
+
+ Stream output to memory buffer (smem)
+      --sout-smem-video-prerender-callback=<string> 
+                                 Video prerender callback
+          Address of the video prerender callback function. This function will
+          set the buffer where render will be done.
+      --sout-smem-audio-prerender-callback=<string> 
+                                 Audio prerender callback
+          Address of the audio prerender callback function. This function will
+          set the buffer where render will be done.
+      --sout-smem-video-postrender-callback=<string> 
+                                 Video postrender callback
+          Address of the video postrender callback function. This function will
+          be called when the render is into the buffer.
+      --sout-smem-audio-postrender-callback=<string> 
+                                 Audio postrender callback
+          Address of the audio postrender callback function. This function will
+          be called when the render is into the buffer.
+      --sout-smem-video-data=<string> 
+                                 Video Callback data
+          Data for the video callback function.
+      --sout-smem-audio-data=<string> 
+                                 Audio callback data
+          Data for the video callback function.
+      --sout-smem-time-sync, --no-sout-smem-time-sync 
+                                 Time Synchronized output
+                                 (default enabled)
+          Time Synchronisation option for output. If true, stream will render
+          as usual, else it will be rendered as fast as possible.
+
+ Change the id of an elementary stream (setid)
+   Set ES id:
+      --sout-setid-id=<integer>  Elementary Stream ID
+          Specify an identifier integer for this elementary stream
+      --sout-setid-new-id=<integer> 
+                                 New ES ID
+          Specify an new identifier integer for this elementary stream
+   Set ES Lang:
+      --sout-setlang-id=<integer> 
+                                 Elementary Stream ID
+          Specify an identifier integer for this elementary stream
+      --sout-setlang-lang=<string> 
+                                 Language
+          Specify an ISO-639 code (three characters) for this elementary stream
+
+ RTP stream output (stream_out_rtp)
+      --sout-rtp-dst=<string>    Destination
+          This is the output URL that will be used.
+      --sout-rtp-sdp=<string>    SDP
+          This allows you to specify how the SDP (Session Descriptor) for this
+          RTP session will be made available. You must use a url:
+          http://location to access the SDP via HTTP, rtsp://location for RTSP
+          access, and sap:// for the SDP to be announced via SAP.
+      --sout-rtp-mux=<string>    Muxer
+          This allows you to specify the muxer used for the streaming output.
+          Default is to use no muxer (standard RTP stream).
+      --sout-rtp-sap, --no-sout-rtp-sap 
+                                 SAP announcing
+                                 (default disabled)
+          Announce this session with SAP.
+      --sout-rtp-name=<string>   Session name
+          This is the name of the session that will be announced in the SDP
+          (Session Descriptor).
+      --sout-rtp-cat=<string>    Session category
+          This allows you to specify a category for the session, that will be
+          announced if you choose to use SAP.
+      --sout-rtp-description=<string> 
+                                 Session description
+          This allows you to give a short description with details about the
+          stream, that will be announced in the SDP (Session Descriptor).
+      --sout-rtp-url=<string>    Session URL
+          This allows you to give a URL with more details about the stream
+          (often the website of the streaming organization), that will be
+          announced in the SDP (Session Descriptor).
+      --sout-rtp-email=<string>  Session email
+          This allows you to give a contact mail address for the stream, that
+          will be announced in the SDP (Session Descriptor).
+      --sout-rtp-proto={dccp,sctp,tcp,udp,udplite} 
+                                 Transport protocol
+          This selects which transport protocol to use for RTP.
+      --sout-rtp-port=<integer>  Port
+          This allows you to specify the base port for the RTP streaming.
+      --sout-rtp-port-audio=<integer> 
+                                 Audio port
+          This allows you to specify the default audio port for the RTP
+          streaming.
+      --sout-rtp-port-video=<integer> 
+                                 Video port
+          This allows you to specify the default video port for the RTP
+          streaming.
+      --sout-rtp-ttl=<integer>   Hop limit (TTL)
+          This is the hop limit (also known as "Time-To-Live" or TTL) of the
+          multicast packets sent by the stream output (-1 = use operating
+          system built-in default).
+      --sout-rtp-rtcp-mux, --no-sout-rtp-rtcp-mux 
+                                 RTP/RTCP multiplexing
+                                 (default disabled)
+          This sends and receives RTCP packet multiplexed over the same port as
+          RTP packets.
+      --sout-rtp-caching=<integer> 
+                                 Caching value (ms)
+          Default caching value for outbound RTP streams. This value should be
+          set in milliseconds.
+      --sout-rtp-key=<string>    SRTP key (hexadecimal)
+          RTP packets will be integrity-protected and ciphered with this Secure
+          RTP master shared secret key. This must be a 32-character-long
+          hexadecimal string.
+      --sout-rtp-salt=<string>   SRTP salt (hexadecimal)
+          Secure RTP requires a (non-secret) master salt value. This must be a
+          28-character-long hexadecimal string.
+      --sout-rtp-mp4a-latm, --no-sout-rtp-mp4a-latm 
+                                 MP4A LATM
+                                 (default disabled)
+          This allows you to stream MPEG4 LATM audio streams (see RFC3016).
+      --rtsp-timeout=<integer>   RTSP session timeout (s)
+          RTSP sessions will be closed after not receiving any RTSP request for
+          this long. Setting it to a negative value or zero disables timeouts.
+          The default is 60 (one minute).
+      --sout-rtsp-user=<string>  Username
+          Username that will be requested to access the stream.
+      --sout-rtsp-pwd=<string>   Password
+          Password that will be requested to access the stream.
+
+ Record stream output (record)
+      --sout-record-dst-prefix=<string> 
+                                 Destination prefix
+          Prefix of the destination file automatically generated
+
+ Mosaic bridge stream output (mosaic_bridge)
+      --sout-mosaic-bridge-id=<string> 
+                                 ID
+          Specify an identifier string for this subpicture
+      --sout-mosaic-bridge-width=<integer> 
+                                 Video width
+          Output video width.
+      --sout-mosaic-bridge-height=<integer> 
+                                 Video height
+          Output video height.
+      --sout-mosaic-bridge-sar=<string> 
+                                 Sample aspect ratio
+          Sample aspect ratio of the destination (1:1, 3:4, 2:3).
+      --sout-mosaic-bridge-chroma=<string> 
+                                 Image chroma
+          Force the use of a specific chroma. Use YUVA if you're planning to
+          use the Alphamask or Bluescreen video filter.
+      --sout-mosaic-bridge-vfilter=<string> 
+                                 Video filter
+          Video filters will be applied to the video stream.
+      --sout-mosaic-bridge-alpha=<integer [0 .. 255]> 
+                                 Transparency
+          Transparency of the mosaic picture.
+      --sout-mosaic-bridge-x=<integer> 
+                                 X offset
+          X coordinate of the upper left corner in the mosaic if non negative.
+      --sout-mosaic-bridge-y=<integer> 
+                                 Y offset
+          Y coordinate of the upper left corner in the mosaic if non negative.
+
+ Elementary stream output (es)
+   Generic:
+      --sout-es-access=<string>  Output access method
+          This is the default output access method that will be used.
+      --sout-es-mux=<string>     Output muxer
+          This is the default muxer method that will be used.
+      --sout-es-dst=<string>     Output URL
+          This is the default output URI.
+   Audio:
+      --sout-es-access-audio=<string> 
+                                 Audio output access method
+          This is the output access method that will be used for audio.
+      --sout-es-mux-audio=<string> 
+                                 Audio output muxer
+          This is the muxer that will be used for audio.
+      --sout-es-dst-audio=<string> 
+                                 Audio output URL
+          This is the output URI that will be used for audio.
+   Video:
+      --sout-es-access-video=<string> 
+                                 Video output access method
+          This is the output access method that will be used for video.
+      --sout-es-mux-video=<string> 
+                                 Video output muxer
+          This is the muxer that will be used for video.
+      --sout-es-dst-video=<string> 
+                                 Video output URL
+          This is the output URI that will be used for video.
+
+ Display stream output (display)
+      --sout-display-audio, --no-sout-display-audio 
+                                 Enable audio
+                                 (default enabled)
+          Enable/disable audio rendering.
+      --sout-display-video, --no-sout-display-video 
+                                 Enable video
+                                 (default enabled)
+          Enable/disable video rendering.
+      --sout-display-delay=<integer> 
+                                 Delay (ms)
+          Introduces a delay in the display of the stream.
+
+ Delay a stream (delay)
+      --sout-delay-id=<integer>  Elementary Stream ID
+          Specify an identifier integer for this elementary stream
+      --sout-delay-delay=<integer> 
+                                 Delay of the ES (ms)
+          Specify a delay (in ms) for this elementary stream. Positive means
+          delay and negative means advance.
+
+ Chromecast stream output (stream_out_chromecast)
+      --sout-chromecast-ip=<string> 
+                                 
+      --sout-chromecast-port=<integer> 
+                                 
+      --sout-chromecast-video, --no-sout-chromecast-video 
+                                 
+                                 (default enabled)
+      --sout-chromecast-http-port=<integer> 
+                                 HTTP port
+          This sets the HTTP port of the local server used to stream the media
+          to the Chromecast.
+      --sout-chromecast-show-perf-warning=<integer> 
+                                 Performance warning
+          Display a performance warning when transcoding
+      --sout-chromecast-audio-passthrough, --no-sout-chromecast-audio-passthrough 
+                                 Enable Audio passthrough
+                                 (default disabled)
+          Disable if your receiver does not support Dolby®.
+      --sout-chromecast-conversion-quality={0 (High (high quality and high bandwidth)), 1 (Medium (medium quality and medium bandwidth)), 2 (Low (low quality and low bandwidth)), 3 (Low CPU (low quality but high bandwidth))} 
+                                 Conversion quality
+          Change this option to increase conversion speed or quality.
+
+ Chromaprint stream output (stream_out_chromaprint)
+      --duration=<integer>       Duration of the fingerprinting
+          Default: 90sec
+
+ Bridge stream output (bridge)
+   Bridge out:
+      --sout-bridge-out-id=<integer> 
+                                 ID
+          Integer identifier for this elementary stream. This will be used to
+          "find" this stream later.
+      --sout-bridge-out-in-name=<string> 
+                                 Destination bridge-in name
+          Name of the destination bridge-in. If you do not need more than one
+          bridge-in at a time, you can discard this option.
+   Bridge in:
+      --sout-bridge-in-delay=<integer> 
+                                 Delay
+          Pictures coming from the picture video outputs will be delayed
+          according to this value (in milliseconds, should be >= 100 ms). For
+          high values, you will need to raise caching values.
+      --sout-bridge-in-id-offset=<integer> 
+                                 ID Offset
+          Offset to add to the stream IDs specified in bridge_out to obtain the
+          stream IDs bridge_in will register.
+      --sout-bridge-in-name=<string> 
+                                 Name of current instance
+          Name of this bridge-in instance. If you do not need more than one
+          bridge-in at a time, you can discard this option.
+      --sout-bridge-in-placeholder, --no-sout-bridge-in-placeholder 
+                                 Fallback to placeholder stream when out of
+                                 data
+                                 (default disabled)
+          If set to true, the bridge will discard all input elementary streams
+          except if it doesn't receive data from another bridge-in. This can be
+          used to configure a place holder stream when the real source breaks.
+          Source and placeholder streams should have the same format.
+      --sout-bridge-in-placeholder-delay=<integer> 
+                                 Placeholder delay
+          Delay (in ms) before the placeholder kicks in.
+      --sout-bridge-in-placeholder-switch-on-iframe, --no-sout-bridge-in-placeholder-switch-on-iframe 
+                                 Wait for I frame before toggling placeholder
+                                 (default enabled)
+          If enabled, switching between the placeholder and the normal stream
+          will only occur on I frames. This will remove artifacts on stream
+          switching at the expense of a slightly longer delay, depending on the
+          frequence of I frames in the streams.
+
+ Stream prefetch filter (prefetch)
+      --prefetch-buffer-size=<integer [4 .. 1048576]> 
+                                 Buffer size
+          Prefetch buffer size (KiB)
+      --prefetch-read-size=<integer [1 .. 536870912]> 
+                                 Read size
+          Prefetch background read size (bytes)
+      --prefetch-seek-threshold=<integer [0 .. 1152921504606846976]> 
+                                 Seek threshold
+          Prefetch forward seek threshold (bytes)
+
+ Subtitle delay (subsdelay)
+ Change subtitle delay
+      --subsdelay-mode={0 (Absolute delay), 1 (Relative to source delay), 2 (Relative to source content)} 
+                                 Delay calculation mode
+          Absolute delay - add absolute delay to each subtitle. Relative to
+          source delay - multiply subtitle delay. Relative to source content -
+          determine subtitle delay from its content (text).
+      --subsdelay-factor=<float [0.000000 .. 20.000000]> 
+                                 Calculation factor
+          Calculation factor. In Absolute delay mode the factor represents
+          seconds.
+      --subsdelay-overlap=<integer [1 .. 4]> 
+                                 Maximum overlapping subtitles
+          Maximum number of subtitles allowed at the same time.
+      --subsdelay-min-alpha=<integer [0 .. 255]> 
+                                 Minimum alpha value
+          Alpha value of the earliest subtitle, where 0 is fully transparent
+          and 255 is fully opaque.
+   Overlap fix:
+      --subsdelay-min-stops=<integer> 
+                                 Interval between two disappearances
+          Minimum time (in milliseconds) that subtitle should stay after its
+          predecessor has disappeared (subtitle delay will be extended to meet
+          this requirement).
+      --subsdelay-min-start-stop=<integer> 
+                                 Interval between appearance and disappearance
+          Minimum time (in milliseconds) that subtitle should stay after newer
+          subtitle has appeared (earlier subtitle delay will be shortened to
+          avoid the overlap).
+      --subsdelay-min-stop-start=<integer> 
+                                 Interval between disappearance and appearance
+          Minimum time (in milliseconds) between subtitle disappearance and
+          newer subtitle appearance (earlier subtitle delay will be extended to
+          fill the gap).
+
+ RSS and Atom feed display (rss)
+ Display a RSS or ATOM Feed on your video
+      --rss-urls=<string>        Feed URLs
+          RSS/Atom feed '|' (pipe) separated URLs.
+   Position:
+      --rss-x=<integer>          X offset
+          X offset, from the left screen edge.
+      --rss-y=<integer>          Y offset
+          Y offset, down from the top.
+      --rss-position={0 (Center), 1 (Left), 2 (Right), 4 (Top), 8 (Bottom), 5 (Top-Left), 6 (Top-Right), 9 (Bottom-Left), 10 (Bottom-Right)} 
+                                 Text position
+          You can enforce the text position on the video (0=center, 1=left,
+          2=right, 4=top, 8=bottom; you can also use combinations of these
+          values, eg 6 = top-right).
+   Font:
+      --rss-opacity=<integer [0 .. 255]> 
+                                 Opacity
+          Opacity (inverse of transparency) of overlay text. 0 = transparent,
+          255 = totally opaque.
+      --rss-color={-268435456 (Default), 0 (Black), 8421504 (Gray), 12632256 (Silver), 16777215 (White), 8388608 (Maroon), 16711680 (Red), 16711935 (Fuchsia), 16776960 (Yellow), 8421376 (Olive), 32768 (Green), 32896 (Teal), 65280 (Lime), 8388736 (Purple), 128 (Navy), 255 (Blue), 65535 (Aqua)} 
+                                 Color
+          Color of the text that will be rendered on the video. This must be an
+          hexadecimal (like HTML colors). The first two chars are for red, then
+          green, then blue. #000000 = black, #FF0000 = red, #00FF00 = green,
+          #FFFF00 = yellow (red + green), #FFFFFF = white
+      --rss-size=<integer [0 .. 4096]> 
+                                 Font size, pixels
+          Font size, in pixels. Default is 0 (use default font size).
+   Misc:
+      --rss-speed=<integer>      Speed of feeds
+          Speed of the RSS/Atom feeds in microseconds (bigger is slower).
+      --rss-length=<integer>     Max length
+          Maximum number of characters displayed on the screen.
+      --rss-ttl=<integer>        Refresh time
+          Number of seconds between each forced refresh of the feeds. 0 means
+          that the feeds are never updated.
+      --rss-images, --no-rss-images 
+                                 Feed images
+                                 (default enabled)
+          Display feed images if available.
+      --rss-title={-1 (Default), 0 (Don't show), 1 (Always visible), 2 (Scroll with feed)} 
+                                 Title display mode
+          Title display mode. Default is 0 (hidden) if the feed has an image
+          and feed images are enabled, 1 otherwise.
+
+ Remote-OSD over VNC (remoteosd)
+      --rmtosd-host=<string>     VNC Host
+          VNC hostname or IP address.
+      --rmtosd-port=<integer [1 .. 65535]> 
+                                 VNC Port
+          VNC port number.
+      --rmtosd-password=<string> VNC Password
+          VNC password.
+      --rmtosd-update=<integer [200 .. 300]> 
+                                 VNC poll interval
+          In this interval an update from VNC is requested, default every 300
+          ms.
+      --rmtosd-vnc-polling, --no-rmtosd-vnc-polling 
+                                 VNC polling
+                                 (default disabled)
+          Activate VNC polling. Do NOT activate for use as VDR ffnetdev client.
+      --rmtosd-mouse-events, --no-rmtosd-mouse-events 
+                                 Mouse events
+                                 (default disabled)
+          Send mouse events to VNC host. Not needed for use as VDR ffnetdev
+          client.
+      --rmtosd-key-events, --no-rmtosd-key-events 
+                                 Key events
+                                 (default disabled)
+          Send key events to VNC host.
+      --rmtosd-alpha=<integer [0 .. 255]> 
+                                 Alpha transparency value (default 255)
+          The transparency of the OSD VNC can be changed by giving a value
+          between 0 and 255. A lower value specifies more transparency a higher
+          means less transparency. The default is being not transparent (value
+          255) the minimum is fully transparent (value 0).
+
+ Mosaic video sub source (mosaic)
+      --mosaic-alpha=<integer [0 .. 255]> 
+                                 Transparency
+          Transparency of the mosaic foreground pictures. 0 means transparent,
+          255 opaque (default).
+      --mosaic-height=<integer>  Height
+          Total height of the mosaic, in pixels.
+      --mosaic-width=<integer>   Width
+          Total width of the mosaic, in pixels.
+      --mosaic-align={0 (Center), 1 (Left), 2 (Right), 4 (Top), 8 (Bottom), 5 (Top-Left), 6 (Top-Right), 9 (Bottom-Left), 10 (Bottom-Right)} 
+                                 Mosaic alignment
+          You can enforce the mosaic alignment on the video (0=center, 1=left,
+          2=right, 4=top, 8=bottom, you can also use combinations of these
+          values, eg 6 = top-right).
+      --mosaic-xoffset=<integer> Top left corner X coordinate
+          X Coordinate of the top-left corner of the mosaic.
+      --mosaic-yoffset=<integer> Top left corner Y coordinate
+          Y Coordinate of the top-left corner of the mosaic.
+      --mosaic-borderw=<integer> Border width
+          Width in pixels of the border between miniatures.
+      --mosaic-borderh=<integer> Border height
+          Height in pixels of the border between miniatures.
+      --mosaic-position={0 (auto), 1 (fixed), 2 (offsets)} 
+                                 Positioning method
+          Positioning method for the mosaic. auto: automatically choose the
+          best number of rows and columns. fixed: use the user-defined number
+          of rows and columns. offsets: use the user-defined offsets for each
+          image.
+      --mosaic-rows=<integer>    Number of rows
+          Number of image rows in the mosaic (only used if positioning method
+          is set to "fixed").
+      --mosaic-cols=<integer>    Number of columns
+          Number of image columns in the mosaic (only used if positioning
+          method is set to "fixed").
+      --mosaic-keep-aspect-ratio, --no-mosaic-keep-aspect-ratio 
+                                 Keep aspect ratio
+                                 (default disabled)
+          Keep the original aspect ratio when resizing mosaic elements.
+      --mosaic-keep-picture, --no-mosaic-keep-picture 
+                                 Keep original size
+                                 (default disabled)
+          Keep the original size of mosaic elements.
+      --mosaic-order=<string>    Elements order
+          You can enforce the order of the elements on the mosaic. You must
+          give a comma-separated list of picture ID(s). These IDs are assigned
+          in the "mosaic-bridge" module.
+      --mosaic-offsets=<string>  Offsets in order
+          You can enforce the (x,y) offsets of the elements on the mosaic (only
+          used if positioning method is set to "offsets"). You must give a
+          comma-separated list of coordinates (eg: 10,10,150,10).
+      --mosaic-delay=<integer>   Delay
+          Pictures coming from the mosaic elements will be delayed according to
+          this value (in milliseconds). For high values you will need to raise
+          caching at input.
+
+ Marquee display (marq)
+ Display text above the video
+      --marq-marquee=<string>    Text
+          Marquee text to display. (Available format strings: %Y = year, %m =
+          month, %d = day, %H = hour, %M = minute, %S = second, ...)
+      --marq-file=<string>       Text file
+          File to read the marquee text from.
+   Position:
+      --marq-x=<integer>         X offset
+          X offset, from the left screen edge.
+      --marq-y=<integer>         Y offset
+          Y offset, down from the top.
+      --marq-position={0 (Center), 1 (Left), 2 (Right), 4 (Top), 8 (Bottom), 5 (Top-Left), 6 (Top-Right), 9 (Bottom-Left), 10 (Bottom-Right)} 
+                                 Marquee position
+          You can enforce the marquee position on the video (0=center, 1=left,
+          2=right, 4=top, 8=bottom, you can also use combinations of these
+          values, eg 6 = top-right).
+   Font:
+      --marq-opacity=<integer [0 .. 255]> 
+                                 Opacity
+          Opacity (inverse of transparency) of overlayed text. 0 = transparent,
+          255 = totally opaque.
+      --marq-color={-268435456 (Default), 0 (Black), 8421504 (Gray), 12632256 (Silver), 16777215 (White), 8388608 (Maroon), 16711680 (Red), 16711935 (Fuchsia), 16776960 (Yellow), 8421376 (Olive), 32768 (Green), 32896 (Teal), 65280 (Lime), 8388736 (Purple), 128 (Navy), 255 (Blue), 65535 (Aqua)} 
+                                 Color
+          Color of the text that will be rendered on the video. This must be an
+          hexadecimal (like HTML colors). The first two chars are for red, then
+          green, then blue. #000000 = black, #FF0000 = red, #00FF00 = green,
+          #FFFF00 = yellow (red + green), #FFFFFF = white
+      --marq-size=<integer [0 .. 4096]> 
+                                 Font size, pixels
+          Font size, in pixels. Default is 0 (use default font size).
+   Misc:
+      --marq-timeout=<integer>   Timeout
+          Number of milliseconds the marquee must remain displayed. Default
+          value is 0 (remains forever).
+      --marq-refresh=<integer>   Refresh period in ms
+          Number of milliseconds between string updates. This is mainly useful
+          when using meta data or time format string sequences.
+
+ Logo sub source (logo)
+ Use a local picture as logo on the video
+      --logo-file=<string>       Logo filenames
+          Full path of the image files to use. Format is <image>[,<delay in
+          ms>[,<alpha>]][;<image>[,<delay>[,<alpha>]]][;...]. If you only have
+          one file, simply enter its filename.
+      --logo-x=<integer>         X coordinate
+          X coordinate of the logo. You can move the logo by left-clicking it.
+      --logo-y=<integer>         Y coordinate
+          Y coordinate of the logo. You can move the logo by left-clicking it.
+      --logo-delay=<integer>     Logo individual image time in ms
+          Individual image display time of 0 - 60000 ms.
+      --logo-repeat=<integer>    Logo animation # of loops
+          Number of loops for the logo animation. -1 = continuous, 0 = disabled
+      --logo-opacity=<integer [0 .. 255]> 
+                                 Opacity of the logo
+          Logo opacity value (from 0 for full transparency to 255 for full
+          opacity).
+      --logo-position={0 (Center), 1 (Left), 2 (Right), 4 (Top), 8 (Bottom), 5 (Top-Left), 6 (Top-Right), 9 (Bottom-Left), 10 (Bottom-Right)} 
+                                 Logo position
+          Enforce the logo position on the video (0=center, 1=left, 2=right,
+          4=top, 8=bottom, you can also use combinations of these values, eg 6
+          = top-right).
+
+ Audio Bar Graph Video sub source (audiobargraph_v)
+      --audiobargraph_v-x=<integer> 
+                                 X coordinate
+          X coordinate of the bargraph.
+      --audiobargraph_v-y=<integer> 
+                                 Y coordinate
+          Y coordinate of the bargraph.
+      --audiobargraph_v-transparency=<integer [0 .. 255]> 
+                                 Transparency of the bargraph
+          Bargraph transparency value (from 0 for full transparency to 255 for
+          full opacity).
+      --audiobargraph_v-position={0 (Center), 1 (Left), 2 (Right), 4 (Top), 8 (Bottom), 5 (Top-Left), 6 (Top-Right), 9 (Bottom-Left), 10 (Bottom-Right)} 
+                                 Bargraph position
+          Enforce the bargraph position on the video (0=center, 1=left,
+          2=right, 4=top, 8=bottom, you can also use combinations of these
+          values, eg 6 = top-right).
+      --audiobargraph_v-barWidth=<integer> 
+                                 Bar width in pixel
+          Width in pixel of each bar in the BarGraph to be displayed.
+      --audiobargraph_v-barHeight=<integer> 
+                                 Bar Height in pixel
+          Height in pixel of BarGraph to be displayed.
+
+ Universal Plug'n'Play (upnp)
+      --satip-channelist={auto,ASTRA_19_2E,ASTRA_28_2E,ASTRA_23_5E,MasterList,ServerList,CustomList} 
+                                 SAT>IP channel list
+          SAT>IP channel list
+      --satip-channellist-url=<string> 
+                                 Custom SAT>IP channel list URL
+          Custom SAT>IP channel list URL
+
+ Network streams (SAP) (sap)
+      --sap-addr=<string>        SAP multicast address
+          The SAP module normally chooses itself the right addresses to listen
+          to. However, you can specify a specific address.
+      --sap-timeout=<integer>    SAP timeout (seconds)
+          Delay after which SAP items get deleted if no new announcement is
+          received.
+      --sap-parse, --no-sap-parse 
+                                 Try to parse the announce
+                                 (default enabled)
+          This enables actual parsing of the announces by the SAP module.
+          Otherwise, all announcements are parsed by the "live555" (RTP/RTSP)
+          module.
+      --sap-strict, --no-sap-strict 
+                                 SAP Strict mode
+                                 (default disabled)
+          When this is set, the SAP parser will discard some non-compliant
+          announcements.
+
+ Podcasts (podcast)
+      --podcast-urls=<string>    Podcast URLs list
+          Enter the list of podcasts to retrieve, separated by '|' (pipe).
+
+ MPEG-I/II video packetizer (mpegvideo)
+      --packetizer-mpegvideo-sync-iframe, --no-packetizer-mpegvideo-sync-iframe 
+                                 Sync on Intra Frame
+                                 (default disabled)
+          Normally the packetizer would sync on the next full frame. This flags
+          instructs the packetizer to sync on the first Intra Frame found.
+
+ TS muxer (libdvbpsi) (mux_ts)
+      --sout-ts-standard={dvb,atsc} 
+                                 Digital TV Standard
+      --sout-ts-pid-video=<integer [32 .. 8190]> 
+                                 Video PID
+          Assign a fixed PID to the video stream. The PCR PID will
+          automatically be the video.
+      --sout-ts-pid-audio=<integer [32 .. 8190]> 
+                                 Audio PID
+          Assign a fixed PID to the audio stream.
+      --sout-ts-pid-spu=<integer [32 .. 8190]> 
+                                 SPU PID
+          Assign a fixed PID to the SPU.
+      --sout-ts-pid-pmt=<integer [32 .. 8190]> 
+                                 PMT PID
+          Assign a fixed PID to the PMT
+      --sout-ts-tsid=<integer>   TS ID
+          Assign a fixed Transport Stream ID.
+      --sout-ts-netid=<integer>  NET ID
+          Assign a fixed Network ID (for SDT table)
+      --sout-ts-program-pmt=<string> 
+                                 PMT Program numbers
+          Assign a program number to each PMT. This requires "Set PID to ID of
+          ES" to be enabled.
+      --sout-ts-es-id-pid, --no-sout-ts-es-id-pid 
+                                 Set PID to ID of ES
+                                 (default disabled)
+          Sets PID to the ID if the incoming ES. This is for use with
+          --ts-es-id-pid, and allows having the same PIDs in the input and
+          output streams.
+      --sout-ts-muxpmt=<string>  Mux PMT (requires --sout-ts-es-id-pid)
+          Define the pids to add to each pmt. This requires "Set PID to ID of
+          ES" to be enabled.
+      --sout-ts-sdtdesc=<string> SDT Descriptors (requires --sout-ts-es-id-pid)
+          Defines the descriptors of each SDT. This requires "Set PID to ID of
+          ES" to be enabled.
+      --sout-ts-alignment, --no-sout-ts-alignment 
+                                 Data alignment
+                                 (default enabled)
+          Enforces alignment of all access units on PES boundaries. Disabling
+          this might save some bandwidth but introduce incompatibilities.
+      --sout-ts-shaping=<integer> 
+                                 Shaping delay (ms)
+          Cut the stream in slices of the given duration, and ensure a constant
+          bitrate between the two boundaries. This avoids having huge bitrate
+          peaks, especially for reference frames.
+      --sout-ts-use-key-frames, --no-sout-ts-use-key-frames 
+                                 Use keyframes
+                                 (default disabled)
+          If enabled, and shaping is specified, the TS muxer will place the
+          boundaries at the end of I pictures. In that case, the shaping
+          duration given by the user is a worse case used when no reference
+          frame is available. This enhances the efficiency of the shaping
+          algorithm, since I frames are usually the biggest frames in the
+          stream.
+      --sout-ts-pcr=<integer>    PCR interval (ms)
+          Set at which interval PCRs (Program Clock Reference) will be sent (in
+          milliseconds). This value should be below 100ms. (default is 70ms).
+      --sout-ts-bmin=<integer>   Minimum B (deprecated)
+          This setting is deprecated and not used anymore
+      --sout-ts-bmax=<integer>   Maximum B (deprecated)
+          This setting is deprecated and not used anymore
+      --sout-ts-dts-delay=<integer> 
+                                 DTS delay (ms)
+          Delay the DTS (decoding time stamps) and PTS (presentation
+          timestamps) of the data in the stream, compared to the PCRs. This
+          allows for some buffering inside the client decoder.
+      --sout-ts-crypt-audio, --no-sout-ts-crypt-audio 
+                                 Crypt audio
+                                 (default enabled)
+          Crypt audio using CSA
+      --sout-ts-crypt-video, --no-sout-ts-crypt-video 
+                                 Crypt video
+                                 (default enabled)
+          Crypt video using CSA
+      --sout-ts-csa-ck=<string>  CSA Key
+          CSA encryption key. This must be a 16 char string (8 hexadecimal
+          bytes).
+      --sout-ts-csa2-ck=<string> Second CSA Key
+          The even CSA encryption key. This must be a 16 char string (8
+          hexadecimal bytes).
+      --sout-ts-csa-use=<string> CSA Key in use
+          CSA encryption key used. It can be the odd/first/1 (default) or the
+          even/second/2 one.
+      --sout-ts-csa-pkt=<integer> 
+                                 Packet size in bytes to encrypt
+          Size of the TS packet to encrypt. The encryption routines subtract
+          the TS-header from the value before encrypting.
+
+ PS muxer (ps)
+      --sout-ps-dts-delay=<integer> 
+                                 DTS delay (ms)
+          Delay the DTS (decoding time stamps) and PTS (presentation
+          timestamps) of the data in the stream, compared to the SCRs. This
+          allows for some buffering inside the client decoder.
+      --sout-ps-pes-max-size=<integer> 
+                                 PES maximum size
+          Set the maximum allowed PES size when producing the MPEG PS streams.
+
+ Ogg/OGM muxer (mux_ogg)
+      --sout-ogg-indexintvl=<integer [0 .. 2147483647]> 
+                                 Index interval
+          Minimal index interval, in microseconds. Set to 0 to disable index
+          creation.
+      --sout-ogg-indexratio=<float [1.000000 .. 1000.000000]> 
+                                 Index size ratio
+          Set index size ratio. Alters default (60min content) or estimated
+          size.
+
+ MP4/MOV muxer (mp4)
+      --sout-mp4-faststart, --no-sout-mp4-faststart 
+                                 Create "Fast Start" files
+                                 (default enabled)
+          Create "Fast Start" files. "Fast Start" files are optimized for
+          downloads and allow the user to start previewing the file while it is
+          downloading.
+
+ AVI muxer (avi)
+      --sout-avi-artist=<string> Artist
+      --sout-avi-date=<string>   Date
+      --sout-avi-genre=<string>  Genre
+      --sout-avi-copyright=<string> 
+                                 Copyright
+      --sout-avi-comment=<string> 
+                                 Comment
+      --sout-avi-name=<string>   Name
+      --sout-avi-subject=<string> 
+                                 Subject
+      --sout-avi-encoder=<string> 
+                                 Encoder
+      --sout-avi-keywords=<string> 
+                                 Keywords
+
+ ASF muxer (asf)
+      --sout-asf-title=<string>  Title
+          Title to put in ASF comments.
+      --sout-asf-author=<string> Author
+          Author to put in ASF comments.
+      --sout-asf-copyright=<string> 
+                                 Copyright
+          Copyright string to put in ASF comments.
+      --sout-asf-comment=<string> 
+                                 Comment
+          Comment to put in ASF comments.
+      --sout-asf-rating=<string> Rating
+          "Rating" to put in ASF comments.
+      --sout-asf-packet-size=<integer> 
+                                 Packet Size
+          ASF packet size -- default is 4096 bytes
+      --sout-asf-bitrate-override=<integer> 
+                                 Bitrate override
+          Do not try to guess ASF bitrate. Setting this, allows you to control
+          how Windows Media Player will cache streamed content. Set to
+          audio+video bitrate in bytes
+
+ Legacy RTSP VoD server (rtsp)
+      --rtsp-raw-mux=<string>    MUX for RAW RTSP transport
+          MUX for RAW RTSP transport
+      --rtsp-throttle-users=<integer> 
+                                 Maximum number of connections
+          This limits the maximum number of clients that can connect to the
+          RTSP VOD. 0 means no limit.
+      --rtsp-session-timeout=<integer> 
+                                 Sets the timeout option in the RTSP session
+                                 string
+          Defines what timeout option to add to the RTSP session ID string.
+          Setting it to a negative number removes the timeout option entirely.
+          This is needed by some IPTV STBs (such as those made by HansunTech)
+          which get confused by it. The default is 5.
+
+ GNU TLS transport layer security (gnutls)
+      --gnutls-system-trust, --no-gnutls-system-trust 
+                                 Use system trust database
+                                 (default enabled)
+          Trust the root certificates of Certificate Authorities stored in the
+          operating system trust database to authenticate TLS sessions.
+      --gnutls-dir-trust=<string> 
+                                 Trust directory
+          Trust the root certificates of Certificate Authorities stored in the
+          specified directory to authenticate TLS sessions.
+      --gnutls-priorities={PERFORMANCE,NORMAL,SECURE128,SECURE256} 
+                                 TLS cipher priorities
+          Ciph

@@ -290,19 +290,29 @@ def build_movie_cards(db, movies: List[Movie]) -> dict:
     # 5. Batch load playlists
     playlist_map = {}
     if movie_ids:
+        # Get regular playlists from playlist_items (excluding "Want to Watch" since it's virtual)
         playlist_rows = db.query(
             PlaylistItem.movie_id,
             Playlist.name
         ).join(
             Playlist, PlaylistItem.playlist_id == Playlist.id
         ).filter(
-            PlaylistItem.movie_id.in_(movie_ids)
+            PlaylistItem.movie_id.in_(movie_ids),
+            Playlist.name != "Want to Watch"  # Virtual playlist, handled separately
         ).order_by(Playlist.is_system.desc(), Playlist.name).all()
 
         for movie_id, playlist_name in playlist_rows:
             if movie_id not in playlist_map:
                 playlist_map[movie_id] = []
             playlist_map[movie_id].append(playlist_name)
+        
+        # Add "Want to Watch" for movies with that status (virtual playlist)
+        for movie_id, status_info in status_map.items():
+            if status_info.get("watch_status") == MovieStatusEnum.WANT_TO_WATCH.value:
+                if movie_id not in playlist_map:
+                    playlist_map[movie_id] = []
+                # Insert at beginning since it's a system playlist
+                playlist_map[movie_id].insert(0, "Want to Watch")
 
     # Build result
     results = {}
@@ -470,7 +480,8 @@ from core.models import (
     MovieInfo, SearchRequest, LaunchRequest, ChangeStatusRequest,
     RatingRequest, ConfigRequest, FolderRequest, CleanNameTestRequest,
     ScreenshotsIntervalRequest, AiSearchRequest, PlaylistCreateRequest,
-    PlaylistAddMovieRequest, MovieListUpdateRequest, OpenUrlsRequest
+    PlaylistAddMovieRequest, MovieListUpdateRequest, OpenUrlsRequest,
+    CheckMoviesRequest
 )
 
 # Include VLC optimization routes
@@ -1039,6 +1050,40 @@ async def get_movie_details_by_id(movie_id: int):
     finally:
         db.close()
 
+@app.get("/api/movie/{movie_id}/same-title")
+async def get_same_title_movies(movie_id: int):
+    """Get other movies with the same title (different copies/versions)"""
+    db = SessionLocal()
+    try:
+        # Get the current movie
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        
+        # Find other movies with the same name (excluding the current one)
+        same_title_movies = db.query(Movie).filter(
+            Movie.name == movie.name,
+            Movie.id != movie_id
+        ).order_by(Movie.size.desc().nullslast()).all()
+        
+        if not same_title_movies:
+            return {"movies": []}
+        
+        result = []
+        for m in same_title_movies:
+            result.append({
+                "id": m.id,
+                "name": m.name,
+                "size": m.size,
+                "year": m.year,
+                "hidden": m.hidden,
+                "path": m.path
+            })
+        
+        return {"movies": result}
+    finally:
+        db.close()
+
 @app.get("/api/movie/{movie_id}/screenshots")
 async def get_movie_screenshots(movie_id: int):
     """Get screenshots for a movie (lightweight endpoint for polling)"""
@@ -1462,6 +1507,69 @@ async def open_urls_in_browser(request: OpenUrlsRequest):
     }
 
 
+@app.post("/api/check-movies")
+async def check_movies_in_library(request: CheckMoviesRequest):
+    """Check which movies from a list are already in the library"""
+    import re
+    
+    db = SessionLocal()
+    try:
+        results = []
+        
+        for movie_line in request.movies:
+            # Try to extract year from the end of the line
+            year_match = re.search(r'\b(19\d{2}|20\d{2})\s*$', movie_line.strip())
+            year = int(year_match.group(1)) if year_match else None
+            
+            # Get title (everything before the year, or the whole line)
+            if year_match:
+                title = movie_line[:year_match.start()].strip()
+            else:
+                title = movie_line.strip()
+            
+            # Clean title for matching (lowercase, remove special chars)
+            clean_title = re.sub(r'[^\w\s]', '', title.lower()).strip()
+            clean_title_words = set(clean_title.split())
+            
+            # Search for matching movies
+            found = False
+            matched_movie = None
+            
+            # Query movies, optionally filtered by year
+            query = db.query(Movie).filter(Movie.hidden == False)
+            if year:
+                query = query.filter(Movie.year == year)
+            
+            for movie in query.all():
+                # Clean the movie name for comparison
+                movie_clean = re.sub(r'[^\w\s]', '', movie.name.lower()).strip()
+                movie_words = set(movie_clean.split())
+                
+                # Check if titles match (either exact or significant word overlap)
+                if movie_clean == clean_title:
+                    found = True
+                    matched_movie = {"id": movie.id, "name": movie.name, "year": movie.year}
+                    break
+                elif len(clean_title_words) >= 2 and clean_title_words.issubset(movie_words):
+                    found = True
+                    matched_movie = {"id": movie.id, "name": movie.name, "year": movie.year}
+                    break
+                elif len(movie_words) >= 2 and movie_words.issubset(clean_title_words):
+                    found = True
+                    matched_movie = {"id": movie.id, "name": movie.name, "year": movie.year}
+                    break
+            
+            results.append({
+                "input": movie_line,
+                "found": found,
+                "match": matched_movie
+            })
+        
+        return {"status": "ok", "results": results}
+    finally:
+        db.close()
+
+
 @app.get("/api/history")
 async def get_history():
     """Get search and launch history"""
@@ -1482,7 +1590,8 @@ async def get_history():
                 launches.append({
                     "path": movie.path,
                     "subtitle": launch.subtitle,
-                    "timestamp": launch.created.isoformat()
+                    "timestamp": launch.created.isoformat(),
+                    "stopped_at_seconds": launch.stopped_at_seconds
                 })
         
         return {
@@ -1520,7 +1629,8 @@ async def get_launch_history():
                 launches_with_info.append({
                     "movie": card,
                     "timestamp": launch.created.isoformat(),
-                    "subtitle": launch.subtitle
+                    "subtitle": launch.subtitle,
+                    "stopped_at_seconds": launch.stopped_at_seconds
                 })
         
         return {"launches": launches_with_info}
@@ -3020,7 +3130,15 @@ async def get_playlists():
         # Get playlists with movie counts
         playlists = []
         for playlist in db.query(Playlist).order_by(Playlist.is_system.desc(), Playlist.name.asc()).all():
-            movie_count = db.query(PlaylistItem).filter(PlaylistItem.playlist_id == playlist.id).count()
+            # "Want to Watch" is a virtual playlist - count from movie_status table
+            if playlist.name == "Want to Watch":
+                movie_count = db.query(MovieStatus).join(Movie, MovieStatus.movie_id == Movie.id).filter(
+                    MovieStatus.movieStatus == MovieStatusEnum.WANT_TO_WATCH.value,
+                    Movie.hidden == False
+                ).count()
+            else:
+                movie_count = db.query(PlaylistItem).filter(PlaylistItem.playlist_id == playlist.id).count()
+            
             playlists.append({
                 "id": playlist.id,
                 "name": playlist.name,
@@ -3105,48 +3223,83 @@ async def get_playlist_movies(
         if not playlist:
             raise HTTPException(status_code=404, detail="Playlist not found")
 
-        # Base query for playlist items
-        item_query = db.query(PlaylistItem, Movie).join(
-            Movie, PlaylistItem.movie_id == Movie.id
-        ).filter(
-            PlaylistItem.playlist_id == playlist_id,
-            Movie.hidden == False
-        )
-
-        # Apply sorting
-        if sort == "name":
-            item_query = item_query.order_by(Movie.name.asc())
-        elif sort == "year":
-            # Handle null years by putting them at the end
+        # "Want to Watch" is a virtual playlist - query from movie_status table
+        if playlist.name == "Want to Watch":
+            # Query movies with want_to_watch status
             from sqlalchemy import case
-            item_query = item_query.order_by(
-                case((Movie.year.is_(None), 1), else_=0),  # Nulls last
-                Movie.year.desc()
+            item_query = db.query(MovieStatus, Movie).join(
+                Movie, MovieStatus.movie_id == Movie.id
+            ).filter(
+                MovieStatus.movieStatus == MovieStatusEnum.WANT_TO_WATCH.value,
+                Movie.hidden == False
             )
-        else:  # date_added
-            item_query = item_query.order_by(PlaylistItem.added_at.desc())
 
-        # Get total count
-        total = item_query.count()
+            # Apply sorting
+            if sort == "name":
+                item_query = item_query.order_by(Movie.name.asc())
+            elif sort == "year":
+                item_query = item_query.order_by(
+                    case((Movie.year.is_(None), 1), else_=0),
+                    Movie.year.desc()
+                )
+            else:  # date_added - use status updated time
+                item_query = item_query.order_by(MovieStatus.updated.desc())
 
-        # Apply pagination
-        items = item_query.offset((page - 1) * per_page).limit(per_page).all()
+            # Get total count
+            total = item_query.count()
 
-        # Extract movie IDs for batch loading
-        movie_ids = [movie.id for _, movie in items]
+            # Apply pagination
+            items = item_query.offset((page - 1) * per_page).limit(per_page).all()
 
-        # Build movie cards
-        movies_list = [movie for _, movie in items]
-        movie_cards = build_movie_cards(db, movies_list)
+            # Build movie cards
+            movies_list = [movie for _, movie in items]
+            movie_cards = build_movie_cards(db, movies_list)
 
-        # Build response
-        movies = []
-        for item, movie in items:
-            card = dict(movie_cards.get(movie.id, {}))
-            if card:
-                # Add playlist specific info
-                card["added_at"] = item.added_at.isoformat() if item.added_at else None
-                movies.append(card)
+            # Build response
+            movies = []
+            for status, movie in items:
+                card = dict(movie_cards.get(movie.id, {}))
+                if card:
+                    card["added_at"] = status.updated.isoformat() if status.updated else None
+                    movies.append(card)
+        else:
+            # Regular playlist - query from playlist_items table
+            from sqlalchemy import case
+            item_query = db.query(PlaylistItem, Movie).join(
+                Movie, PlaylistItem.movie_id == Movie.id
+            ).filter(
+                PlaylistItem.playlist_id == playlist_id,
+                Movie.hidden == False
+            )
+
+            # Apply sorting
+            if sort == "name":
+                item_query = item_query.order_by(Movie.name.asc())
+            elif sort == "year":
+                item_query = item_query.order_by(
+                    case((Movie.year.is_(None), 1), else_=0),
+                    Movie.year.desc()
+                )
+            else:  # date_added
+                item_query = item_query.order_by(PlaylistItem.added_at.desc())
+
+            # Get total count
+            total = item_query.count()
+
+            # Apply pagination
+            items = item_query.offset((page - 1) * per_page).limit(per_page).all()
+
+            # Build movie cards
+            movies_list = [movie for _, movie in items]
+            movie_cards = build_movie_cards(db, movies_list)
+
+            # Build response
+            movies = []
+            for item, movie in items:
+                card = dict(movie_cards.get(movie.id, {}))
+                if card:
+                    card["added_at"] = item.added_at.isoformat() if item.added_at else None
+                    movies.append(card)
 
         return {
             "playlist": {
@@ -3185,7 +3338,21 @@ async def add_movie_to_playlist(playlist_id: int, request: PlaylistAddMovieReque
         if not movie:
             raise HTTPException(status_code=404, detail="Movie not found")
 
-        # Check if already in playlist
+        # "Want to Watch" is virtual - set movie status instead of adding to playlist_items
+        if playlist.name == "Want to Watch":
+            movie_status = db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).first()
+            if movie_status and movie_status.movieStatus == MovieStatusEnum.WANT_TO_WATCH.value:
+                raise HTTPException(status_code=400, detail="Movie already in playlist")
+            
+            if movie_status:
+                movie_status.movieStatus = MovieStatusEnum.WANT_TO_WATCH.value
+            else:
+                movie_status = MovieStatus(movie_id=movie.id, movieStatus=MovieStatusEnum.WANT_TO_WATCH.value)
+                db.add(movie_status)
+            db.commit()
+            return {"status": "added", "playlist_id": playlist_id, "movie_id": request.movie_id}
+
+        # Regular playlist - add to playlist_items
         existing = db.query(PlaylistItem).filter(
             PlaylistItem.playlist_id == playlist_id,
             PlaylistItem.movie_id == request.movie_id
@@ -3194,7 +3361,6 @@ async def add_movie_to_playlist(playlist_id: int, request: PlaylistAddMovieReque
         if existing:
             raise HTTPException(status_code=400, detail="Movie already in playlist")
 
-        # Add to playlist
         item = PlaylistItem(playlist_id=playlist_id, movie_id=request.movie_id)
         db.add(item)
         db.commit()
@@ -3214,6 +3380,27 @@ async def remove_movie_from_playlist(playlist_id: int, movie_id: int):
     """Remove a movie from a playlist"""
     db = SessionLocal()
     try:
+        # Check if this is the "Want to Watch" virtual playlist
+        playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        if playlist.name == "Want to Watch":
+            # Virtual playlist - clear the want_to_watch status
+            movie_status = db.query(MovieStatus).filter(
+                MovieStatus.movie_id == movie_id,
+                MovieStatus.movieStatus == MovieStatusEnum.WANT_TO_WATCH.value
+            ).first()
+
+            if not movie_status:
+                raise HTTPException(status_code=404, detail="Movie not found in playlist")
+
+            # Delete the status entry (resets to no status)
+            db.delete(movie_status)
+            db.commit()
+            return {"status": "removed", "playlist_id": playlist_id, "movie_id": movie_id}
+
+        # Regular playlist - remove from playlist_items
         item = db.query(PlaylistItem).filter(
             PlaylistItem.playlist_id == playlist_id,
             PlaylistItem.movie_id == movie_id
@@ -3258,7 +3445,26 @@ async def add_movie_to_playlist_by_name(movie_id: int, playlist_name: str = Quer
             db.commit()
             db.refresh(playlist)
 
-        # Check if already in playlist
+        # "Want to Watch" is virtual - set movie status instead
+        if playlist.name == "Want to Watch":
+            movie_status = db.query(MovieStatus).filter(MovieStatus.movie_id == movie_id).first()
+            if movie_status and movie_status.movieStatus == MovieStatusEnum.WANT_TO_WATCH.value:
+                return {"status": "already_in_playlist", "playlist_id": playlist.id, "playlist_name": playlist.name}
+            
+            if movie_status:
+                movie_status.movieStatus = MovieStatusEnum.WANT_TO_WATCH.value
+            else:
+                movie_status = MovieStatus(movie_id=movie_id, movieStatus=MovieStatusEnum.WANT_TO_WATCH.value)
+                db.add(movie_status)
+            db.commit()
+            return {
+                "status": "added",
+                "playlist_id": playlist.id,
+                "playlist_name": playlist.name,
+                "movie_id": movie_id
+            }
+
+        # Regular playlist - check if already in playlist
         existing = db.query(PlaylistItem).filter(
             PlaylistItem.playlist_id == playlist.id,
             PlaylistItem.movie_id == movie_id
@@ -3292,21 +3498,32 @@ async def get_movie_playlists(movie_id: int):
     """Get all playlists containing a specific movie"""
     db = SessionLocal()
     try:
+        # Get regular playlists from playlist_items (excluding "Want to Watch" since it's virtual)
         playlists = db.query(Playlist).join(
             PlaylistItem, Playlist.id == PlaylistItem.playlist_id
         ).filter(
-            PlaylistItem.movie_id == movie_id
+            PlaylistItem.movie_id == movie_id,
+            Playlist.name != "Want to Watch"  # Exclude since we handle it separately
         ).order_by(Playlist.is_system.desc(), Playlist.name.asc()).all()
+
+        result = [{"id": p.id, "name": p.name, "is_system": p.is_system} for p in playlists]
+
+        # Check if movie has want_to_watch status (virtual "Want to Watch" playlist)
+        movie_status = db.query(MovieStatus).filter(
+            MovieStatus.movie_id == movie_id,
+            MovieStatus.movieStatus == MovieStatusEnum.WANT_TO_WATCH.value
+        ).first()
+        
+        if movie_status:
+            # Get the "Want to Watch" playlist entry to include its ID
+            wtw_playlist = db.query(Playlist).filter(Playlist.name == "Want to Watch").first()
+            if wtw_playlist:
+                # Insert at the beginning (system playlists first)
+                result.insert(0, {"id": wtw_playlist.id, "name": wtw_playlist.name, "is_system": wtw_playlist.is_system})
 
         return {
             "movie_id": movie_id,
-            "playlists": [
-                {
-                    "id": p.id,
-                    "name": p.name,
-                    "is_system": p.is_system
-                } for p in playlists
-            ]
+            "playlists": result
         }
     finally:
         db.close()

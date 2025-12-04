@@ -1,7 +1,8 @@
 // Batch Search - Batch URL opener for movie searches
 
-let batchSearchQueue = [];
-let batchSearchCompleted = [];
+let batchSearchQueue = [];      // Movies to search for (don't have)
+let batchSearchOwned = [];      // Movies already in library
+let batchSearchCompleted = [];  // Movies that have been opened
 let batchSearchTotal = 0;
 
 function initBatchSearch() {
@@ -17,10 +18,11 @@ function initBatchSearch() {
         try {
             const state = JSON.parse(savedState);
             batchSearchQueue = state.queue || [];
+            batchSearchOwned = state.owned || [];
             batchSearchCompleted = state.completed || [];
             batchSearchTotal = state.total || 0;
 
-            if (batchSearchQueue.length > 0 || batchSearchCompleted.length > 0) {
+            if (batchSearchQueue.length > 0 || batchSearchCompleted.length > 0 || batchSearchOwned.length > 0) {
                 showQueuePhase();
                 updateQueueDisplay();
                 updateProgress();
@@ -34,13 +36,14 @@ function initBatchSearch() {
 function saveState() {
     const state = {
         queue: batchSearchQueue,
+        owned: batchSearchOwned,
         completed: batchSearchCompleted,
         total: batchSearchTotal
     };
     sessionStorage.setItem('batchSearchState', JSON.stringify(state));
 }
 
-function startBatchProcess() {
+async function startBatchProcess() {
     const hostInput = document.getElementById('batchHostInput');
     const host = hostInput.value.trim();
 
@@ -64,19 +67,60 @@ function startBatchProcess() {
 
     // Parse the list
     const lines = text.split('\n').filter(line => line.trim());
-    batchSearchQueue = lines.map(line => line.trim());
-    batchSearchCompleted = [];
-    batchSearchTotal = batchSearchQueue.length;
+    const movies = lines.map(line => line.trim());
 
-    if (batchSearchTotal === 0) {
+    if (movies.length === 0) {
         alert('No valid entries found');
         return;
     }
 
-    saveState();
-    showQueuePhase();
-    updateQueueDisplay();
-    updateProgress();
+    // Show loading state
+    const btn = document.getElementById('batchStartBtn');
+    btn.disabled = true;
+    btn.textContent = 'Checking library...';
+
+    try {
+        // Check which movies are already in library
+        const response = await fetch('/api/check-movies', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ movies })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'ok') {
+            batchSearchQueue = [];
+            batchSearchOwned = [];
+            batchSearchCompleted = [];
+
+            for (const result of data.results) {
+                if (result.found) {
+                    batchSearchOwned.push({
+                        input: result.input,
+                        match: result.match
+                    });
+                } else {
+                    batchSearchQueue.push(result.input);
+                }
+            }
+
+            batchSearchTotal = movies.length;
+            
+            saveState();
+            showQueuePhase();
+            updateQueueDisplay();
+            updateProgress();
+        } else {
+            alert('Failed to check movies: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error checking movies:', error);
+        alert('Failed to check movies: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Load List';
+    }
 }
 
 function showQueuePhase() {
@@ -90,8 +134,17 @@ function showInputPhase() {
 }
 
 function cleanMovieLine(line) {
+    let cleaned = line;
+    
+    // Find year (19xx or 20xx) and remove everything after it
+    const yearMatch = cleaned.match(/\b(19\d{2}|20\d{2})\b/);
+    if (yearMatch) {
+        const yearEnd = yearMatch.index + yearMatch[0].length;
+        cleaned = cleaned.substring(0, yearEnd);
+    }
+    
     // Remove possessive 's (e.g., "Schindler's" -> "Schindler")
-    let cleaned = line.replace(/'s\b/g, '');
+    cleaned = cleaned.replace(/'s\b/g, '');
 
     // Remove all quotes (single, double, curly quotes)
     cleaned = cleaned.replace(/['"'""`´]/g, '');
@@ -130,7 +183,7 @@ async function openBatchSearchTabs() {
     btn.disabled = true;
     btn.textContent = 'Opening...';
 
-    // Get up to 5 items to open
+    // Get up to 5 items to open (skip owned movies)
     const toOpen = batchSearchQueue.splice(0, 5);
     const urls = toOpen.map(movieLine => composeBatchUrl(host, movieLine));
 
@@ -170,11 +223,16 @@ async function openBatchSearchTabs() {
 
 function updateProgress() {
     const opened = batchSearchCompleted.length;
+    const owned = batchSearchOwned.length;
     const remaining = batchSearchQueue.length;
     const total = batchSearchTotal;
-    const percent = total > 0 ? Math.round((opened / total) * 100) : 0;
+    const percent = total > 0 ? Math.round(((opened + owned) / total) * 100) : 0;
 
-    document.getElementById('batchProgressText').textContent = `${opened} of ${total} opened`;
+    let progressText = `${opened} of ${total - owned} opened`;
+    if (owned > 0) {
+        progressText += ` (${owned} already owned)`;
+    }
+    document.getElementById('batchProgressText').textContent = progressText;
     document.getElementById('batchRemainingText').textContent = `${remaining} remaining`;
     document.getElementById('batchProgressFill').style.width = `${percent}%`;
 
@@ -197,19 +255,33 @@ function updateQueueDisplay() {
     const completedContainer = document.getElementById('batchCompletedItems');
     const completedSection = document.getElementById('batchCompletedSection');
 
+    // Build queue display with owned items shown differently
+    let queueHtml = '';
+    
+    // Show owned items first (in green)
+    if (batchSearchOwned.length > 0) {
+        queueHtml += batchSearchOwned.map(item => `
+            <div class="batch-queue-item owned" title="Already in library: ${escapeHtml(item.match?.name || '')}">
+                ✓ ${escapeHtml(item.input)}
+            </div>
+        `).join('');
+    }
+
     // Show up to 15 items in queue
     const queuePreview = batchSearchQueue.slice(0, 15);
-    queueContainer.innerHTML = queuePreview.map((item, i) => `
+    queueHtml += queuePreview.map((item, i) => `
         <div class="batch-queue-item ${i < 5 ? 'next-batch' : ''}">${escapeHtml(item)}</div>
     `).join('');
 
     if (batchSearchQueue.length > 15) {
-        queueContainer.innerHTML += `<div class="batch-queue-item more">...and ${batchSearchQueue.length - 15} more</div>`;
+        queueHtml += `<div class="batch-queue-item more">...and ${batchSearchQueue.length - 15} more</div>`;
     }
 
-    if (batchSearchQueue.length === 0) {
-        queueContainer.innerHTML = '<div class="batch-queue-empty">Queue empty!</div>';
+    if (batchSearchQueue.length === 0 && batchSearchOwned.length === 0) {
+        queueHtml = '<div class="batch-queue-empty">Queue empty!</div>';
     }
+
+    queueContainer.innerHTML = queueHtml;
 
     // Show all completed items (in order they were opened)
     if (batchSearchCompleted.length > 0) {
@@ -224,6 +296,7 @@ function updateQueueDisplay() {
 
 function resetBatchQueue() {
     batchSearchQueue = [];
+    batchSearchOwned = [];
     batchSearchCompleted = [];
     batchSearchTotal = 0;
     sessionStorage.removeItem('batchSearchState');

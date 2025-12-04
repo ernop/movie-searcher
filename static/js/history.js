@@ -1,4 +1,52 @@
 // History functions
+
+/**
+ * Format seconds into a human-readable time string (e.g., "1h 34m 10s")
+ */
+function formatPlaybackTime(seconds) {
+    if (!seconds || seconds <= 0) return null;
+    
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+        return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+    } else {
+        return `${secs}s`;
+    }
+}
+
+/**
+ * Resume playback of a movie from a specific timestamp
+ */
+async function resumePlayback(movieId, startTime, movieName) {
+    const formattedTime = formatPlaybackTime(startTime);
+    console.log(`Resuming ${movieName} from ${formattedTime} (${startTime}s)`);
+    
+    try {
+        const response = await fetch('/api/launch', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                movie_id: movieId,
+                start_time: startTime,
+                close_existing: true
+            })
+        });
+        
+        if (!response.ok) {
+            const data = await response.json();
+            alert(`Failed to resume: ${data.detail || 'Unknown error'}`);
+        }
+    } catch (error) {
+        console.error('Resume error:', error);
+        alert(`Error resuming playback: ${error.message}`);
+    }
+}
+
 async function loadHistory() {
     const historyList = document.getElementById('historyList');
     if (!historyList) return;
@@ -25,6 +73,7 @@ async function loadHistory() {
         for (const launch of launches) {
             const movie = launch.movie;
             const timestamp = launch.timestamp;
+            const stoppedAt = launch.stopped_at_seconds;
             
             // Format timestamp with day of week
             let formattedTime = 'Unknown time';
@@ -39,18 +88,39 @@ async function loadHistory() {
                 }
             }
             
-        // Render movie card with a small timestamp below
-        const hasId = movie && movie.id != null && !Number.isNaN(movie.id);
-        const cardHtml = createMovieCard(movie);
-        html += `
-            <div class="history-item">
-                <div class="history-movie-card"${hasId ? '' : ' style="pointer-events: none;"'}>
-                    ${cardHtml}
+            // Format resume time if available
+            const resumeTime = formatPlaybackTime(stoppedAt);
+            const hasResumePoint = resumeTime && stoppedAt > 0; // Show for any captured position
+            
+            // Render movie card with timestamp and resume option
+            const hasId = movie && movie.id != null && !Number.isNaN(movie.id);
+            const cardHtml = createMovieCard(movie);
+            
+            // Build resume button HTML if we have a resume point
+            let resumeHtml = '';
+            if (hasResumePoint && hasId) {
+                const movieName = movie.name || 'this movie';
+                const escapedName = escapeHtml(movieName).replace(/'/g, "\\'");
+                resumeHtml = `
+                    <div class="history-resume">
+                        <button class="resume-button" onclick="event.stopPropagation(); resumePlayback(${movie.id}, ${stoppedAt}, '${escapedName}')">
+                            ▶ Resume from ${resumeTime}
+                        </button>
+                        <span class="resume-hint">Pick up where you left off</span>
+                    </div>
+                `;
+            }
+            
+            html += `
+                <div class="history-item${hasResumePoint ? ' has-resume' : ''}">
+                    <div class="history-movie-card"${hasId ? '' : ' style="pointer-events: none;"'}>
+                        ${cardHtml}
+                    </div>
+                    ${resumeHtml}
+                    <div class="history-timestamp">${escapeHtml(formattedTime)}</div>
+                    ${hasId ? '' : '<div class="history-timestamp" style="color:#ff9a9a;">Missing movie id; re-index to enable navigation</div>'}
                 </div>
-                <div class="history-timestamp">${escapeHtml(formattedTime)}</div>
-                ${hasId ? '' : '<div class="history-timestamp" style="color:#ff9a9a;">Missing movie id; re-index to enable navigation</div>'}
-            </div>
-        `;
+            `;
         }
         
         historyList.innerHTML = html;

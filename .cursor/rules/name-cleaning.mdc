@@ -3,3 +3,21 @@
 - Name cleaning must NEVER rename, move, modify, or delete files on disk
 - Only filter entries from the database and/or modify how they are displayed to users
 - Files on disk must remain untouched - all changes are database/display-only
+
+## Test Data Anonymization
+
+When adding or modifying test cases in `scripts/name_cleaning_tester.py`:
+
+- **ALWAYS randomize/anonymize** movie names, show names, episode titles, years, and release group names
+- **NEVER use real** movie titles, TV show names, or recognizable release group names in checked-in code
+- Use fictional/silly names that preserve the test pattern (e.g., "Penguin With Hat" instead of a real film)
+- Vary the year (use any plausible year, not the real release year)
+- Use generic group names like "XYZ", "ABC", "TRIAD" (not real scene groups)
+
+Good examples:
+- "Moonwaffles.2003.1080p.BluRay.x264.YIFY" (fictional movie)
+- "The Noodle Dimension S02E24" (fictional show)
+- "xyz-pwh1080.mkv" (fictional release code)
+
+Bad examples:
+- Using actual movie names, real TV show titles, or real release group names
