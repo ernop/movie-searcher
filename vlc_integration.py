@@ -963,8 +963,7 @@ def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1,
 					rect_applied = True
 				else:
 					logger.warning("Failed to restore window position")
-				# Give it a tiny moment to apply
-				time.sleep(0.05)
+				# No sleep needed - SetWindowPos is synchronous
 				
 			last_result = _bring_window_to_foreground(hwnd)
 			if last_result:
