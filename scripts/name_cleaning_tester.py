@@ -143,6 +143,31 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_name": "Seinfeld S08E16 The Pothole",
         "expected_year": None,
     },
+    {
+        "input": r"D:\movies\www.MovieRulz.lt - The Matchmaker's Playbook (2018) 720p HDRip [.Lt].mkv",
+        "expected_name": "The Matchmaker's Playbook",
+        "expected_year": 2018,
+    },
+    {
+        "input": r"D:\movies\[ www.UsaBit.com ] - The Million Dollar Hotel 2000 LIMITED 720p BRRip x264-PLAYNOW.mp4",
+        "expected_name": "The Million Dollar Hotel",
+        "expected_year": 2000,
+    },
+    {
+        "input": r"D:\movies\One Flew Over The Cuckoo's Nest (1975)\One.Flew.Over.The.Cuckoo's.Nest.720p.BrRip.x264.YIFY.mp4",
+        "expected_name": "One Flew Over The Cuckoo's Nest",
+        "expected_year": 1975,
+    },
+    {
+        "input": r"D:\movies\The Fruit is Ripe 3 (HK 1999 Cert. III\b.mpeg",
+        "expected_name": "The Fruit is Ripe 3",
+        "expected_year": 1999,
+    },
+    {
+        "input": r"D:\movies\Human Giant - Seasons 1-2 + Extras\Human Giant - Season 1\Human Giant - S01E03 - Lil 9-11 [Demon].avi",
+        "expected_name": "Human Giant S01E03 Lil 9-11",
+        "expected_year": None,
+    },
     # {
     #     "input":""
     # }

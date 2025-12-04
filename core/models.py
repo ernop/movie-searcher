@@ -70,3 +70,7 @@ class PlaylistAddMovieRequest(BaseModel):
 class MovieListUpdateRequest(BaseModel):
     title: Optional[str] = None
     is_favorite: Optional[bool] = None
+
+
+class OpenUrlsRequest(BaseModel):
+    urls: list[str]

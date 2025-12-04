@@ -289,14 +289,27 @@ def clean_movie_name(name, patterns=None):
         parent_folder = path_obj.parent.name if path_obj.parent.name else None
         # Use filename for initial cleaning
         name = path_obj.stem
+        
+        # If filename is very short (1-2 chars), use parent folder instead as it likely contains the real title
+        # e.g., "The Fruit is Ripe 3 (HK 1999 Cert. III\b.mpeg" -> use parent folder
+        if len(name) <= 2 and parent_folder and parent_folder.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', '_done', 'done']:
+            name = parent_folder
     else:
         # Just a filename, use as-is
         name = name
     
-    # STEP 0.5: Remove prefix markers like ".Com_" and everything before them
-    # Pattern matches ".Com_" and removes everything before and including it
-    # This handles cases like "720pMkv.Com_The.Baader.Meinhof.Complex" -> "The Baader Meinhof Complex"
+    # STEP 0.5: Remove website prefixes and markers
+    
+    # First, handle bracketed website prefixes like "[ www.UsaBit.com ] - "
+    # These must be removed BEFORE other patterns to avoid partial matches
+    name = re.sub(r'^\s*\[\s*www\.[^\]]+\]\s*-\s*', '', name, flags=re.IGNORECASE)
+    
+    # Handle non-bracketed website prefixes like "www.MovieRulz.lt - "
+    name = re.sub(r'^\s*www\.[^\s]+\s+-\s*', '', name, flags=re.IGNORECASE)
+    
+    # Handle ".Com_" markers like "720pMkv.Com_The.Baader.Meinhof.Complex" -> "The Baader Meinhof Complex"
     name = re.sub(r'^.*?\.Com[._\s]+', '', name, flags=re.IGNORECASE)
+    
     name = name.strip()
     
     # STEP 1: Normalize separators and trivial punctuation
@@ -314,7 +327,7 @@ def clean_movie_name(name, patterns=None):
 
     # Helper: forbidden markers to strip or detect inside brackets
     forbidden_markers = [
-        r'rarbg', r'h264', r'vppv', r'yts', r'evo', r'etrg', r'fgp', r'ano',
+        r'rarbg', r'h264', r'vppv', r'yts', r'yify', r'evo', r'etrg', r'fgp', r'ano',
         r'proper', r'repack', r'rerip', r'sample',
         r'mulvacoded', r'\bsubs?\b',  # added mulvacoded and subs
         r'webrip', r'web[-\s]*dl', r'webdl', r'hdtv', r'bluray', r'blu[-\s]*ray',
@@ -368,7 +381,7 @@ def clean_movie_name(name, patterns=None):
         r'\b(?:x264|x265|hevc|h\.?\s*264|h\.?\s*265|avc|xvid|divx)\b',
         r'\b(?:aac\d*(?:\s*\d+)?|ac3|dts(?:-?hd)?|truehd|atmos|mp3|eac3)\b',  # Handle AAC, AAC2, AAC2 0, etc.
         r'\b(?:5\.1|7\.1)\b',
-        r'\b(?:rarbg|vppv|yts|evo|etrg|fgp|ano|sujaidr|amzn|subs)\b',
+        r'\b(?:rarbg|vppv|yts|yify|evo|etrg|fgp|ano|sujaidr|amzn|subs)\b',
         r'\b(?:mulvacoded|en-sub|eng-sub|english-sub|ime)\b',  # Release groups/tags
         r'\b(?:h264|h\d{3})\b',  # Handle H264, H265, etc.
     ]
@@ -750,7 +763,14 @@ def clean_movie_name(name, patterns=None):
             elif word.lower() in minor_words and not is_first and not is_last:
                 title_cased_words.append(word.lower())
             else:
-                title_cased_words.append(word.title())
+                # Use title() but fix apostrophe handling - Python's title() 
+                # incorrectly capitalizes after apostrophes (Cuckoo'S instead of Cuckoo's)
+                titled = word.title()
+                # Fix: lowercase the letter after apostrophe only for possessives/contractions
+                # (where there are multiple chars before the apostrophe, like "Cuckoo's")
+                # But preserve capitalization for French elisions (like "L'Avare" where L' is an article)
+                titled = re.sub(r"(?<=\w{2})'([A-Z])", lambda m: "'" + m.group(1).lower(), titled)
+                title_cased_words.append(titled)
         
         return ' '.join(title_cased_words)
     
@@ -760,9 +780,11 @@ def clean_movie_name(name, patterns=None):
     if season is None and episode is None:
         # Check if name has title-case minor words in the middle that should be lowercase
         # (e.g., "About", "Her" in "2 or 3 Things I Know About Her")
+        # NOTE: "the" is excluded from normalization because it often refers to proper nouns in movie titles
+        # (e.g., "One Flew Over The Cuckoo's Nest" where "The Cuckoo's Nest" is a proper noun)
         words = name.split()
         minor_words_set = {'a', 'an', 'and', 'as', 'at', 'about', 'but', 'by', 'for', 'from', 'her', 'him', 'his', 'in', 
-                          'into', 'of', 'on', 'or', 'the', 'to', 'with'}
+                          'into', 'of', 'on', 'or', 'to', 'with'}
         always_lowercase_set = {'her', 'him', 'his'}
         # Normalize incorrectly cased minor words to lowercase first
         # But preserve capitalization for words after dashes (they're start of new phrases)
@@ -854,19 +876,15 @@ def clean_movie_name(name, patterns=None):
                 # Only remove if they're clearly fragments (not if they're the leading number we want to keep)
                 if not leading_num:
                     # Remove standalone 2-3 digit numbers that are likely fragments (but preserve multi-digit episode numbers)
-                    episode_title_cleaned = re.sub(r'\b\d{2,3}\b(?=\s|$)', ' ', episode_title_cleaned)
+                    # But preserve numbers that are part of hyphenated sequences like "9-11"
+                    episode_title_cleaned = re.sub(r'(?<![0-9\-])\b\d{2,3}\b(?!\-?\d)(?=\s|$)', ' ', episode_title_cleaned)
                 # Clean up spaces
                 episode_title_cleaned = re.sub(r'\s+', ' ', episode_title_cleaned).strip()
 
-                # Remove trailing brackets/parentheses (empty or containing forbidden markers)
-                bracket_pattern = r'[\(\[\{<][^)\]}>]*[\)\]\}>]\s*$'
-                m = re.search(bracket_pattern, episode_title_cleaned)
-                if m:
-                    bracket = m.group(0).strip()
-                    inner = re.sub(r'^[\(\[\{<]|[\)\]\}>]$', '', bracket)
-                    # If empty or forbidden, remove
-                    if not inner.strip() or re.search(forbidden_union, inner, flags=re.IGNORECASE):
-                        episode_title_cleaned = re.sub(re.escape(bracket) + r'\s*$', '', episode_title_cleaned).strip()
+                # Remove trailing brackets/parentheses - for episode titles, these are almost always
+                # release group tags like [Demon], [YIFY], etc. and should be removed
+                bracket_pattern = r'\s*[\(\[\{<][^)\]}>]*[\)\]\}>]\s*$'
+                episode_title_cleaned = re.sub(bracket_pattern, '', episode_title_cleaned).strip()
 
                 # Clean up stray dashes
                 episode_title_cleaned = re.sub(r'[–—\-]{2,}', ' ', episode_title_cleaned)

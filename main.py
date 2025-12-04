@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from typing import List, Optional, Literal
 import os
+import sys
 import json
 import subprocess
 import re
@@ -468,7 +469,7 @@ from core.models import (
     MovieInfo, SearchRequest, LaunchRequest, ChangeStatusRequest,
     RatingRequest, ConfigRequest, FolderRequest, CleanNameTestRequest,
     ScreenshotsIntervalRequest, AiSearchRequest, PlaylistCreateRequest,
-    PlaylistAddMovieRequest, MovieListUpdateRequest
+    PlaylistAddMovieRequest, MovieListUpdateRequest, OpenUrlsRequest
 )
 
 # Include VLC optimization routes
@@ -1431,6 +1432,35 @@ async def launch_movie(request: LaunchRequest):
             }
         )
 
+
+@app.post("/api/open-urls")
+async def open_urls_in_browser(request: OpenUrlsRequest):
+    """Open URLs in the default browser (bypasses popup blockers)"""
+    import webbrowser
+    import time
+    
+    opened = []
+    failed = []
+    
+    for url in request.urls:
+        try:
+            # Small delay between opens to avoid overwhelming the browser
+            if opened:
+                time.sleep(0.15)
+            webbrowser.open(url, new=2)  # new=2 opens in a new tab if possible
+            opened.append(url)
+        except Exception as e:
+            logger.error(f"Failed to open URL {url}: {e}")
+            failed.append({"url": url, "error": str(e)})
+    
+    return {
+        "status": "ok",
+        "opened": len(opened),
+        "failed": len(failed),
+        "failed_urls": failed
+    }
+
+
 @app.get("/api/history")
 async def get_history():
     """Get search and launch history"""
@@ -2259,6 +2289,67 @@ async def get_stats():
             "watched_count": watched_count,
             "indexed_paths": indexed_paths,
             "movies_folder": movies_folder or ""
+        }
+    finally:
+        db.close()
+
+@app.get("/api/stats/launches")
+async def get_launch_stats(limit: int = 50):
+    """Get recent VLC launch performance statistics"""
+    from models import Stat
+    db = SessionLocal()
+    try:
+        # Get recent launch time stats
+        stats = db.query(Stat).filter(
+            Stat.stat_type == 'vlc_launch_time_ms'
+        ).order_by(Stat.created.desc()).limit(limit).all()
+        
+        launch_times = []
+        for stat in stats:
+            extra = {}
+            if stat.extra_data:
+                try:
+                    extra = json.loads(stat.extra_data)
+                except:
+                    pass
+            
+            # Get timing breakdown if available
+            timing = extra.get("timing", {})
+            
+            launch_times.append({
+                "id": stat.id,
+                "time_ms": round(stat.value, 1),
+                "movie_id": stat.movie_id,
+                "movie_name": extra.get("movie_name", "Unknown"),
+                "had_subtitle": extra.get("had_subtitle", False),
+                "created": stat.created.isoformat() if stat.created else None,
+                "timing": {
+                    "prep": round(timing.get("prep", 0), 1),
+                    "close_existing": round(timing.get("close_existing", 0), 1),
+                    "popen": round(timing.get("popen", 0), 1),
+                    "health_check": round(timing.get("health_check", 0), 1),
+                    "window_focus": round(timing.get("window_focus", 0), 1),
+                }
+            })
+        
+        # Calculate summary stats
+        if launch_times:
+            times = [lt["time_ms"] for lt in launch_times]
+            avg_time = sum(times) / len(times)
+            min_time = min(times)
+            max_time = max(times)
+        else:
+            avg_time = min_time = max_time = 0
+        
+        return {
+            "launches": launch_times,
+            "summary": {
+                "count": len(launch_times),
+                "avg_ms": round(avg_time, 1),
+                "min_ms": round(min_time, 1),
+                "max_ms": round(max_time, 1),
+                "target_ms": 50  # Our optimization goal
+            }
         }
     finally:
         db.close()

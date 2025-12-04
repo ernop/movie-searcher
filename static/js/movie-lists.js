@@ -240,8 +240,13 @@ function renderMovieListDetail(data) {
     
     // Missing movies section
     if (data.missing_movies && data.missing_movies.length > 0) {
+        // Store missing movies for copy button
+        window._currentMissingMovies = data.missing_movies;
         html += `
-            <div class="section-title" style="margin-top: 30px;">Not in Your Library (${data.missing_movies.length})</div>
+            <div class="section-title-row" style="margin-top: 30px;">
+                <div class="section-title">Not in Your Library (${data.missing_movies.length})</div>
+                <button class="btn btn-small btn-copy-names" onclick="copyMissingMovieNames()" title="Copy all titles to clipboard">📋 Copy Names</button>
+            </div>
             <div class="ai-missing-list">
         `;
         data.missing_movies.forEach(movie => {

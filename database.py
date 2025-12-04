@@ -15,7 +15,7 @@ from models import (
     Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, 
     IndexedPath, Config, Screenshot, SchemaVersion, MovieAudio,
     Playlist, PlaylistItem, ExternalMovie, Person, MovieCredit,
-    MovieList, MovieListItem,
+    MovieList, MovieListItem, Stat,
     CURRENT_SCHEMA_VERSION
 )
 
@@ -720,6 +720,28 @@ def migrate_db_schema():
             
             set_schema_version(13, "Added movie_lists and movie_list_items tables for AI search results")
             current_version = 13
+        
+        if current_version < 14:
+            logger.info("Migrating to schema version 14: Add stats table for performance tracking")
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS stats (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        stat_type VARCHAR NOT NULL,
+                        value FLOAT NOT NULL,
+                        movie_id INTEGER,
+                        extra_data TEXT,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE SET NULL
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_stats_stat_type ON stats (stat_type)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_stats_movie_id ON stats (movie_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_stats_created ON stats (created)"))
+                logger.info("Migration complete: created stats table")
+            
+            set_schema_version(14, "Added stats table for performance tracking")
+            current_version = 14
         
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:

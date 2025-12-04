@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Movie Searcher</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/css/style.css?v=6">
+    <link rel="stylesheet" href="/css/style.css?v=9">
 </head>
 
 <body>
@@ -30,12 +30,74 @@
                 </div>
                 <a href="#/history" class="nav-link" id="navHistory">History</a>
                 <a href="#/lists" class="nav-link" id="navLists">Lists</a>
+                <a href="#/batch-search" class="nav-link" id="navBatchSearch">Search</a>
             </div>
             <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
                 <div id="statusMessage"></div>
                 <div id="currentlyPlaying" class="currently-playing">nothing playing</div>
                 <div id="serverUptime" class="server-uptime" title="Server uptime">up 0m</div>
+                <a href="#/stats" class="nav-link" id="navStats">Stats</a>
                 <a href="#/setup" class="nav-link" id="navSetup">Setup</a>
+            </div>
+        </div>
+
+        <!-- Batch Search Page -->
+        <div class="page" id="pageBatchSearch">
+            <h1>Batch Search</h1>
+
+            <div class="batch-search-container">
+                <!-- Host config (always visible) -->
+                <div class="batch-search-config">
+                    <label for="batchHostInput">Host (without https://)</label>
+                    <input type="text" id="batchHostInput" placeholder="example.com" autocomplete="off">
+                </div>
+
+                <!-- Phase 1: Input mode -->
+                <div class="batch-input-phase" id="batchInputPhase">
+                    <div class="batch-search-input">
+                        <label for="batchMovieList">Paste your movie list (one per line: Title Year)</label>
+                        <textarea id="batchMovieList"
+                            placeholder="Splendor in the Grass 1961&#10;Casablanca 1942&#10;The Godfather 1972&#10;Citizen Kane 1941&#10;Psycho 1960&#10;..."></textarea>
+                    </div>
+                    <button class="btn btn-success" id="batchStartBtn" onclick="startBatchProcess()">Load List</button>
+                </div>
+
+                <!-- Phase 2: Queue mode -->
+                <div class="batch-queue-phase" id="batchQueuePhase" style="display: none;">
+                    <!-- Popup warning -->
+                    <div class="batch-popup-warning" id="batchPopupWarning" style="display: none;"></div>
+
+                    <!-- Progress bar -->
+                    <div class="batch-progress">
+                        <div class="batch-progress-info">
+                            <span id="batchProgressText">0 of 0 opened</span>
+                            <span id="batchRemainingText">0 remaining</span>
+                        </div>
+                        <div class="batch-progress-bar">
+                            <div class="batch-progress-fill" id="batchProgressFill" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- Main action button -->
+                    <div class="batch-action">
+                        <button class="btn batch-open-btn" id="batchOpenBtn" onclick="openBatchSearchTabs()">
+                            Open Next 5
+                        </button>
+                        <button class="btn btn-secondary" onclick="resetBatchQueue()">Start Over</button>
+                    </div>
+
+                    <!-- Queue display -->
+                    <div class="batch-queue-display">
+                        <div class="batch-queue-section">
+                            <div class="batch-queue-label">Up Next</div>
+                            <div class="batch-queue-items" id="batchQueueItems"></div>
+                        </div>
+                        <div class="batch-completed-section" id="batchCompletedSection" style="display: none;">
+                            <div class="batch-queue-label">Opened</div>
+                            <div class="batch-completed-items" id="batchCompletedItems"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -85,7 +147,8 @@
                     <button class="btn" id="aiSearchButton" onclick="performAiSearch()">Ask AI</button>
                 </div>
                 <div id="aiCostDisplay"
-                    style="font-size: 0.9em; color: #888; min-height: 1.2em; margin-top: 6px; width: 100%; display: flex; justify-content: flex-end; text-align: right;"></div>
+                    style="font-size: 0.9em; color: #888; min-height: 1.2em; margin-top: 6px; width: 100%; display: flex; justify-content: flex-end; text-align: right;">
+                </div>
                 <div id="aiSearchStatus" style="margin-top: 10px; color: #888; min-height: 1.2em;"></div>
                 <div id="movieListSuggestions" class="movie-list-suggestions" style="display: none;"></div>
             </div>
@@ -137,8 +200,7 @@
             <div class="year-filter-container" id="yearFilterContainer">
                 <span class="year-filter-label">Year:</span>
                 <div class="year-input-wrapper">
-                    <input type="text" id="yearInput" placeholder="Type year..." autocomplete="off"
-                        class="year-input">
+                    <input type="text" id="yearInput" placeholder="Type year..." autocomplete="off" class="year-input">
                     <div class="year-autocomplete" id="yearAutocomplete"></div>
                 </div>
                 <div class="year-chip-container" id="yearChipContainer"></div>
@@ -206,12 +268,12 @@
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <h1>📋 Movie Lists</h1>
             </div>
-            
+
             <!-- Overview of all lists -->
             <div id="movieListsOverview">
                 <div class="loading">Loading movie lists...</div>
             </div>
-            
+
             <!-- Detail view for single list -->
             <div id="movieListDetailView" style="display: none;">
             </div>
@@ -228,6 +290,64 @@
 
             <div id="duplicateMoviesList">
                 <div class="loading">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Stats Page -->
+        <div class="page" id="pageStats">
+            <h1>Performance Stats</h1>
+
+            <div class="setup-section" style="margin-bottom: 20px;">
+                <h3>VLC Launch Times</h3>
+                <p>Track how fast movies launch. Target: <strong>50ms</strong> or less for instant playback.</p>
+
+                <div id="launchStatsSummary"
+                    style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0;">
+                    <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 24px; font-weight: bold; color: #4a9eff;" id="statsAvgTime">--</div>
+                        <div style="color: #888; font-size: 12px;">Average (ms)</div>
+                    </div>
+                    <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 24px; font-weight: bold; color: #4caf50;" id="statsMinTime">--</div>
+                        <div style="color: #888; font-size: 12px;">Fastest (ms)</div>
+                    </div>
+                    <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 24px; font-weight: bold; color: #ff9800;" id="statsMaxTime">--</div>
+                        <div style="color: #888; font-size: 12px;">Slowest (ms)</div>
+                    </div>
+                    <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 24px; font-weight: bold; color: #9c27b0;" id="statsCount">--</div>
+                        <div style="color: #888; font-size: 12px;">Total Launches</div>
+                    </div>
+                </div>
+
+                <button class="btn btn-secondary" onclick="loadLaunchStats()">Refresh Stats</button>
+            </div>
+
+            <div class="setup-section" style="margin-bottom: 20px;">
+                <h3>VLC Optimization Flags</h3>
+                <p>Test which VLC command-line flags work on your system. Safe flags will be used automatically to speed
+                    up launches.</p>
+
+                <div id="vlcFlagsStatus"
+                    style="margin: 15px 0; padding: 15px; background: #1a1a1a; border-radius: 8px;">
+                    <div class="loading">Loading flag status...</div>
+                </div>
+
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn" onclick="testVlcFlags()" id="testFlagsBtn">🧪 Test All Flags</button>
+                    <button class="btn btn-secondary" onclick="testHwAcceleration()" id="testHwBtn">🎮 Test Hardware
+                        Accel</button>
+                    <button class="btn btn-secondary" onclick="clearVlcFlags()">🗑️ Clear & Reset</button>
+                    <button class="btn btn-secondary" onclick="loadVlcFlagsStatus()">🔄 Refresh</button>
+                </div>
+            </div>
+
+            <div class="setup-section">
+                <h3>Recent Launches</h3>
+                <div id="launchStatsTable" style="max-height: 400px; overflow-y: auto;">
+                    <div class="loading">Loading launch stats...</div>
+                </div>
             </div>
         </div>
 
@@ -248,7 +368,8 @@
             <!-- System Status -->
             <div class="setup-section" id="systemStatusSection" style="margin-bottom: 20px;">
                 <h3>System Status</h3>
-                <div id="systemStatus" style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 10px;">
+                <div id="systemStatus"
+                    style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 10px;">
                     <div class="loading">Checking system status...</div>
                 </div>
                 <button class="btn btn-secondary" onclick="recheckSystemStatus()">Re-check System Status</button>
@@ -267,12 +388,14 @@
 
             <div class="setup-section">
                 <h3>Local Target Folder</h3>
-                <p>Configure a local folder where movies can be copied for offline access. Use "Copy to Local" in a movie's menu to copy it here.</p>
+                <p>Configure a local folder where movies can be copied for offline access. Use "Copy to Local" in a
+                    movie's menu to copy it here.</p>
                 <div class="folder-info" style="margin-bottom: 15px;">
                     <span>Current folder:</span>
                     <span class="folder-path" id="setupLocalTargetFolder">Not set</span>
                 </div>
-                <button class="btn" id="setupChangeLocalTargetBtn" onclick="showLocalTargetDialog()">Change Local Target Folder</button>
+                <button class="btn" id="setupChangeLocalTargetBtn" onclick="showLocalTargetDialog()">Change Local Target
+                    Folder</button>
             </div>
 
             <div class="setup-section">
@@ -302,7 +425,8 @@
                         Show "All Movies" tab in navigation
                     </label>
                     <div class="setup-option-description">
-                        When enabled, displays the "All Movies" tab which shows a simple alphabetical list of all movies.
+                        When enabled, displays the "All Movies" tab which shows a simple alphabetical list of all
+                        movies.
                         Useful for browsing when you just want to see everything at once.
                     </div>
                 </div>
@@ -333,7 +457,8 @@
                 </div>
                 <div class="setup-option" style="margin-top: 15px;">
                     <label>
-                        <input type="checkbox" id="setupVlcHardwareAccel" onchange="saveVlcHardwareAccelSetting(this.checked)">
+                        <input type="checkbox" id="setupVlcHardwareAccel"
+                            onchange="saveVlcHardwareAccelSetting(this.checked)">
                         Enable hardware acceleration (experimental)
                     </label>
                     <div class="setup-option-description">
@@ -346,26 +471,30 @@
             <div class="setup-section">
                 <h3>VLC Fast Startup Optimization</h3>
                 <p>Optimize VLC for faster time-to-first-frame when playing movies.</p>
-                
-                <div id="vlcOptimizationStatus" style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 15px;">
+
+                <div id="vlcOptimizationStatus"
+                    style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 15px;">
                     <div class="loading">Checking VLC optimization status...</div>
                 </div>
-                
+
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button class="btn btn-success" id="btnApplyVlcOptimization" onclick="applyVlcOptimization()" style="display: none;">
+                    <button class="btn btn-success" id="btnApplyVlcOptimization" onclick="applyVlcOptimization()"
+                        style="display: none;">
                         Apply System-Wide Optimization
                     </button>
-                    <button class="btn btn-secondary" id="btnRemoveVlcOptimization" onclick="removeVlcOptimization()" style="display: none;">
+                    <button class="btn btn-secondary" id="btnRemoveVlcOptimization" onclick="removeVlcOptimization()"
+                        style="display: none;">
                         Restore Original Settings
                     </button>
                     <button class="btn btn-secondary" onclick="loadVlcOptimizationStatus()">
                         Refresh Status
                     </button>
                 </div>
-                
+
                 <details style="margin-top: 15px; color: #999;">
                     <summary style="cursor: pointer; color: #aaa;">What does this do?</summary>
-                    <div style="margin-top: 10px; padding: 10px; background: #1a1a1a; border-radius: 6px; font-size: 13px;">
+                    <div
+                        style="margin-top: 10px; padding: 10px; background: #1a1a1a; border-radius: 6px; font-size: 13px;">
                         <p style="margin-bottom: 10px;"><strong>Command-line optimizations (always active):</strong></p>
                         <ul style="margin-left: 20px; margin-bottom: 15px;">
                             <li>Reduced file caching (1200ms → 300ms)</li>
@@ -374,8 +503,11 @@
                             <li>Disabled auto-preparsing</li>
                         </ul>
                         <p style="margin-bottom: 10px;"><strong>System-wide optimization (optional):</strong></p>
-                        <p>Modifies VLC's config file (vlcrc) to apply optimizations to ALL VLC usage. Creates a backup first. These settings affect VLC even when launched outside of Movie Searcher.</p>
-                        <p style="margin-top: 10px; color: #f0ad4e;"><strong>Note:</strong> If VLC startup is still slow, check if your movie drive is an HDD that may need spin-up time, or if antivirus is scanning files.</p>
+                        <p>Modifies VLC's config file (vlcrc) to apply optimizations to ALL VLC usage. Creates a backup
+                            first. These settings affect VLC even when launched outside of Movie Searcher.</p>
+                        <p style="margin-top: 10px; color: #f0ad4e;"><strong>Note:</strong> If VLC startup is still
+                            slow, check if your movie drive is an HDD that may need spin-up time, or if antivirus is
+                            scanning files.</p>
                     </div>
                 </details>
             </div>
@@ -410,14 +542,16 @@
 
         <div class="folder-dialog" id="folderDialog">
             <h3>Select Movies Folder</h3>
-            <p style="margin-bottom: 10px; color: #999; font-size: 13px;">Enter the <strong>full absolute path</strong> to your movies folder:</p>
+            <p style="margin-bottom: 10px; color: #999; font-size: 13px;">Enter the <strong>full absolute path</strong>
+                to your movies folder:</p>
             <div style="display: flex; gap: 8px; margin-bottom: 10px;">
                 <input type="text" id="folderPathInput" placeholder="D:\movies or C:\Movies\MyCollection"
                     style="flex: 1; margin-bottom: 0;" autofocus>
                 <button class="btn btn-secondary" onclick="browseFolder()" style="white-space: nowrap;">Browse</button>
             </div>
             <p style="margin-bottom: 15px; color: #777; font-size: 12px;">
-                <strong>Required:</strong> Path must be absolute (start with drive letter like <code>D:\</code> or <code>C:\</code>).<br>
+                <strong>Required:</strong> Path must be absolute (start with drive letter like <code>D:\</code> or
+                <code>C:\</code>).<br>
                 You can use forward slashes (/) or backslashes (\) - they will be converted automatically.
             </p>
             <div class="dialog-buttons">
@@ -428,14 +562,17 @@
 
         <div class="folder-dialog" id="localTargetDialog" style="display: none;">
             <h3>Select Local Target Folder</h3>
-            <p style="margin-bottom: 10px; color: #999; font-size: 13px;">Enter the <strong>full absolute path</strong> where you want movies copied to:</p>
+            <p style="margin-bottom: 10px; color: #999; font-size: 13px;">Enter the <strong>full absolute path</strong>
+                where you want movies copied to:</p>
             <div style="display: flex; gap: 8px; margin-bottom: 10px;">
                 <input type="text" id="localTargetPathInput" placeholder="C:\LocalMovies or D:\Offline\Movies"
                     style="flex: 1; margin-bottom: 0;" autofocus>
-                <button class="btn btn-secondary" onclick="browseLocalTargetFolder()" style="white-space: nowrap;">Browse</button>
+                <button class="btn btn-secondary" onclick="browseLocalTargetFolder()"
+                    style="white-space: nowrap;">Browse</button>
             </div>
             <p style="margin-bottom: 15px; color: #777; font-size: 12px;">
-                <strong>Required:</strong> Path must be absolute (start with drive letter like <code>D:\</code> or <code>C:\</code>).<br>
+                <strong>Required:</strong> Path must be absolute (start with drive letter like <code>D:\</code> or
+                <code>C:\</code>).<br>
                 The folder will be created if it doesn't exist.
             </p>
             <div class="dialog-buttons">
@@ -445,16 +582,20 @@
         </div>
 
         <!-- Copy Progress Toast -->
-        <div id="copyProgressToast" style="display: none; position: fixed; bottom: 20px; right: 20px; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; padding: 16px 20px; min-width: 300px; max-width: 400px; z-index: 10001; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+        <div id="copyProgressToast"
+            style="display: none; position: fixed; bottom: 20px; right: 20px; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; padding: 16px 20px; min-width: 300px; max-width: 400px; z-index: 10001; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <span style="font-weight: 600; color: #fff;" id="copyProgressTitle">Copying Movie</span>
-                <button onclick="hideCopyProgress()" style="background: none; border: none; color: #999; cursor: pointer; font-size: 18px; line-height: 1;">&times;</button>
+                <button onclick="hideCopyProgress()"
+                    style="background: none; border: none; color: #999; cursor: pointer; font-size: 18px; line-height: 1;">&times;</button>
             </div>
             <div id="copyProgressMessage" style="color: #ccc; font-size: 13px; margin-bottom: 10px;">Preparing...</div>
             <div style="background: #444; border-radius: 4px; height: 6px; overflow: hidden;">
-                <div id="copyProgressBar" style="background: #4a9eff; height: 100%; width: 0%; transition: width 0.3s ease;"></div>
+                <div id="copyProgressBar"
+                    style="background: #4a9eff; height: 100%; width: 0%; transition: width 0.3s ease;"></div>
             </div>
-            <div id="copyProgressPercent" style="color: #888; font-size: 11px; margin-top: 4px; text-align: right;">0%</div>
+            <div id="copyProgressPercent" style="color: #888; font-size: 11px; margin-top: 4px; text-align: right;">0%
+            </div>
         </div>
 
         <div class="media-overlay" id="mediaOverlay" onclick="closeMediaOverlay()">
@@ -470,11 +611,16 @@
                 <div style="margin-bottom: 20px;">
                     <label style="color: #fff; display: block; margin-bottom: 8px;">Interval (minutes):</label>
                     <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                        <button onclick="setScreenshotInterval(0.33)" class="btn btn-secondary btn-small" style="flex: 1;">20s</button>
-                        <button onclick="setScreenshotInterval(1)" class="btn btn-secondary btn-small" style="flex: 1;">1m</button>
-                        <button onclick="setScreenshotInterval(2)" class="btn btn-secondary btn-small" style="flex: 1;">2m</button>
-                        <button onclick="setScreenshotInterval(3)" class="btn btn-secondary btn-small" style="flex: 1;">3m</button>
-                        <button onclick="setScreenshotInterval(5)" class="btn btn-secondary btn-small" style="flex: 1;">5m</button>
+                        <button onclick="setScreenshotInterval(0.33)" class="btn btn-secondary btn-small"
+                            style="flex: 1;">20s</button>
+                        <button onclick="setScreenshotInterval(1)" class="btn btn-secondary btn-small"
+                            style="flex: 1;">1m</button>
+                        <button onclick="setScreenshotInterval(2)" class="btn btn-secondary btn-small"
+                            style="flex: 1;">2m</button>
+                        <button onclick="setScreenshotInterval(3)" class="btn btn-secondary btn-small"
+                            style="flex: 1;">3m</button>
+                        <button onclick="setScreenshotInterval(5)" class="btn btn-secondary btn-small"
+                            style="flex: 1;">5m</button>
                     </div>
                     <input type="number" id="screenshotConfigInterval" value="3" min="0.1" max="60" step="0.1"
                         style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #3a3a3a; color: #fff; border-radius: 4px;">
@@ -495,8 +641,9 @@
             </div>
         </div>
 
+        <script src="/js/batch-search.js?v=7"></script>
         <script src="/js/utils.js?v=5"></script>
-        <script src="/js/routing.js?v=3"></script>
+        <script src="/js/routing.js?v=5"></script>
         <script src="/js/movie-menu.js?v=3"></script>
         <script src="/js/components.js?v=3"></script>
         <script src="/js/search.js?v=3"></script>
@@ -507,6 +654,7 @@
         <script src="/js/media.js?v=3"></script>
         <script src="/js/history.js?v=3"></script>
         <script src="/js/setup.js?v=3"></script>
+        <script src="/js/stats.js?v=1"></script>
         <script src="/js/ai-search.js?v=3"></script>
         <script src="/js/movie-lists.js?v=3"></script>
         <script src="/js/app.js?v=3"></script>

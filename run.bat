@@ -61,5 +61,4 @@ python start.py
 :: If we get here, server stopped
 echo.
 echo Server stopped.
-pause
 

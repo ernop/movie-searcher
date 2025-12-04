@@ -377,3 +377,28 @@ document.addEventListener('click', (e) => {
         hideFolderDialog();
     }
 });
+
+// Copy Missing Movie Names to Clipboard
+
+function copyMissingMovieNames() {
+    const movies = window._currentMissingMovies;
+    if (!movies || movies.length === 0) {
+        showStatus('No movies to copy', 'error');
+        return;
+    }
+    
+    const lines = movies.map(movie => {
+        const title = movie.name || 'Unknown title';
+        const year = movie.year || '';
+        return year ? `${title} ${year}` : title;
+    });
+    
+    const text = lines.join('\n');
+    
+    navigator.clipboard.writeText(text).then(() => {
+        showStatus(`Copied ${movies.length} movie names to clipboard`, 'success');
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+        showStatus('Failed to copy to clipboard', 'error');
+    });
+}

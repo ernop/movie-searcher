@@ -216,5 +216,19 @@ class MovieListItem(Base):
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 
+# --- Performance Stats ---
+
+class Stat(Base):
+    """Performance statistics for tracking and optimization"""
+    __tablename__ = "stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    stat_type = Column(String, nullable=False, index=True)  # e.g., 'vlc_launch_time_ms'
+    value = Column(Float, nullable=False)  # The measurement value
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='SET NULL'), nullable=True, index=True)  # Optional: which movie
+    extra_data = Column(Text, nullable=True)  # Optional: JSON string with extra context (can't use 'metadata' - reserved by SQLAlchemy)
+    created = Column(DateTime, default=func.now(), nullable=False, index=True)
+
+
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14

@@ -132,11 +132,13 @@ function handleRoute() {
     const pageExplore = document.getElementById('pageExplore');
     const pageAllMovies = document.getElementById('pageAllMovies');
     const pageSetup = document.getElementById('pageSetup');
+    const pageStats = document.getElementById('pageStats');
     const pageDuplicates = document.getElementById('pageDuplicates');
     const pageMovieDetails = document.getElementById('pageMovieDetails');
     const pageHistory = document.getElementById('pageHistory');
     const pagePlaylists = document.getElementById('pagePlaylists');
     const pageMovieLists = document.getElementById('pageMovieLists');
+    const pageBatchSearch = document.getElementById('pageBatchSearch');
 
     // Detail routes (hash-based)
     if (route.startsWith('/movie/')) {
@@ -187,7 +189,14 @@ function handleRoute() {
         }
     }
     
-    if (route === '/home' || route === '/') {
+    if (route === '/batch-search') {
+         if (pageBatchSearch) {
+             pageBatchSearch.classList.add('active');
+             document.getElementById('navBatchSearch')?.classList.add('active');
+             initBatchSearch();
+             restoreScrollPosition();
+         }
+     } else if (route === '/home' || route === '/') {
          if (pageHome) pageHome.classList.add('active');
          updateClearButtonVisibility();
          // Home page content is usually persistent, so just restore scroll
@@ -223,6 +232,12 @@ function handleRoute() {
          if (pageSetup) {
              pageSetup.classList.add('active');
              loadSetupPage();
+             restoreScrollPosition();
+         }
+    } else if (route === '/stats') {
+         if (pageStats) {
+             pageStats.classList.add('active');
+             loadLaunchStats();
              restoreScrollPosition();
          }
     } else if (route === '/duplicates') {

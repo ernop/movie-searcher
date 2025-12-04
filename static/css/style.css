@@ -734,6 +734,28 @@
             color: #fff;
         }
         
+        .section-title-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        
+        .section-title-row .section-title {
+            margin-bottom: 0;
+        }
+        
+        .btn-copy-names {
+            font-size: 12px;
+            padding: 4px 10px;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+        
+        .btn-copy-names:hover {
+            opacity: 1;
+        }
+        
         .loading {
             text-align: center;
             padding: 20px;
@@ -2383,5 +2405,225 @@
             color: #999;
             font-size: 13px;
             margin-left: 15px;
+        }
+
+        /* Batch Search Styles */
+        .batch-search-container {
+            max-width: 1000px;
+        }
+
+        .batch-search-config {
+            margin-bottom: 24px;
+        }
+
+        .batch-search-config label,
+        .batch-search-input label {
+            display: block;
+            font-size: 14px;
+            color: #999;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .batch-search-config input {
+            width: 100%;
+            max-width: 500px;
+            padding: 12px 16px;
+            font-size: 16px;
+            background: #2a2a2a;
+            border: 2px solid #3a3a3a;
+            border-radius: 8px;
+            color: #fff;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .batch-search-config input:focus {
+            border-color: #4a9eff;
+        }
+
+        .batch-search-input {
+            margin-bottom: 20px;
+        }
+
+        .batch-search-input textarea {
+            width: 100%;
+            min-height: 500px;
+            padding: 20px;
+            font-size: 14px;
+            font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+            background: #222;
+            border: 2px solid #3a3a3a;
+            border-radius: 8px;
+            color: #e0e0e0;
+            outline: none;
+            resize: vertical;
+            line-height: 1.7;
+            transition: border-color 0.2s;
+        }
+
+        .batch-search-input textarea:focus {
+            border-color: #4a9eff;
+        }
+
+        .batch-search-input textarea::placeholder {
+            color: #555;
+        }
+
+        /* Popup warning */
+        .batch-popup-warning {
+            background: #3d2a1a;
+            border: 1px solid #ff9800;
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin-bottom: 16px;
+            color: #ffb74d;
+            font-size: 14px;
+        }
+
+        .batch-popup-warning strong {
+            color: #fff;
+        }
+
+        /* Progress bar */
+        .batch-progress {
+            background: #252525;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 20px;
+        }
+
+        .batch-progress-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        #batchProgressText {
+            color: #4a9eff;
+            font-weight: 600;
+        }
+
+        #batchRemainingText {
+            color: #888;
+        }
+
+        .batch-progress-bar {
+            height: 8px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .batch-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4a9eff, #6bb3ff);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        /* Action buttons */
+        .batch-action {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .batch-open-btn {
+            padding: 14px 32px;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .batch-open-btn:disabled {
+            background: #2d5a2d;
+            color: #8bc88b;
+        }
+
+        /* Queue display */
+        .batch-queue-display {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .batch-queue-display {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .batch-queue-section,
+        .batch-completed-section {
+            background: #252525;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .batch-queue-label {
+            padding: 12px 16px;
+            background: #2a2a2a;
+            border-bottom: 1px solid #3a3a3a;
+            font-size: 13px;
+            font-weight: 600;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .batch-queue-items,
+        .batch-completed-items {
+            padding: 8px;
+            max-height: 350px;
+            overflow-y: auto;
+        }
+
+        .batch-queue-item {
+            padding: 8px 12px;
+            font-size: 13px;
+            color: #bbb;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            background: #1e1e1e;
+        }
+
+        .batch-queue-item.next-batch {
+            background: #1a2a3a;
+            color: #8bc5ff;
+            border-left: 3px solid #4a9eff;
+        }
+
+        .batch-queue-item.more {
+            background: transparent;
+            color: #666;
+            font-style: italic;
+            text-align: center;
+        }
+
+        .batch-queue-empty {
+            padding: 20px;
+            text-align: center;
+            color: #4caf50;
+            font-weight: 500;
+        }
+
+        .batch-completed-item {
+            padding: 8px 12px;
+            font-size: 13px;
+            color: #666;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            background: #1a1a1a;
+            text-decoration: line-through;
+        }
+
+        .batch-completed-item.more {
+            background: transparent;
+            text-decoration: none;
+            font-style: italic;
+            text-align: center;
         }
 

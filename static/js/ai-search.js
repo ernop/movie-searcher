@@ -219,6 +219,8 @@ function renderAiResults(data) {
     
     let missingHtml = '';
     if (missingMovies.length > 0) {
+        // Store missing movies for copy button
+        window._currentMissingMovies = missingMovies;
         const rows = missingMovies.map(movie => {
             const title = escapeHtml(movie.name || 'Unknown title');
             const year = movie.year ? ` <span class="ai-missing-year">(${movie.year})</span>` : '';
@@ -233,7 +235,10 @@ function renderAiResults(data) {
                     </div>`;
         }).join('');
         missingHtml = `
-            <div class="section-title" style="margin-top: 30px;">Not in your library</div>
+            <div class="section-title-row" style="margin-top: 30px;">
+                <div class="section-title">Not in your library</div>
+                <button class="btn btn-small btn-copy-names" onclick="copyMissingMovieNames()" title="Copy all titles to clipboard">📋 Copy Names</button>
+            </div>
             <div class="ai-missing-list">
                 ${rows}
             </div>
