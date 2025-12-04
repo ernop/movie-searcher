@@ -94,7 +94,7 @@ function renderPlaylistCard(playlist) {
             </div>
             ${!playlist.is_system ? `
                 <div class="playlist-card-actions">
-                    <button class="btn btn-small btn-danger" onclick="event.stopPropagation(); deletePlaylist(${playlist.id}, '${escapeHtml(playlist.name)}')">Delete</button>
+                    <button class="btn btn-small btn-danger" onclick="event.stopPropagation(); deletePlaylist(${playlist.id}, '${escapeJsString(playlist.name)}')">Delete</button>
                 </div>
             ` : ''}
         </div>

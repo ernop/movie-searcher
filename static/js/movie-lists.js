@@ -19,25 +19,25 @@ async function loadMovieListsPage() {
 async function loadMovieListsOverview() {
     const overview = document.getElementById('movieListsOverview');
     const detailView = document.getElementById('movieListDetailView');
-    
+
     if (!overview) return;
-    
+
     overview.style.display = 'block';
     if (detailView) detailView.style.display = 'none';
-    
+
     currentMovieListSlug = null;
-    
+
     try {
         const params = new URLSearchParams();
         if (showFavoritesOnly) params.append('favorites_only', 'true');
         if (movieListsFilterText) params.append('search', movieListsFilterText);
-        
+
         const response = await fetch(`/api/movie-lists?${params}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        
+
         const data = await response.json();
         renderMovieListsOverview(data.lists, data.total);
-        
+
         if (typeof restoreScrollPosition === 'function') {
             restoreScrollPosition();
         }
@@ -51,7 +51,7 @@ async function loadMovieListsOverview() {
 function renderMovieListsOverview(lists, total) {
     const overview = document.getElementById('movieListsOverview');
     if (!overview) return;
-    
+
     let html = `
         <div class="movie-lists-header">
             <div class="movie-lists-filter">
@@ -68,7 +68,7 @@ function renderMovieListsOverview(lists, total) {
             </div>
         </div>
     `;
-    
+
     if (!lists || lists.length === 0) {
         html += `
             <div class="empty-state">
@@ -82,12 +82,12 @@ function renderMovieListsOverview(lists, total) {
             html += createMovieListCard(list);
         });
         html += `</div>`;
-        
+
         if (total > lists.length) {
             html += `<div class="movie-lists-more">Showing ${lists.length} of ${total} lists</div>`;
         }
     }
-    
+
     overview.innerHTML = html;
 }
 
@@ -97,13 +97,13 @@ function createMovieListCard(list) {
     const providerIcon = list.provider === 'anthropic' ? '🤖' : '🧠';
     const favoriteClass = list.is_favorite ? 'favorite' : '';
     const favoriteIcon = list.is_favorite ? '★' : '☆';
-    
+
     return `
-        <div class="movie-list-card ${favoriteClass}" onclick="viewMovieList('${escapeHtml(list.slug)}')">
+        <div class="movie-list-card ${favoriteClass}" onclick="viewMovieList('${escapeJsString(list.slug)}')">
             <div class="movie-list-card-header">
                 <div class="movie-list-card-title">${escapeHtml(list.title)}</div>
                 <button class="movie-list-favorite-btn" 
-                        onclick="event.stopPropagation(); toggleMovieListFavorite('${escapeHtml(list.slug)}', ${!list.is_favorite})"
+                        onclick="event.stopPropagation(); toggleMovieListFavorite('${escapeJsString(list.slug)}', ${!list.is_favorite})"
                         title="${list.is_favorite ? 'Remove from favorites' : 'Add to favorites'}">
                     ${favoriteIcon}
                 </button>
@@ -120,7 +120,7 @@ function createMovieListCard(list) {
             </div>
             <div class="movie-list-card-actions">
                 <button class="btn btn-small btn-danger" 
-                        onclick="event.stopPropagation(); deleteMovieList('${escapeHtml(list.slug)}', '${escapeHtml(list.title)}')">
+                        onclick="event.stopPropagation(); deleteMovieList('${escapeJsString(list.slug)}', '${escapeJsString(list.title)}')">
                     Delete
                 </button>
             </div>
@@ -147,28 +147,28 @@ function toggleFavoritesFilter() {
 // View specific movie list
 async function viewMovieList(slug) {
     currentMovieListSlug = slug;
-    
+
     // Update URL without reloading
     if (window.history.pushState) {
         window.history.pushState(null, '', `#/lists/${slug}`);
     }
-    
+
     const overview = document.getElementById('movieListsOverview');
     const detailView = document.getElementById('movieListDetailView');
-    
+
     if (overview) overview.style.display = 'none';
     if (!detailView) return;
-    
+
     detailView.style.display = 'block';
     detailView.innerHTML = '<div class="loading">Loading movie list...</div>';
-    
+
     try {
         const response = await fetch(`/api/movie-lists/${slug}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        
+
         const data = await response.json();
         renderMovieListDetail(data);
-        
+
         if (typeof restoreScrollPosition === 'function') {
             restoreScrollPosition();
         }
@@ -182,23 +182,23 @@ async function viewMovieList(slug) {
 function renderMovieListDetail(data) {
     const detailView = document.getElementById('movieListDetailView');
     if (!detailView) return;
-    
+
     const created = data.created ? new Date(data.created).toLocaleDateString() : '';
     const providerLabel = data.provider === 'anthropic' ? 'Claude' : 'GPT';
     const costDisplay = data.cost_usd ? `$${data.cost_usd.toFixed(4)}` : '';
     const favoriteIcon = data.is_favorite ? '★' : '☆';
     const favoriteText = data.is_favorite ? 'Favorited' : 'Add to Favorites';
-    
+
     let html = `
         <div class="movie-list-detail-header">
             <button class="btn btn-secondary" onclick="backToMovieListsOverview()">← Back to Lists</button>
             <div class="movie-list-detail-actions">
                 <button class="btn ${data.is_favorite ? 'active' : ''}" 
-                        onclick="toggleMovieListFavorite('${escapeHtml(data.slug)}', ${!data.is_favorite})">
+                        onclick="toggleMovieListFavorite('${escapeJsString(data.slug)}', ${!data.is_favorite})">
                     ${favoriteIcon} ${favoriteText}
                 </button>
                 <button class="btn btn-danger" 
-                        onclick="deleteMovieList('${escapeHtml(data.slug)}', '${escapeHtml(data.title)}')">
+                        onclick="deleteMovieList('${escapeJsString(data.slug)}', '${escapeJsString(data.title)}')">
                     🗑️ Delete
                 </button>
             </div>
@@ -207,7 +207,7 @@ function renderMovieListDetail(data) {
         <div class="movie-list-detail-info">
             <h2 class="movie-list-detail-title" 
                 contenteditable="true" 
-                onblur="updateMovieListTitle('${escapeHtml(data.slug)}', this.textContent)"
+                onblur="updateMovieListTitle('${escapeJsString(data.slug)}', this.textContent)"
                 title="Click to edit title">${escapeHtml(data.title)}</h2>
             <div class="movie-list-detail-query">Query: "${escapeHtml(data.query)}"</div>
             <div class="movie-list-detail-meta">
@@ -215,12 +215,12 @@ function renderMovieListDetail(data) {
             </div>
         </div>
     `;
-    
+
     // AI Comment
     if (data.comment) {
         html += `<div class="movie-list-detail-comment">${escapeHtml(data.comment)}</div>`;
     }
-    
+
     // Found movies section
     if (data.found_movies && data.found_movies.length > 0) {
         html += `
@@ -228,7 +228,7 @@ function renderMovieListDetail(data) {
             <div class="movie-grid ai-results-grid">
         `;
         data.found_movies.forEach(movie => {
-            const commentHtml = movie.ai_comment 
+            const commentHtml = movie.ai_comment
                 ? `<div class="ai-movie-comment">${escapeHtml(movie.ai_comment)}</div>`
                 : `<div class="ai-movie-comment muted">No specific comment.</div>`;
             html += `<div class="ai-card-suggestion">${createMovieCard(movie)}${commentHtml}</div>`;
@@ -237,7 +237,7 @@ function renderMovieListDetail(data) {
     } else {
         html += `<div class="empty-state">No matching movies found in your library.</div>`;
     }
-    
+
     // Missing movies section
     if (data.missing_movies && data.missing_movies.length > 0) {
         // Store missing movies for copy button
@@ -268,9 +268,9 @@ function renderMovieListDetail(data) {
     } else if (data.found_movies && data.found_movies.length > 0) {
         html += `<div class="ai-missing-placeholder">All suggested movies are already in your library.</div>`;
     }
-    
+
     detailView.innerHTML = html;
-    
+
     // Initialize star ratings if available
     if (typeof initAllStarRatings === 'function') {
         initAllStarRatings();
@@ -280,12 +280,12 @@ function renderMovieListDetail(data) {
 // Back to movie lists overview
 function backToMovieListsOverview() {
     currentMovieListSlug = null;
-    
+
     // Update URL
     if (window.history.pushState) {
         window.history.pushState(null, '', '#/lists');
     }
-    
+
     loadMovieListsOverview();
 }
 
@@ -297,16 +297,16 @@ async function toggleMovieListFavorite(slug, isFavorite) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ is_favorite: isFavorite })
         });
-        
+
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        
+
         // Refresh current view
         if (currentMovieListSlug === slug) {
             viewMovieList(slug);
         } else {
             loadMovieListsOverview();
         }
-        
+
         showStatus(isFavorite ? 'Added to favorites' : 'Removed from favorites', 'success');
     } catch (error) {
         console.error('Error updating favorite status:', error);
@@ -321,16 +321,16 @@ async function updateMovieListTitle(slug, newTitle) {
         viewMovieList(slug); // Reload to reset
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/movie-lists/${slug}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: newTitle })
         });
-        
+
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        
+
         showStatus('Title updated', 'success');
     } catch (error) {
         console.error('Error updating title:', error);
@@ -344,16 +344,16 @@ async function deleteMovieList(slug, title) {
     if (!confirm(`Delete movie list "${title}"? This cannot be undone.`)) {
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/movie-lists/${slug}`, {
             method: 'DELETE'
         });
-        
+
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        
+
         showStatus(`Deleted "${title}"`, 'success');
-        
+
         // Navigate back to overview
         if (currentMovieListSlug === slug) {
             backToMovieListsOverview();
@@ -374,7 +374,7 @@ function formatRelativeTime(date) {
     const diffMin = Math.floor(diffSec / 60);
     const diffHour = Math.floor(diffMin / 60);
     const diffDay = Math.floor(diffHour / 24);
-    
+
     if (diffSec < 60) return 'just now';
     if (diffMin < 60) return `${diffMin}m ago`;
     if (diffHour < 24) return `${diffHour}h ago`;
@@ -397,7 +397,7 @@ function handleMovieListRoute(slug) {
     if (pageMovieLists) {
         pageMovieLists.classList.add('active');
     }
-    
+
     viewMovieList(slug);
 }
 
@@ -405,11 +405,11 @@ function handleMovieListRoute(slug) {
 async function loadMovieListSuggestions(queryText = '') {
     const suggestionsContainer = document.getElementById('movieListSuggestions');
     if (!suggestionsContainer) return;
-    
+
     try {
         const response = await fetch(`/api/movie-lists/suggestions?q=${encodeURIComponent(queryText)}`);
         if (!response.ok) return;
-        
+
         const data = await response.json();
         renderMovieListSuggestions(data.suggestions, data.recent_lists);
     } catch (error) {
@@ -421,9 +421,9 @@ async function loadMovieListSuggestions(queryText = '') {
 function renderMovieListSuggestions(suggestions, recentLists) {
     const container = document.getElementById('movieListSuggestions');
     if (!container) return;
-    
+
     let html = '';
-    
+
     // Similar searches
     if (suggestions && suggestions.length > 0) {
         html += `<div class="suggestions-section">
@@ -438,7 +438,7 @@ function renderMovieListSuggestions(suggestions, recentLists) {
         });
         html += `</div></div>`;
     }
-    
+
     // Recent lists
     if (recentLists && recentLists.length > 0) {
         html += `<div class="suggestions-section">
@@ -453,7 +453,7 @@ function renderMovieListSuggestions(suggestions, recentLists) {
         });
         html += `</div></div>`;
     }
-    
+
     container.innerHTML = html;
     container.style.display = html ? 'block' : 'none';
 }

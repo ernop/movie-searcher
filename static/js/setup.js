@@ -484,7 +484,7 @@ async function recheckSystemStatus() {
 function showLocalTargetDialog() {
     const dialog = document.getElementById('localTargetDialog');
     if (dialog) {
-        dialog.style.display = 'flex';
+        dialog.classList.add('active');
         const input = document.getElementById('localTargetPathInput');
         if (input) {
             input.focus();
@@ -495,7 +495,7 @@ function showLocalTargetDialog() {
 function hideLocalTargetDialog() {
     const dialog = document.getElementById('localTargetDialog');
     if (dialog) {
-        dialog.style.display = 'none';
+        dialog.classList.remove('active');
     }
 }
 

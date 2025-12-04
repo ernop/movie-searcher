@@ -1220,6 +1220,24 @@ def remove_sample_files():
             # Delete LaunchHistory records
             db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).delete()
             
+            # Unlink from movie lists (mark as not-in-library before deletion)
+            affected_list_items = db.query(MovieListItem).filter(
+                MovieListItem.movie_id == movie.id
+            ).all()
+            list_ids_to_update = set()
+            for item in affected_list_items:
+                item.is_in_library = False
+                item.movie_id = None
+                list_ids_to_update.add(item.movie_list_id)
+            for list_id in list_ids_to_update:
+                movie_list = db.query(MovieList).filter(MovieList.id == list_id).first()
+                if movie_list:
+                    in_lib_count = db.query(MovieListItem).filter(
+                        MovieListItem.movie_list_id == list_id,
+                        MovieListItem.is_in_library == True
+                    ).count()
+                    movie_list.in_library_count = in_lib_count
+            
             # Delete the movie itself
             db.delete(movie)
             

@@ -17,6 +17,10 @@ from sqlalchemy.sql import func
 
 # Database imports
 from database import SessionLocal, Movie, Screenshot, IndexedPath, MovieAudio, Rating, MovieStatus, LaunchHistory, PlaylistItem
+from models import MovieList, MovieListItem
+
+# Fuzzy matching for movie list reconciliation
+from fuzzywuzzy import fuzz, process as fuzz_process
 
 # Video processing imports
 from video_processing import (
@@ -526,8 +530,13 @@ def clean_movie_name(name, patterns=None):
                     show_name = re.sub(r'\bS\d+E\d+\b', ' ', show_name, flags=re.IGNORECASE)
                     # Remove language tags
                     show_name = re.sub(r'\b(?:japanese|english|french|german|spanish|italian|russian|korean|hindi|eng|dan|ita|en-sub)\b', ' ', show_name, flags=re.IGNORECASE)
-                    # Remove release group suffixes
-                    show_name = re.sub(r'[\s-]+\b[A-Za-z0-9]{2,15}\b\s*$', ' ', show_name)
+                    # Remove release group suffixes - only if:
+                    # 1. Preceded by dash, OR
+                    # 2. Is all lowercase with 4+ chars (like "moviesbyrizzo")
+                    # This avoids removing legitimate name parts like "Saul" in "Better Call Saul"
+                    # or numbers like "5" in "Babylon 5"
+                    show_name = re.sub(r'\s+\b[a-z]{4,15}\b\s*$', ' ', show_name)
+                    show_name = re.sub(r'-\s*\b[A-Za-z0-9]{2,15}\b\s*$', ' ', show_name)
                     
                     # Remove empty parentheses (left over from removing content)
                     show_name = re.sub(r'\(\s*\)', ' ', show_name)
@@ -568,6 +577,11 @@ def clean_movie_name(name, patterns=None):
 
                     # Remove language tags from grandparent too
                     show_name = re.sub(r'\b(?:japanese|english|french|german|spanish|italian|russian|korean|hindi|eng|dan|ita|en-sub)\b', ' ', show_name, flags=re.IGNORECASE)
+                    
+                    # Remove release group suffixes (all-lowercase 4+ chars, or preceded by dash, or alphanumeric with digits)
+                    show_name = re.sub(r'\s+\b[a-z]{4,15}\b\s*$', ' ', show_name)
+                    show_name = re.sub(r'\s+\b[A-Za-z]+\d+[A-Za-z0-9]*\b\s*$', ' ', show_name)  # e.g., Retic1337
+                    show_name = re.sub(r'-\s*\b[A-Za-z0-9]{2,15}\b\s*$', ' ', show_name)
                     
                     # Remove empty parentheses
                     show_name = re.sub(r'\(\s*\)', ' ', show_name)
@@ -1286,6 +1300,9 @@ def scan_directory(root_path, state=None, progress_callback=None):
         indexed = 0
         updated = 0
         
+        # Track newly added movies for movie list reconciliation
+        new_movies_for_reconciliation = []
+        
         # Second pass: actually scan
         # Each movie commits individually - no transaction wrapping the scan
         # If any movie fails, the entire scan stops immediately
@@ -1321,6 +1338,14 @@ def scan_directory(root_path, state=None, progress_callback=None):
                         scan_progress["movies_updated"] += 1
                     else:
                         scan_progress["movies_added"] += 1
+                        # Track newly added movie for reconciliation
+                        new_movie = db.query(Movie).filter(Movie.path == normalized_path).first()
+                        if new_movie:
+                            new_movies_for_reconciliation.append({
+                                'id': new_movie.id,
+                                'name': new_movie.name,
+                                'year': new_movie.year
+                            })
                     updated += 1
                 indexed += 1
                 
@@ -1384,6 +1409,9 @@ def scan_directory(root_path, state=None, progress_callback=None):
                     db.query(PlaylistItem).filter(PlaylistItem.movie_id == movie.id).delete()
                     db.query(MovieAudio).filter(MovieAudio.movie_id == movie.id).delete()
                     
+                    # Unlink from movie lists (mark as not-in-library)
+                    unlink_movie_from_lists(db, movie.id)
+                    
                     # Delete the movie itself
                     db.delete(movie)
                     
@@ -1405,6 +1433,16 @@ def scan_directory(root_path, state=None, progress_callback=None):
             add_scan_log("success", f"Removed {removed_count} orphaned movie(s) from database")
         else:
             add_scan_log("info", "No orphaned entries found")
+        
+        # Reconcile movie lists with newly added movies
+        if new_movies_for_reconciliation:
+            try:
+                reconcile_result = reconcile_movie_lists(db, new_movies_for_reconciliation)
+                if reconcile_result["matched_count"] > 0:
+                    add_scan_log("success", f"Movie list reconciliation: {reconcile_result['matched_count']} items matched across {reconcile_result['lists_updated']} lists")
+            except Exception as e:
+                logger.error(f"Error reconciling movie lists: {e}")
+                add_scan_log("warning", f"Movie list reconciliation failed: {e}")
         
         # After scan completes, enqueue screenshot jobs for movies without screenshots
         add_scan_log("info", "Checking for movies without screenshots...")
@@ -1458,6 +1496,163 @@ def scan_directory(root_path, state=None, progress_callback=None):
         return {"indexed": indexed, "updated": updated}
     finally:
         db.close()
+
+
+def reconcile_movie_lists(db: Session, new_movies: list) -> dict:
+    """
+    Reconcile AI-generated movie lists with newly added/renamed library movies.
+    
+    When movies are added to the library or renamed, check if any MovieListItem
+    entries that were marked as 'not in library' now match. If so, update them.
+    
+    Args:
+        db: Database session
+        new_movies: List of dicts with 'id', 'name', 'year' for newly added/renamed movies
+    
+    Returns:
+        dict with 'matched_count' and 'lists_updated'
+    """
+    if not new_movies:
+        return {"matched_count": 0, "lists_updated": 0}
+    
+    # Load all not-in-library items (these are candidates for matching)
+    missing_items = db.query(MovieListItem).filter(
+        MovieListItem.is_in_library == False
+    ).all()
+    
+    if not missing_items:
+        return {"matched_count": 0, "lists_updated": 0}
+    
+    add_scan_log("info", f"Reconciling {len(new_movies)} new movies against {len(missing_items)} missing list items...")
+    
+    # Build lookup map for new movies: normalized_name -> list of (movie_id, year)
+    new_movie_map = {}
+    for m in new_movies:
+        norm_name = re.sub(r'[^\w\s]', '', m['name']).lower().strip()
+        if norm_name not in new_movie_map:
+            new_movie_map[norm_name] = []
+        new_movie_map[norm_name].append({'id': m['id'], 'year': m.get('year')})
+    
+    # Track which lists need their counts updated
+    lists_to_update = set()
+    matched_count = 0
+    
+    for item in missing_items:
+        # Normalize the list item's title
+        norm_title = re.sub(r'[^\w\s]', '', item.title).lower().strip()
+        
+        # Try exact match first
+        candidates = new_movie_map.get(norm_title, [])
+        
+        # If no exact match, try fuzzy match
+        if not candidates and new_movie_map:
+            best_match = fuzz_process.extractOne(
+                norm_title, 
+                list(new_movie_map.keys()), 
+                scorer=fuzz.token_sort_ratio
+            )
+            if best_match:
+                match_name, score = best_match
+                if score > 85:
+                    candidates = new_movie_map[match_name]
+        
+        if not candidates:
+            continue
+        
+        # Disambiguate by year if needed
+        match = None
+        if len(candidates) == 1:
+            match = candidates[0]
+        elif item.year:
+            # Try to find one with matching year (within 1 year tolerance)
+            for cand in candidates:
+                if cand['year'] and abs(cand['year'] - item.year) <= 1:
+                    match = cand
+                    break
+            # If no year match, just take the first candidate
+            if not match:
+                match = candidates[0]
+        else:
+            match = candidates[0]
+        
+        if match:
+            # Update the item
+            item.movie_id = match['id']
+            item.is_in_library = True
+            item.updated = datetime.now()
+            lists_to_update.add(item.movie_list_id)
+            matched_count += 1
+            add_scan_log("success", f"  Matched list item '{item.title}' to library movie id={match['id']}")
+    
+    # Update the in_library_count for affected lists
+    for list_id in lists_to_update:
+        movie_list = db.query(MovieList).filter(MovieList.id == list_id).first()
+        if movie_list:
+            # Recount in-library items
+            in_lib_count = db.query(MovieListItem).filter(
+                MovieListItem.movie_list_id == list_id,
+                MovieListItem.is_in_library == True
+            ).count()
+            movie_list.in_library_count = in_lib_count
+            movie_list.updated = datetime.now()
+    
+    if matched_count > 0:
+        db.commit()
+        add_scan_log("success", f"Reconciled {matched_count} movie list item(s) across {len(lists_to_update)} list(s)")
+    
+    return {"matched_count": matched_count, "lists_updated": len(lists_to_update)}
+
+
+def unlink_movie_from_lists(db: Session, movie_id: int) -> int:
+    """
+    Unlink a movie from all movie lists before deletion.
+    
+    When a movie is about to be deleted from the library, this function:
+    1. Finds all MovieListItem entries referencing this movie
+    2. Sets is_in_library=False (movie_id will be SET NULL by FK cascade)
+    3. Updates the parent MovieList.in_library_count
+    
+    Call this BEFORE deleting the movie.
+    
+    Args:
+        db: Database session
+        movie_id: ID of the movie being deleted
+    
+    Returns:
+        Number of list items updated
+    """
+    # Find all list items referencing this movie
+    affected_items = db.query(MovieListItem).filter(
+        MovieListItem.movie_id == movie_id
+    ).all()
+    
+    if not affected_items:
+        return 0
+    
+    # Track which lists need count updates
+    lists_to_update = set()
+    
+    for item in affected_items:
+        item.is_in_library = False
+        item.movie_id = None  # Explicitly set to NULL (FK cascade would do this anyway)
+        item.updated = datetime.now()
+        lists_to_update.add(item.movie_list_id)
+    
+    # Update the in_library_count for affected lists
+    for list_id in lists_to_update:
+        movie_list = db.query(MovieList).filter(MovieList.id == list_id).first()
+        if movie_list:
+            # Recount in-library items
+            in_lib_count = db.query(MovieListItem).filter(
+                MovieListItem.movie_list_id == list_id,
+                MovieListItem.is_in_library == True
+            ).count()
+            movie_list.in_library_count = in_lib_count
+            movie_list.updated = datetime.now()
+    
+    # Note: Don't commit here - let the caller commit after deleting the movie
+    return len(affected_items)
+
 
 def run_scan_async(root_path: str):
     """Run scan in background thread"""

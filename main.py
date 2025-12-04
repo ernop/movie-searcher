@@ -76,7 +76,8 @@ from scanning import (
     add_scan_log, is_sample_file, get_file_hash, find_images_in_folder,
     clean_movie_name, filter_yts_images,
     load_cleaning_patterns, extract_screenshots, extract_movie_screenshot,
-    process_frame_queue, VIDEO_EXTENSIONS, IMAGE_EXTENSIONS
+    process_frame_queue, VIDEO_EXTENSIONS, IMAGE_EXTENSIONS,
+    reconcile_movie_lists
 )
 
 # FastAPI app will be created after lifespan function is defined
@@ -2469,6 +2470,9 @@ async def reclean_all_names():
         total = len(movies)
         updated = 0
         
+        # Track renamed movies for movie list reconciliation
+        renamed_movies = []
+        
         # Load patterns once to improve performance
         patterns = load_cleaning_patterns()
         
@@ -2483,16 +2487,34 @@ async def reclean_all_names():
                     movie.year = year
                     movie.updated = datetime.now()
                     updated += 1
+                    # Track for reconciliation
+                    renamed_movies.append({
+                        'id': movie.id,
+                        'name': cleaned_name,
+                        'year': year
+                    })
             except Exception as e:
                 logger.warning(f"Error re-cleaning name for movie {movie.id} ({movie.path}): {e}")
                 continue
         
         db.commit()
+        
+        # Reconcile movie lists with renamed movies
+        reconcile_result = {"matched_count": 0, "lists_updated": 0}
+        if renamed_movies:
+            try:
+                reconcile_result = reconcile_movie_lists(db, renamed_movies)
+                if reconcile_result["matched_count"] > 0:
+                    logger.info(f"Movie list reconciliation: {reconcile_result['matched_count']} items matched across {reconcile_result['lists_updated']} lists")
+            except Exception as e:
+                logger.error(f"Error reconciling movie lists: {e}")
+        
         return {
             "status": "complete",
             "total": total,
             "updated": updated,
-            "message": f"Re-cleaned {updated} of {total} movie names"
+            "message": f"Re-cleaned {updated} of {total} movie names",
+            "lists_reconciled": reconcile_result["matched_count"]
         }
     except Exception as e:
         db.rollback()

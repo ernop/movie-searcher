@@ -15,187 +15,190 @@ from scanning import clean_movie_name, load_cleaning_patterns
 # - expected_name is REQUIRED
 # - expected_year is OPTIONAL (omit or set to None if not asserting year)
 # Inputs should be full paths to test path-based cleaning
+# NOTE: All movie/show names are fictional to avoid trademark issues while preserving test value
 TEST_CASES: List[Dict[str, Optional[str]]] = [
     {
-        "input": r"D:\movies\My fair lady.HDrip.avi",
-        "expected_name": "My Fair Lady",
+        # Tests: HDrip removal, basic title case correction
+        "input": r"D:\movies\My fluffy llama.HDrip.avi",
+        "expected_name": "My Fluffy Llama",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\Harold and Maude (1971) 720p BRrip_sujaidr (pimprg).mkv",
-        "expected_name": "Harold and Maude",
-        "expected_year": 1971,
+        # Tests: year in parens, quality tags (720p BRrip), uploader tags (sujaidr, pimprg)
+        "input": r"D:\movies\Gertrude and Claude (1983) 720p BRrip_sujaidr (pimprg).mkv",
+        "expected_name": "Gertrude and Claude",
+        "expected_year": 1983,
     },
     {
-        "input": r"D:\movies\Spaceballs.1987.1080p.BluRay.x264.YIFY.mp4",
-        "expected_name": "Spaceballs",
-        "expected_year": 1987,
+        # Tests: dot-separated format, year extraction, codec (x264), uploader (YIFY)
+        "input": r"D:\movies\Moonwaffles.2003.1080p.BluRay.x264.YIFY.mp4",
+        "expected_name": "Moonwaffles",
+        "expected_year": 2003,
     },
     {
-        "input": r"D:\movies\UHF.1989.1080p.BluRay.x264.YIFY.mp4",
-        "expected_name": "UHF",
-        "expected_year": 1989,
+        # Tests: short 3-letter acronym title preservation
+        "input": r"D:\movies\QXJ.1994.1080p.BluRay.x264.YIFY.mp4",
+        "expected_name": "QXJ",
+        "expected_year": 1994,
     },
     {
-        "input": r"D:\movies\Kaiji\Season 1\[Triad]_Kaiji_-_12.mkv",
-        "expected_name": "Kaiji S01E12",
+        # Tests: anime-style bracketed group tag [Triad], underscore separators, episode number
+        "input": r"D:\movies\Bonkus\Season 1\[Triad]_Bonkus_-_12.mkv",
+        "expected_name": "Bonkus S01E12",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\lavare-1980\L'avare (1980).mp4",
-        "expected_name": "L'Avare",
-        "expected_year": 1980,
+        # Tests: French apostrophe handling, title case with L' prefix
+        "input": r"D:\movies\lomelette-1972\L'omelette (1972).mp4",
+        "expected_name": "L'Omelette",
+        "expected_year": 1972,
     },
     {
-        "input": r"D:\movies\L'ultima onda - The Last Wave (1977) 720p h264 Ac3 Ita Eng Sub Ita Eng - MIRCrew\L'ultima onda - The Last Wave (1977) 720p h264 Ac3 Ita Eng",
-        "expected_name": "L'ultima onda - The Last Wave",
-        "expected_year": 1977,
+        # Tests: dual-language title with dash, foreign apostrophe, codec/language tags
+        "input": r"D:\movies\L'anatra Pazza - The Crazy Duck (2011) 720p h264 Ac3 Ita Eng Sub Ita Eng - MIRCrew\L'anatra Pazza - The Crazy Duck (2011) 720p h264 Ac3 Ita Eng",
+        "expected_name": "L'anatra Pazza - The Crazy Duck",
+        "expected_year": 2011,
     },
     {
-        "input": r"D:\movies\Babylon 5 (1993)\024 S02E01 Points of Departure.mkv",
-        "expected_name": "Babylon 5 024 S02E01 Points of Departure",
-        "expected_year": 1993,
+        # Tests: show with number in name, leading zeros on episode, SxxExx format
+        "input": r"D:\movies\Zeppelin 9 (1986)\024 S02E01 Wobbly Banana Crisis.mkv",
+        "expected_name": "Zeppelin 9 024 S02E01 Wobbly Banana Crisis",
+        "expected_year": 1986,
     },
     {
-        "input": r"D:\movies\BEASTARS.S01.JAPANESE.1080p.NF.WEBRip.DDP2.0.x264-AGLET[rartv]\BEASTARS.S01E10.A.Wolf.in.Sheeps.Clothing.1080p.NF.WEB-DL.DDP2.0.H.264-AGLET.mkv",
-        "expected_name": "BEASTARS S01E10 A Wolf in Sheeps Clothing",
+        # Tests: all-caps title, JAPANESE language tag, NF/WEBRip tags, episode title with dots
+        "input": r"D:\movies\GRUMPYCATS.S01.JAPANESE.1080p.NF.WEBRip.DDP2.0.x264-AGLET[rartv]\GRUMPYCATS.S01E10.A.Sock.in.Grandmas.Drawer.1080p.NF.WEB-DL.DDP2.0.H.264-AGLET.mkv",
+        "expected_name": "GRUMPYCATS S01E10 A Sock in Grandmas Drawer",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\The Undersea World of Jacques Cousteau [1971-5]\02-A Sound of Dolphins.mp4",
-        "expected_name": "The Undersea World of Jacques Cousteau 02 A Sound of Dolphins",
+        # Tests: long title with proper name, year range in brackets [1982-7], episode prefix number
+        "input": r"D:\movies\The Magical Kitchen of Gustavo Fernandez [1982-7]\02-A Whiff of Tacos.mp4",
+        "expected_name": "The Magical Kitchen of Gustavo Fernandez 02 A Whiff of Tacos",
         "expected_year": None, #because a removed item in the prior folder name doesn't mean that we lose the actaul filename
     },
     {
-        "input": r"D:\movies\Love and Death (Woody Allen 1975) DivX DVDRip.avi",
-        "expected_name": "Love and Death",
-        "expected_year": 1975,
+        # Tests: director name in parentheses with year, DivX/DVDRip tags
+        "input": r"D:\movies\Cheese and Crackers (Snappy McMuffin 1991) DivX DVDRip.avi",
+        "expected_name": "Cheese and Crackers",
+        "expected_year": 1991,
     },
     
     {
-        "input": r"D:\movies\THE_BOYS_FROM_BRAZIL_Title1.mp4",
-        "expected_name": "The Boys from Brazil", #title1 suffixes are bad text.  most movies _ actually is a space.
+        # Tests: underscores as spaces, Title1 suffix removal, all caps to title case, "from" lowercase
+        "input": r"D:\movies\THE_PENGUINS_FROM_ANTARCTICA_Title1.mp4",
+        "expected_name": "The Penguins from Antarctica", #title1 suffixes are bad text.  most movies _ actually is a space.
         "expected_year": None,
     },
 
     {
-        "input": r"D:\movies\13 Assassins (2010) EXTENDED.720p.BRrip.sujaidr\13 Assassins (2010) EXTENDED.720p.BRrip.sujaidr.mkv",
-        "expected_name": "13 Assassins",
-        "expected_year": 2010,
+        # Tests: number at start of title, EXTENDED tag removal, nested folder with same name
+        "input": r"D:\movies\17 Chipmunks (1997) EXTENDED.720p.BRrip.sujaidr\17 Chipmunks (1997) EXTENDED.720p.BRrip.sujaidr.mkv",
+        "expected_name": "17 Chipmunks",
+        "expected_year": 1997,
     },
     {
-        "input": r"D:\movies\720pMkv.Com_The.Baader.Meinhof.Complex.2008.720p.BluRay.x264.mp4",
-        "expected_name": "The Baader Meinhof Complex",
-        "expected_year": 2008,
+        # Tests: website prefix removal (720pMkv.Com_), dot-separated multi-word title
+        "input": r"D:\movies\720pMkv.Com_The.Snickerdoodle.Conspiracy.2015.720p.BluRay.x264.mp4",
+        "expected_name": "The Snickerdoodle Conspiracy",
+        "expected_year": 2015,
     },
     {
-        "input": r"D:\movies\2.or.3.Things.I.Know.About.Her.1967.BRRip.720p.x264-Classics\2.or.3.Things.I.Know.About.Her.1967.BRRip.720p.x264-Classics.mkv",
-        "expected_name": "2 or 3 Things I Know about her",
-        "expected_year": 1967,
+        # Tests: number at very start, dot-separated words, "about" lowercase
+        "input": r"D:\movies\4.or.5.Reasons.My.Cat.Ignores.Me.2001.BRRip.720p.x264-Classics\4.or.5.Reasons.My.Cat.Ignores.Me.2001.BRRip.720p.x264-Classics.mkv",
+        "expected_name": "4 or 5 Reasons My Cat Ignores Me",
+        "expected_year": 2001,
     },
     {
-        "input": r"D:\movies\The Twilight Zone (1959) Season 1-5 S01-05 (1080p BluRay x265 HEVC 10bit AAC 2.0 ImE)\Season 2\The Twilight Zone (1959) - S02E24 - The Rip Van Winkle Caper (1080p BluRay x265 ImE).mkv",
-        "expected_name": "The Twilight Zone S02E24 The Rip Van Winkle Caper",
-        "expected_year": 1959,
+        # Tests: show with year, season range (S01-05), deeply nested path, episode title extraction
+        "input": r"D:\movies\The Noodle Dimension (1978) Season 1-5 S01-05 (1080p BluRay x265 HEVC 10bit AAC 2.0 ImE)\Season 2\The Noodle Dimension (1978) - S02E24 - The Fuzzy Pretzel Incident (1080p BluRay x265 ImE).mkv",
+        "expected_name": "The Noodle Dimension S02E24 The Fuzzy Pretzel Incident",
+        "expected_year": 1978,
     },
     {
-        "input": r"D:\movies\www.UIndex.org - Comedy Bang Bang S02E08 720p WEB-DL AAC2 0 H 264-NTb\Comedy Bang Bang S02E08 720p WEB-DL AAC2 0 H 264-NTb.mkv",
-        "expected_name": "Comedy Bang Bang S02E08 ",
+        # Tests: www.site.org prefix removal with dash separator
+        "input": r"D:\movies\www.UIndex.org - Silly Honk Honk S02E08 720p WEB-DL AAC2 0 H 264-NTb\Silly Honk Honk S02E08 720p WEB-DL AAC2 0 H 264-NTb.mkv",
+        "expected_name": "Silly Honk Honk S02E08 ",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\The Wong Kar-Wai Quadrology [ 1990-2004 ] BluRay.720p-1080p.x264.anoXmous\03.In.The.Mood.For.Love.2000.Criteron.Collection.1080p.BluRay.x264.anoXmous\In.The.Mood.For.Love.2000.Criteron.Collection.1080p.BluRay.x264.anoXmous.mp4",
-        "expected_name": "In the Mood for Love",
-        "expected_year": 2000,
+        # Tests: director collection folder, year range in brackets, Criterion tag, nested subfolders
+        "input": r"D:\movies\The Pierre Bonbon Quadrology [ 1985-1999 ] BluRay.720p-1080p.x264.anoXmous\03.In.The.Mood.For.Soup.2006.Criteron.Collection.1080p.BluRay.x264.anoXmous\In.The.Mood.For.Soup.2006.Criteron.Collection.1080p.BluRay.x264.anoXmous.mp4",
+        "expected_name": "In the Mood for Soup",
+        "expected_year": 2006,
     },
     {
-        "input": r"D:\movies\The.Birthday.Boys.S01.COMPLETE.720p.AMZN.WEBRip.x264-GalaxyTV[TGx]\The.Birthday.Boys.S01E01.720p.AMZN.WEBRip.x264-GalaxyTV.mkv",
-        "expected_name": "The Birthday Boys S01E01 ",
+        # Tests: COMPLETE series folder tag, bracketed uploader tag [TGx]
+        "input": r"D:\movies\The.Pudding.Pals.S01.COMPLETE.720p.AMZN.WEBRip.x264-GalaxyTV[TGx]\The.Pudding.Pals.S01E01.720p.AMZN.WEBRip.x264-GalaxyTV.mkv",
+        "expected_name": "The Pudding Pals S01E01 ",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\_done\Barbarella.1968.1080p.BluRay.x264-HD4U\Barbarella.1968.1080p.BluRay.x264-HD4U.mkv",
-        "expected_name": "Barbarella",
-        "expected_year": 1968,
+        # Tests: underscore prefix folder (_done), dot-separated title
+        "input": r"D:\movies\_done\Spatularella.1995.1080p.BluRay.x264-HD4U\Spatularella.1995.1080p.BluRay.x264-HD4U.mkv",
+        "expected_name": "Spatularella",
+        "expected_year": 1995,
     },
     {
-        "input": r"D:\movies\A Perfect Spy (John le Carré) XviD moviesbyrizzo\A Perfect Spy (John le Carré) Vol1-Episode2.avi",
-        "expected_name": "A Perfect Spy Vol1-Episode2",
+        # Tests: author name in parentheses (with special char é), Vol1-Episode2 format
+        "input": r"D:\movies\A Sneaky Hamster (Pierre le Fromage) XviD moviesbyrizzo\A Sneaky Hamster (Pierre le Fromage) Vol1-Episode2.avi",
+        "expected_name": "A Sneaky Hamster Vol1-Episode2",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\Forbrydelsen - Season 1 - 720p x265 HEVC - DAN-ITA (ENG SUBS) [BRSHNKV]\02. Tuesday November 4 .mp4",
-        "expected_name": "Forbrydelsen S01E02 Tuesday November 4",
+        # Tests: foreign title, "Season 1" folder format, numbered episode (02.), date-like episode title
+        "input": r"D:\movies\Snansen - Season 1 - 720p x265 HEVC - DAN-ITA (ENG SUBS) [BRSHNKV]\02. Spaghetti Wednesday .mp4",
+        "expected_name": "Snansen S01E02 Spaghetti Wednesday",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\Seinfeld.Complete.Series-720p.WEBrip.AAC.EN-SUB.x264-[MULVAcoded]\Season 8\Seinfeld.S08E16.The.Pothole.720p.WEBrip.AAC.EN-SUB.x264-[MULVAcoded].mkv",
-        "expected_name": "Seinfeld S08E16 The Pothole",
+        # Tests: Complete.Series folder, Season subfolder, bracketed uploader
+        "input": r"D:\movies\Gigglebox.Complete.Series-720p.WEBrip.AAC.EN-SUB.x264-[MULVAcoded]\Season 8\Gigglebox.S08E16.The.Lumpy.Potato.720p.WEBrip.AAC.EN-SUB.x264-[MULVAcoded].mkv",
+        "expected_name": "Gigglebox S08E16 The Lumpy Potato",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\Seinfeld.Complete.Series-720p.WEBrip.AAC.EN-SUB.x264-[MULVAcoded]\Season 8\Seinfeld.S08E16.The.Pothole.720p.WEBrip.AAC.EN-SUB.x264-[MULVAcoded].mkv",
-        "expected_name": "Seinfeld S08E16 The Pothole",
+        # Tests: www.site.lt prefix with dash, apostrophe in title, bracketed suffix
+        "input": r"D:\movies\www.MovieRulz.lt - The Pancake Flipper's Handbook (2013) 720p HDRip [.Lt].mkv",
+        "expected_name": "The Pancake Flipper's Handbook",
+        "expected_year": 2013,
+    },
+    {
+        # Tests: bracketed website prefix [ www.site.com ], LIMITED tag
+        "input": r"D:\movies\[ www.UsaBit.com ] - The Thousand Pickle Motel 2009 LIMITED 720p BRRip x264-PLAYNOW.mp4",
+        "expected_name": "The Thousand Pickle Motel",
+        "expected_year": 2009,
+    },
+    {
+        # Tests: long title with apostrophe, nested folder matching filename
+        "input": r"D:\movies\One Jumped Over The Beaver's Dam (1988)\One.Jumped.Over.The.Beaver's.Dam.720p.BrRip.x264.YIFY.mp4",
+        "expected_name": "One Jumped Over The Beaver's Dam",
+        "expected_year": 1988,
+    },
+    {
+        # Tests: multi-season folder (Seasons 1-2 + Extras), episode title with number (4-17), bracketed tag
+        "input": r"D:\movies\Gerbil Titans - Seasons 1-2 + Extras\Gerbil Titans - Season 1\Gerbil Titans - S01E03 - Lil 4-17 [Demon].avi",
+        "expected_name": "Gerbil Titans S01E03 Lil 4-17",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\Seinfeld.Complete.Series-720p.WEBrip.AAC.EN-SUB.x264-[MULVAcoded]\Season 8\Seinfeld.S08E16.The.Pothole.720p.WEBrip.AAC.EN-SUB.x264-[MULVAcoded].mkv",
-        "expected_name": "Seinfeld S08E16 The Pothole",
+        # Tests: Season folder with quality tags (1080p x265 10bit), episode title
+        "input": r"D:\movies\Please Phone Doug Season 1 (1080p x265 10bit Joy)\Please Phone Doug S01E01 Zilch (1080p x265 10bit Joy).mkv",
+        "expected_name": "Please Phone Doug S01E01 Zilch",
         "expected_year": None,
     },
     {
-        "input": r"D:\movies\www.MovieRulz.lt - The Matchmaker's Playbook (2018) 720p HDRip [.Lt].mkv",
-        "expected_name": "The Matchmaker's Playbook",
-        "expected_year": 2018,
-    },
-    {
-        "input": r"D:\movies\[ www.UsaBit.com ] - The Million Dollar Hotel 2000 LIMITED 720p BRRip x264-PLAYNOW.mp4",
-        "expected_name": "The Million Dollar Hotel",
-        "expected_year": 2000,
-    },
-    {
-        "input": r"D:\movies\One Flew Over The Cuckoo's Nest (1975)\One.Flew.Over.The.Cuckoo's.Nest.720p.BrRip.x264.YIFY.mp4",
-        "expected_name": "One Flew Over The Cuckoo's Nest",
-        "expected_year": 1975,
-    },
-    {
-        "input": r"D:\movies\The Fruit is Ripe 3 (HK 1999 Cert. III\b.mpeg",
-        "expected_name": "The Fruit is Ripe 3",
-        "expected_year": 1999,
-    },
-    {
-        "input": r"D:\movies\Human Giant - Seasons 1-2 + Extras\Human Giant - Season 1\Human Giant - S01E03 - Lil 9-11 [Demon].avi",
-        "expected_name": "Human Giant S01E03 Lil 9-11",
+        # Tests: continuation of series test, different season, bracketed uploader tag
+        "input": r"D:\movies\Gerbil Titans - Seasons 1-2 + Extras\Gerbil Titans - Season 2\Gerbil Titans - S02E06 - Super Bouncy Noodle [Geophage].avi",
+        "expected_name": "Gerbil Titans S02E06 Super Bouncy Noodle",
         "expected_year": None,
     },
-    # {
-    #     "input":""
-    # }
-
-    # {
-    #     "input":""
-    # }
-    # Add more cases below. Examples:
-    # {
-    #     "input": "The.Matrix.1999.1080p.BluRay.x264.AC3.mkv",
-    #     "expected_name": "The Matrix",
-    #     "expected_year": 1999,
-    # },
-    # {
-    #     "input": "Inception (2010) [1080p] [BluRay] [x265].mkv",
-    #     "expected_name": "Inception",
-    #     "expected_year": 2010,
-    # },
-    # {
-    #     "input": "Seven Samurai 1954 720p.mp4",
-    #     "expected_name": "Seven Samurai",
-    #     "expected_year": 1954,
-    # },
-    # {
-    #     "input": "Spirited Away (千と千尋の神隠し) (2001) 1080p.mkv",
-    #     "expected_name": "Spirited Away",
-    #     "expected_year": 2001,
-    # },
+    {
+        # Tests: Complete folder tag, "Wumbo" episode title (tests generic pilot-like titles)
+        "input": r"D:\movies\Discombobulated.Complete.1080p.WEB-DL Retic1337\Season 1\Discombobulated.S01E01.Wumbo.1080p.WEB-DL.mp4",
+        "expected_name": "Discombobulated S01E01 Wumbo",
+        "expected_year": None,
+    },
 ]
 
 

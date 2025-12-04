@@ -972,19 +972,25 @@ def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1,
 		time.sleep(poll_interval_seconds)
 	
 	# After VLC has initialized, handle window positioning
+	# Do this asynchronously so we don't block the response
 	if hwnd_found:
-		# Small delay to let VLC finish initializing (it may reset position during init)
-		time.sleep(0.3)
+		def finalize_window_position():
+			"""Background task to ensure window position sticks after VLC init."""
+			try:
+				# Brief delay for VLC to finish any internal repositioning
+				time.sleep(0.15)
+				
+				if rect_applied and target_rect:
+					# Re-apply position in case VLC reset it during init
+					logger.debug(f"Re-applying window position: ({target_rect.left}, {target_rect.top})")
+					_set_window_rect(hwnd_found, target_rect)
+				else:
+					_ensure_window_in_single_monitor(hwnd_found)
+			except Exception as e:
+				logger.warning(f"Background window finalization failed: {e}")
 		
-		if rect_applied and target_rect:
-			# VLC may have overridden our position during initialization
-			# Apply it AGAIN now that VLC has finished loading to ensure it sticks
-			logger.info(f"Re-applying window position after VLC init: ({target_rect.left}, {target_rect.top})")
-			_set_window_rect(hwnd_found, target_rect)
-		else:
-			# Only run the safety check if we didn't restore a saved position
-			# If we restored a position, the window was valid there before, so trust it
-			_ensure_window_in_single_monitor(hwnd_found)
+		# Fire and forget - don't block on this
+		threading.Thread(target=finalize_window_position, daemon=True).start()
 	
 	return last_result
 
@@ -1272,7 +1278,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         try:
             focused = bring_vlc_to_foreground(
                 wait_timeout_seconds=3.0, 
-                poll_interval_seconds=0.1,
+                poll_interval_seconds=0.05,  # 50ms polls for faster window detection
                 target_pid=process.pid,
                 target_rect=existing_rect
             )

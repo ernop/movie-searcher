@@ -204,7 +204,7 @@ function createMovieCard(movie, options = {}) {
                 <div style="position: relative; z-index: 2;">
                     <button class="movie-card-menu-btn" onclick="event.stopPropagation(); toggleCardMenu(this, ${movie.id})">⋮</button>
                     <div class="movie-card-menu-dropdown" id="menu-${movie.id}">
-                        <button class="movie-card-menu-item" onclick="event.stopPropagation(); openFolder('${escapeJsString(movie.path || '').replace(/"/g, '&quot;')}')">Open Folder</button>
+                        <button class="movie-card-menu-item" onclick="event.stopPropagation(); openFolder('${escapeJsString(movie.path || '')}')">Open Folder</button>
                         <button class="movie-card-menu-item" onclick="event.stopPropagation(); showAddToPlaylistMenu(${movie.id})">Add to playlist</button>
                         <button class="movie-card-menu-item" onclick="event.stopPropagation(); hideMovie(${movie.id})">Don't show this anymore</button>
                     </div>
