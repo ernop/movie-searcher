@@ -52,18 +52,18 @@ Use films that match the project's spirit:
 - **AI search**: Curated lists, imaginary critics, real quotes, saved searches
 - **Launching**: One-click to VLC with subtitle selection, jump to any timestamp
 
-### Future Ideas Section
-Include what we're thinking about building:
+### TODO Section
+A clear list of expansion areas—actual things we want to build:
 - **Dialogue search** – Whisper transcription + full-text search
 - **Auto-generated subtitles** – From transcription, or cleaning SDH subs
-- **Data subtitles** – Image recognition generating informational subtitles (geological features, building history, food, clothing, etc.)
+- **Data subtitles** – Image recognition generating info about what's on screen
 - **Visual search** – Image recognition for "scenes with cliffs"
 - **Director/actor navigation** – Jump through filmographies naturally
-- **Scene/edit detection** – Detect scene boundaries and cuts, mark on timeline
-- **Custom viewer** – Built around metadata: scene markers, edit points, dialogue, characters on the time bar. Toggle metadata channels (trees, outfits, color analysis, anything from image analysis). Everything instant.
-- **Actor-in-scene context** – Recognize a face, show their age at filming, next film, where they ended up. Biography from the frame.
+- **Scene/edit detection** – Mark scene boundaries and cuts on timeline
+- **Custom viewer** – Time bar with metadata channels (trees, outfits, color analysis)
+- **Actor-in-scene context** – Recognize a face, show age at filming, career trajectory
 
-Present as possibilities, not promises.
+Format as a bulleted list with brief descriptions. No promotional language.
 
 ### AI Search Examples
 The AI search can do more than simple queries. Show examples like:
@@ -74,11 +74,11 @@ The AI search can do more than simple queries. Show examples like:
 The lists get saved and accumulate over time.
 
 ### Speed
-Emphasize that everything is instant:
+The tool is fast—don't overstate it:
 - Search results appear as you type
-- No loading screens
-- Click a filter, see results immediately
-- Launch a movie in milliseconds
+- No page reloads
+- Filters apply quickly
+- Don't say "instant" or "milliseconds"—just demonstrate speed through how features work
 
 ## Technical Section
 
@@ -91,11 +91,11 @@ Keep brief. Include:
 
 1. What it does (one paragraph)
 2. Main screenshot (visual timeline)
-3. Why we made it
-4. Feature sections with inline screenshots
-5. Future ideas
-6. Technical setup (brief)
-7. Closing line
+3. Feature sections with inline screenshots
+4. TODO section (clear list of expansion areas)
+5. Technical setup (brief)
+
+No "Why we made it" section—just show what it does. No closing promotional line.
 
 ---
 

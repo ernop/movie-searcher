@@ -323,6 +323,19 @@ def clean_movie_name(name, patterns=None):
             parent_has_year = re.search(r'\b(19\d{2}|20[0-2]\d)\b', parent_folder)
             if is_cryptic_filename and parent_has_year:
                 name = parent_folder
+            else:
+                # Check if this is a movie in a numbered collection folder
+                # Pattern: parent has "NN.Title.Year" format and grandparent is a "Complete Set" collection
+                grandparent = path_obj.parent.parent.name if path_obj.parent.parent.name else None
+                if grandparent:
+                    # Check if grandparent looks like a collection (has "Complete" or year range like "1965-2019")
+                    is_collection = re.search(r'\bComplete\b', grandparent, re.IGNORECASE) or \
+                                   re.search(r'\b(19\d{2}|20[0-2]\d)\s*-\s*(19\d{2}|20[0-2]\d)\b', grandparent)
+                    # Check if parent starts with a number (sequence in collection, like "10.Movie.Title")
+                    parent_starts_with_number = re.match(r'^(\d{1,2})[.\s_-]+(.+)$', parent_folder)
+                    if is_collection and parent_starts_with_number:
+                        # Use parent folder's title (after the number) as the movie name
+                        name = parent_starts_with_number.group(2)
     else:
         # Just a filename, use as-is
         name = name
@@ -498,91 +511,105 @@ def clean_movie_name(name, patterns=None):
         
         if has_episode_info:
             show_name_extracted = False
-            # First try parent folder (for cases like "Babylon 5 (1993)")
-            parent_name = parent_str
-            if parent_name and parent_name.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', 'season 1', 'season 2', 's1', 's2', '_done', 'done']:
-                # Check if parent folder looks like a show name (not a season folder)
-                # Only skip if it looks like a DEDICATED season folder (starts with Season X, or is SXX)
-                # "Forbrydelsen - Season 1" should be treated as a show name (which we'll clean later)
-                is_dedicated_season_folder = re.match(r'^\s*(?:Season|season)\s*\d+', parent_name, re.IGNORECASE) or \
-                                           re.match(r'^\s*S\d+\s*$', parent_name, re.IGNORECASE)
-                
-                if not is_dedicated_season_folder:
-                    # Use parent folder as show name, but clean it thoroughly
-                    show_name = parent_name
-                    # Remove website prefixes like "www.UIndex.org -" BEFORE other cleaning
-                    show_name = re.sub(r'^www\.[^\s]+\.\w+\s*-\s*', '', show_name, flags=re.IGNORECASE)
-                    # Remove quality/resolution/source/codec/audio tags BEFORE normalizing (using centralized patterns)
-                    for p in QUALITY_SOURCE_PATTERNS:
-                        show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
-                    for p in EDITION_PATTERNS:
-                        show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
-                    # Remove specific patterns that might have dots (BEFORE normalizing)
-                    show_name = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP\d+\.?\d*|x264|x265|1080p|720p|480p|4k|uhd)\b', ' ', show_name, flags=re.IGNORECASE)
-                    # Remove standalone decimal numbers that are likely quality tags (like "2.0" from "DDP2.0")
-                    show_name = re.sub(r'\b\d+\.\d+\b', ' ', show_name)
-                    # Now normalize dots/underscores to spaces
-                    show_name = re.sub(r'[._]+', ' ', show_name)
-                    # Remove year in parentheses
-                    show_name = re.sub(r'\([^)]*\)', '', show_name)
-                    # Remove common folder patterns (brackets)
-                    show_name = re.sub(r'\[.*?\]', '', show_name)
-                    # Remove season/episode patterns (S01, S02, S01-05 etc.)
-                    show_name = re.sub(r'\bS\d+(?:-\d+)?\b', ' ', show_name, flags=re.IGNORECASE)
-                    show_name = re.sub(r'\bSeason\s*\d+(?:-\d+)?\b', ' ', show_name, flags=re.IGNORECASE)
-                    show_name = re.sub(r'\bS\d+E\d+\b', ' ', show_name, flags=re.IGNORECASE)
-                    # Remove language tags
-                    show_name = re.sub(r'\b(?:japanese|english|french|german|spanish|italian|russian|korean|hindi|eng|dan|ita|en-sub)\b', ' ', show_name, flags=re.IGNORECASE)
-                    # Remove release group suffixes - only if:
-                    # 1. Preceded by space+dash (like " -YIFY"), OR
-                    # 2. Is all lowercase with 4+ chars (like "moviesbyrizzo")
-                    # This avoids removing legitimate name parts like "Saul" in "Better Call Saul"
-                    # or hyphenated titles like "The A-Team"
-                    show_name = re.sub(r'\s+\b[a-z]{4,15}\b\s*$', ' ', show_name)
-                    show_name = re.sub(r'\s-\s*\b[A-Za-z0-9]{2,15}\b\s*$', ' ', show_name)
-                    
-                    # Remove empty parentheses (left over from removing content)
-                    show_name = re.sub(r'\(\s*\)', ' ', show_name)
-                    # Clean up multiple dashes and trailing/leading dashes
-                    show_name = re.sub(r'[–—\-]{2,}', ' ', show_name)
-                    show_name = re.sub(r'[–—\-]+\s*$', ' ', show_name)
-                    show_name = re.sub(r'^\s*[–—\-]+', ' ', show_name)
-
-                    # Don't remove single digits - they might be part of the show name (e.g., "Babylon 5")
-                    # Clean up spaces
-                    show_name = re.sub(r'\s+', ' ', show_name).strip()
-                    if show_name:
-                        name = show_name
-                        show_name_extracted = True
+            original_filename = path_obj.stem
             
+            # FIRST: Check if filename has show name before episode pattern (most reliable source)
+            # Try SxxExx format first (e.g., "Knight.Rider.S02E11.Knightmares" or "Show.Name.1973.S01E02...")
+            episode_pattern_match = re.search(r'^(.+?)\s*S\d{1,2}E\d{1,2}\b', original_filename, re.IGNORECASE)
+            if not episode_pattern_match:
+                # Try "Season X Episode Y" format (e.g., "Show Name Season 4 Episode 12 - Title")
+                episode_pattern_match = re.search(r'^(.+?)\s*Season\s*\d+\s*Episode\s*\d+', original_filename, re.IGNORECASE)
+            
+            if episode_pattern_match:
+                show_name_from_filename = episode_pattern_match.group(1).strip()
+                # Clean it (normalize dots/underscores, remove brackets/parentheses, trailing dashes)
+                show_name_from_filename = re.sub(r'[._]+', ' ', show_name_from_filename)
+                show_name_from_filename = re.sub(r'\[.*?\]', '', show_name_from_filename)
+                show_name_from_filename = re.sub(r'\([^)]*\)', '', show_name_from_filename)
+                show_name_from_filename = re.sub(r'\s*-\s*$', '', show_name_from_filename)
+                # Remove trailing year (it's already extracted as 'year')
+                show_name_from_filename = re.sub(r'\s+(19\d{2}|20[0-2]\d)\s*$', '', show_name_from_filename)
+                show_name_from_filename = re.sub(r'\s+', ' ', show_name_from_filename).strip()
+                # Only use if show name is not just digits (that would be an episode number like "024")
+                if show_name_from_filename and len(show_name_from_filename) >= 2 and not show_name_from_filename.isdigit():
+                    name = show_name_from_filename
+                    show_name_extracted = True
+                    # Still try to extract year from filename or parent/grandparent folder if we haven't found one yet
+                    if year is None:
+                        # Try to get year from the part we removed (between show name and SxxExx)
+                        year_in_filename = re.search(r'\b(19\d{2}|20[0-2]\d)\b', episode_pattern_match.group(1))
+                        if year_in_filename:
+                            year = int(year_in_filename.group(1))
+                        else:
+                            # Try parent folder
+                            parent_year = extract_year_from_name(parent_str) if parent_str else None
+                            if parent_year:
+                                year = parent_year
+                            else:
+                                # Try grandparent folder (for cases like "Season 2" parent)
+                                grandparent = path_obj.parent.parent.name if path_obj.parent.parent.name else None
+                                if grandparent and grandparent.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', '_done', 'done']:
+                                    grandparent_year = extract_year_from_name(grandparent)
+                                    if grandparent_year:
+                                        year = grandparent_year
+            
+            # SECOND: Try parent folder (for cases where filename doesn't have episode pattern prefix)
             if not show_name_extracted:
-                # Before falling back to grandparent, check if the filename already contains
-                # the show name before episode patterns (SxxExx or "Season X Episode Y")
-                # This is more reliable than grandparent folder which may have extra metadata
-                original_filename = path_obj.stem
-                # Try SxxExx format first (e.g., "Knight Rider S02E11 Knightmares")
-                episode_pattern_match = re.search(r'^(.+?)\s*S\d{1,2}E\d{1,2}\b', original_filename, re.IGNORECASE)
-                if not episode_pattern_match:
-                    # Try "Season X Episode Y" format (e.g., "Show Name Season 4 Episode 12 - Title")
-                    episode_pattern_match = re.search(r'^(.+?)\s*Season\s*\d+\s*Episode\s*\d+', original_filename, re.IGNORECASE)
-                if episode_pattern_match:
-                    show_name_from_filename = episode_pattern_match.group(1).strip()
-                    # Clean it (normalize dots/underscores, remove brackets/parentheses, trailing dashes)
-                    show_name_from_filename = re.sub(r'[._]+', ' ', show_name_from_filename)
-                    show_name_from_filename = re.sub(r'\[.*?\]', '', show_name_from_filename)
-                    show_name_from_filename = re.sub(r'\([^)]*\)', '', show_name_from_filename)
-                    show_name_from_filename = re.sub(r'\s*-\s*$', '', show_name_from_filename)
-                    show_name_from_filename = re.sub(r'\s+', ' ', show_name_from_filename).strip()
-                    if show_name_from_filename and len(show_name_from_filename) >= 2:
-                        name = show_name_from_filename
-                        show_name_extracted = True
-                        # Still try to extract year from grandparent folder if we haven't found one yet
-                        if year is None:
-                            grandparent = path_obj.parent.parent.name if path_obj.parent.parent.name else None
-                            if grandparent and grandparent.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', '_done', 'done']:
-                                grandparent_year = extract_year_from_name(grandparent)
-                                if grandparent_year:
-                                    year = grandparent_year
+                parent_name = parent_str
+                if parent_name and parent_name.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', 'season 1', 'season 2', 's1', 's2', '_done', 'done']:
+                    # Check if parent folder looks like a show name (not a season folder)
+                    # Only skip if it looks like a DEDICATED season folder (starts with Season X, or is SXX)
+                    # "Forbrydelsen - Season 1" should be treated as a show name (which we'll clean later)
+                    is_dedicated_season_folder = re.match(r'^\s*(?:Season|season)\s*\d+', parent_name, re.IGNORECASE) or \
+                                               re.match(r'^\s*S\d+\s*$', parent_name, re.IGNORECASE)
+                    
+                    if not is_dedicated_season_folder:
+                        # Use parent folder as show name, but clean it thoroughly
+                        show_name = parent_name
+                        # Remove website prefixes like "www.UIndex.org -" BEFORE other cleaning
+                        show_name = re.sub(r'^www\.[^\s]+\.\w+\s*-\s*', '', show_name, flags=re.IGNORECASE)
+                        # Remove quality/resolution/source/codec/audio tags BEFORE normalizing (using centralized patterns)
+                        for p in QUALITY_SOURCE_PATTERNS:
+                            show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
+                        for p in EDITION_PATTERNS:
+                            show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
+                        # Remove specific patterns that might have dots (BEFORE normalizing)
+                        show_name = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP\d+\.?\d*|x264|x265|1080p|720p|480p|4k|uhd)\b', ' ', show_name, flags=re.IGNORECASE)
+                        # Remove standalone decimal numbers that are likely quality tags (like "2.0" from "DDP2.0")
+                        show_name = re.sub(r'\b\d+\.\d+\b', ' ', show_name)
+                        # Now normalize dots/underscores to spaces
+                        show_name = re.sub(r'[._]+', ' ', show_name)
+                        # Remove year in parentheses
+                        show_name = re.sub(r'\([^)]*\)', '', show_name)
+                        # Remove common folder patterns (brackets)
+                        show_name = re.sub(r'\[.*?\]', '', show_name)
+                        # Remove season/episode patterns (S01, S02, S01-05 etc.)
+                        show_name = re.sub(r'\bS\d+(?:-\d+)?\b', ' ', show_name, flags=re.IGNORECASE)
+                        show_name = re.sub(r'\bSeason\s*\d+(?:-\d+)?\b', ' ', show_name, flags=re.IGNORECASE)
+                        show_name = re.sub(r'\bS\d+E\d+\b', ' ', show_name, flags=re.IGNORECASE)
+                        # Remove language tags
+                        show_name = re.sub(r'\b(?:japanese|english|french|german|spanish|italian|russian|korean|hindi|eng|dan|ita|en-sub)\b', ' ', show_name, flags=re.IGNORECASE)
+                        # Remove release group suffixes - only if:
+                        # 1. Preceded by space+dash (like " -YIFY"), OR
+                        # 2. Is all lowercase with 4+ chars (like "moviesbyrizzo")
+                        # This avoids removing legitimate name parts like "Saul" in "Better Call Saul"
+                        # or hyphenated titles like "The A-Team"
+                        show_name = re.sub(r'\s+\b[a-z]{4,15}\b\s*$', ' ', show_name)
+                        show_name = re.sub(r'\s-\s*\b[A-Za-z0-9]{2,15}\b\s*$', ' ', show_name)
+                        
+                        # Remove empty parentheses (left over from removing content)
+                        show_name = re.sub(r'\(\s*\)', ' ', show_name)
+                        # Clean up multiple dashes and trailing/leading dashes
+                        show_name = re.sub(r'[–—\-]{2,}', ' ', show_name)
+                        show_name = re.sub(r'[–—\-]+\s*$', ' ', show_name)
+                        show_name = re.sub(r'^\s*[–—\-]+', ' ', show_name)
+
+                        # Don't remove single digits - they might be part of the show name (e.g., "Babylon 5")
+                        # Clean up spaces
+                        show_name = re.sub(r'\s+', ' ', show_name).strip()
+                        if show_name:
+                            name = show_name
+                            show_name_extracted = True
             
             if not show_name_extracted:
                 # Fall back to grandparent folder (the show name, skipping the season folder)
@@ -629,8 +656,9 @@ def clean_movie_name(name, patterns=None):
 
         # Special case: parent-folder-as-show with numeric episode filenames (no season context)
         # Example: "<Show Name> [1971-5]\\02-A Sound of Dolphins.mp4" -> "Show Name 02 A Sound of Dolphins"
+        # Only match 1-2 digit leading numbers (episode numbers), not 3+ digit codes like "007" (franchise codes)
         if season is None and episode is None:
-            num_title_match = re.match(r'^\s*(\d{1,3})[._\s-]+(.+)$', original_filename)
+            num_title_match = re.match(r'^\s*(\d{1,2})[._\s-]+(.+)$', original_filename)
             # Parent should exist and not be generic placeholders
             parent_is_generic = parent_str and parent_str.lower() in ['movies', 'tv', 'series', 'shows', 'video', 'videos']
             if num_title_match and parent_str and not parent_is_generic:
@@ -905,7 +933,7 @@ def clean_movie_name(name, patterns=None):
                 for p in EDITION_PATTERNS:
                     episode_title_cleaned = re.sub(p, ' ', episode_title_cleaned, flags=re.IGNORECASE)
                 # Remove specific patterns that might have dots
-                episode_title_cleaned = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP\d+\.?\d*|x264|x265|H\.?264|1080p|720p|480p|4k|uhd)\b', ' ', episode_title_cleaned, flags=re.IGNORECASE)
+                episode_title_cleaned = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP?\d+\.?\d*|DD\d+\.?\d*|x264|x265|H\.?264|1080p|720p|480p|4k|uhd)\b', ' ', episode_title_cleaned, flags=re.IGNORECASE)
                 # Remove release group suffixes (require space before dash to preserve hyphenated words)
                 episode_title_cleaned = re.sub(r'\s-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', episode_title_cleaned)
                 
@@ -959,15 +987,17 @@ def clean_movie_name(name, patterns=None):
                     name = f"{name} {leading_num} {episode_title_cleaned}"
             else:
                 # No leading number, just add title after SXXEXX
+                # Only include episode_title_cleaned if it's non-empty
+                title_suffix = f" {episode_title_cleaned}" if episode_title_cleaned else ""
                 if custom_episode_format:
                     # For custom formats, just add the episode title without standard prefixes
-                    name = f"{name} {episode_title_cleaned}"
+                    name = f"{name}{title_suffix}"
                 elif season_str and episode_str:
-                    name = f"{name} {season_str}{episode_str} {episode_title_cleaned}"
+                    name = f"{name} {season_str}{episode_str}{title_suffix}"
                 elif season_str:
-                    name = f"{name} {season_str} {episode_title_cleaned}"
+                    name = f"{name} {season_str}{title_suffix}"
                 elif episode_str:
-                    name = f"{name} {episode_str} {episode_title_cleaned}"
+                    name = f"{name} {episode_str}{title_suffix}"
         else:
             # No episode title, just add season/episode
             if season_str and episode_str:

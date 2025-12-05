@@ -16,12 +16,24 @@ from scanning import clean_movie_name, load_cleaning_patterns
 # - expected_year is OPTIONAL (omit or set to None if not asserting year)
 # Inputs should be full paths to test path-based cleaning
 #
-# IMPORTANT: All movie/show names, years, episode titles, and release group names MUST be
-# fictional/randomized. Never use real movie names, show names, or recognizable release groups.
-# This avoids trademark issues and keeps test data generic. Examples of good fictional names:
-# - Movies: "Penguin With Hat", "Moonwaffles", "The Snickerdoodle Conspiracy"
-# - Shows: "Gerbil Titans", "The Noodle Dimension", "Gigglebox"
-# - Groups: "XYZ", "TRIAD", "AGLET" (not real scene group names)
+# ============================================================================
+# TEST DATA POLICY - PLEASE READ BEFORE ADDING OR MODIFYING TEST CASES
+# ============================================================================
+# All test data in this file uses FICTIONAL names only. This is intentional.
+# When adding new test cases, always substitute real names with made-up ones:
+#
+#   - Use invented show/movie titles (e.g., "Gerbil Titans", "Moonwaffles")
+#   - Use fictional episode names (e.g., "The Fuzzy Pretzel Incident")
+#   - Use fake release group names (e.g., "AGLET", "XYZ", "CtrlHD")
+#
+# The *structure* and *patterns* of the path matter for testing, not the names.
+# A path like "Show.Name.S01E02.720p.BluRay-GROUP" tests the same parsing logic
+# whether "Show Name" is real or fictional.
+#
+# If you find a real-world path that needs testing, recreate the same folder
+# structure and naming patterns using invented names. Document what pattern
+# the test validates in the comment above each case.
+# ============================================================================
 TEST_CASES: List[Dict[str, Optional[str]]] = [
     {
         # Tests: HDrip removal, basic title case correction
@@ -124,7 +136,7 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
     {
         # Tests: www.site.org prefix removal with dash separator
         "input": r"D:\movies\www.UIndex.org - Silly Honk Honk S02E08 720p WEB-DL AAC2 0 H 264-NTb\Silly Honk Honk S02E08 720p WEB-DL AAC2 0 H 264-NTb.mkv",
-        "expected_name": "Silly Honk Honk S02E08 ",
+        "expected_name": "Silly Honk Honk S02E08",
         "expected_year": None,
     },
     {
@@ -136,7 +148,7 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
     {
         # Tests: COMPLETE series folder tag, bracketed uploader tag [TGx]
         "input": r"D:\movies\The.Pudding.Pals.S01.COMPLETE.720p.AMZN.WEBRip.x264-GalaxyTV[TGx]\The.Pudding.Pals.S01E01.720p.AMZN.WEBRip.x264-GalaxyTV.mkv",
-        "expected_name": "The Pudding Pals S01E01 ",
+        "expected_name": "The Pudding Pals S01E01",
         "expected_year": None,
     },
     {
@@ -220,18 +232,18 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_year": 1953,
     },
     {
-        # Tests: hyphenated title preservation ("B-Squad"), SxxExx with episode title, nested season folders
-        # Must NOT remove "-Squad" as a release group suffix
-        "input": r"D:\movies\The B Squad S01-S05 (1987-)\The B-Squad S02 (360p re-dvdrip)\The B-Squad S02E08 Waffle Emergency.mp4",
-        "expected_name": "The B-Squad S02E08 Waffle Emergency",
+        # Tests: hyphenated title preservation (letter-word pattern), SxxExx with episode title, nested season folders
+        # Must NOT remove "-Force" as a release group suffix - it's part of the title
+        "input": r"D:\movies\The Z Force S01-S05 (1987-)\The Z-Force S02 (360p re-dvdrip)\The Z-Force S02E08 Waffle Emergency.mp4",
+        "expected_name": "The Z-Force S02E08 Waffle Emergency",
         "expected_year": None,
     },
     {
         # Tests: TV series with year and "Complete Seasons" in grandparent folder, Season X subfolder
         # Should extract show name from filename, not the metadata-heavy grandparent folder
-        "input": r"D:\movies\Knight Rider 1982 Complete Seasons 1 to 4 720p BluRay x264 [i_c]\Season 2\Knight Rider S02E11 Knightmares.mkv",
-        "expected_name": "Knight Rider S02E11 Knightmares",
-        "expected_year": 1982,
+        "input": r"D:\movies\Turbo Ferret 1984 Complete Seasons 1 to 4 720p BluRay x264 [i_c]\Season 2\Turbo Ferret S02E11 Nightmare Fuel.mkv",
+        "expected_name": "Turbo Ferret S02E11 Nightmare Fuel",
+        "expected_year": 1984,
     },
     {
         # Tests: "Season X Episode Y" format in filename (not SxxExx), comma-separated season list in grandparent,
@@ -240,6 +252,22 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "input": r"D:\movies\Cosmic Llama Adventures Season 1, 2, 3, 4 & 5 Deluxe DVD Boxset + Extras in HD\Season 4\Cosmic Llama Adventures Season 4 Episode 12 - The Sparkly Nebula.avi",
         "expected_name": "Cosmic Llama Adventures S04E12 The Sparkly Nebula",
         "expected_year": None,
+    },
+    {
+        # Tests: dot-separated filename with year before SxxExx, parent folder matches filename pattern,
+        # DD5.1 audio tag removal, x264-GROUP release suffix removal
+        # Should extract show name from filename (cleaner) and year, not leave DD5.1 fragments
+        "input": r"D:\movies\Silly.Ducks.In.Space.1987.720p.Blu-ray.DD5.1.x264-CtrlHD\Silly.Ducks.In.Space.1987.S01E02.720p.Blu-ray.DD5.1.x264-CtrlHD.mkv",
+        "expected_name": "Silly Ducks In Space S01E02",
+        "expected_year": 1987,
+    },
+    {
+        # Tests: movie in numbered collection folder (like "Complete Set"), parent has sequence number prefix,
+        # filename has franchise prefix. Should use parent folder title without sequence number.
+        # Example: Bond/franchise collection where each movie is in numbered subfolder
+        "input": r"D:\movies\Captain.Wombat.Complete.Set.1965-2019.1080p.BluRay.x264-ETRG\10.The.Sneaky.Penguin.Caper.1979\Captain.Wombat.The.Sneaky.Penguin.Caper.1979.1080p.BluRay.x264.AC3-Ozlem.mp4",
+        "expected_name": "The Sneaky Penguin Caper",
+        "expected_year": 1979,
     },
 ]
 
