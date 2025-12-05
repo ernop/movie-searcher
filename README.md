@@ -1,222 +1,135 @@
 # Movie Searcher
 
-Your personal movie library, the way it should be. Browse thousands of films visually, find what you want to watch instantly, and pick up exactly where you left off.
+A tool we built to organize, browse, and watch our video collections. Point it at a folder and it indexes everything—then lets you search, filter, rate, track what you've watched, and jump into any film instantly.
 
-![Movie Searcher Home](docs/screenshot-home.png)
+## What It Does
 
----
+You point it at a folder of video files. It scans them, extracts metadata and screenshots, and gives you a web interface to:
 
-## Why This Exists
+- **Find** films by typing, filtering by language/decade/letter, or asking AI questions
+- **Organize** with playlists, ratings, and watch status
+- **Track** your viewing history and resume where you left off
+- **View** visual timelines of any film—click a frame to jump directly to that moment
 
-We built this because streaming services got slow and complicated. You have a movie collection—probably a large one—and you want to:
+The screenshot timeline was the original motivation: being able to see frames from across a whole film—opening, middle, ending—without scrubbing through VLC manually. But it grew into a full library browser.
 
-- **Find a movie in seconds**, not minutes of scrolling
-- **See what's in each film** before you commit to watching it
-- **Remember where you stopped** when life interrupts
-- **Ask questions** like "What were Hitchcock's best thrillers?" and get answers from your own library
+![Koyaanisqatsi with visual timeline](docs/screenshot-koyaanisqatsi.png)
 
-Movie Searcher runs on your computer, works instantly, and never phones home.
+That's Koyaanisqatsi above. Each thumbnail is a clickable moment in the film. You can jump to any of them directly.
 
----
+## Why We Made This
 
-## Visual Browsing
+We have a lot of video files. Documentary films, experimental cinema, foreign films, archival footage—things that don't show up on streaming services. When you're trying to decide what to watch, clicking through Windows Explorer doesn't help much.
 
-Every movie gets a visual identity. Screenshots are extracted automatically from your video files, so you can see the cinematography, the mood, the era—all at a glance.
+We wanted:
+- To see what a film looks like before committing to watch it
+- To remember where we stopped if we get interrupted
+- To search by typing, not by navigating folders
+- To filter by language, decade, or whether we've already seen something
 
-![Explore Movies](docs/screenshot-explore.png)
+So we built this for ourselves.
 
-### Browse Your Way
+## Browsing
 
-- **By Letter**: Jump straight to films starting with any letter
-- **By Decade**: 1910s through 2020s—see how your collection spans cinema history
-- **By Language**: Filter by audio track—English, Japanese, French, Italian, Korean, Spanish, and dozens more
-- **By Watch Status**: Show only unwatched films, or revisit your favorites
+The Explore page shows your whole collection as a visual grid. Each card shows a frame from the movie.
 
-The Explore page shows your entire collection as a visual grid. Each card shows the movie's screenshot, year, duration, file size, and your rating.
+![Explore with filters](docs/screenshot-explore.png)
 
----
+You can filter by:
+- **Audio language** – useful when you have films in many languages
+- **Decade** – 1910s through 2020s
+- **First letter** – quick alphabet navigation
+- **Watch status** – show only things you haven't seen yet
 
-## Instant Search
+These combine. "Japanese films from the 1980s that I haven't watched" is one click on each filter.
 
-Type any part of a movie name and see results immediately. No loading screens, no waiting. The search updates as you type, with autocomplete suggestions for titles in your library.
+## Generating Screenshots
 
-Filter results by watch status—show all movies, only watched ones, or only those you haven't seen yet.
+When you first scan your collection, each movie gets a default screenshot. But the useful thing is generating more—a visual timeline across the whole film.
 
----
+Click "Generate Screenshots" on any movie and choose an interval (every 20 seconds, every 2 minutes, etc.). If you have subtitle files, you can burn the text onto each screenshot—so you can see exactly what's being said at that moment.
 
-## AI-Powered Discovery
+This takes a while for long films, but once it's done, you can scrub through visually. Click any thumbnail to launch the movie at that exact timestamp.
 
-Ask questions about movies in plain English:
+## Searching
 
-> "What were Kubrick's 10 most influential movies?"
+Type any part of a title in the search box. Results appear immediately as you type. No page loads, no waiting.
 
-> "Roger Ebert's essential 1970s cinema"
+![Search and AI](docs/screenshot-home.png)
 
-> "Cross-cultural films for a couple of friends, one Italian-American, one Australian"
+There's also an AI search if you configure an API key. You can ask questions like "what were the best documentaries about music in the 1970s?" and it returns a list—showing which ones you already have and which you don't.
 
-The AI returns a curated list, showing which films you already own and which ones you might want to find. Each search is automatically saved as a Movie List you can revisit.
+## Saving AI Searches
 
-![Movie Lists](docs/screenshot-lists.png)
+Every AI search gets saved automatically. Over time you build up a collection of curated lists—"Roger Ebert's essential 1950s cinema," "Mike Leigh films ranked by public reception," whatever you've asked about.
 
-Your saved lists accumulate over time—"Tarantino's Favorite 1980s Films," "Mike Leigh Films Ranked by Public Reception," "Australian Dramas with Strong Aussie Accents." Each list shows how many movies it contains and how many are in your library.
+![Movie lists](docs/screenshot-lists.png)
 
----
+These stick around. You can favorite them, edit the titles, or delete the ones you don't need.
 
-## Watch History & Resume
+## History and Resuming
 
-Every time you launch a movie, it's recorded. The History page shows what you've been watching recently, with timestamps and the option to **resume exactly where you stopped**.
+The History page shows what you've launched recently. If a movie was playing and you closed it (or opened something else), we try to capture where you stopped.
 
-![Launch History](docs/screenshot-history.png)
+![Launch history](docs/screenshot-history.png)
 
-If you stopped watching at 45 minutes in, the Resume button appears—one click and you're back at that exact moment.
+The "Resume" button picks up from that position. This isn't perfect—VLC doesn't always report back exactly—but it works most of the time.
 
----
+## Watch Status and Ratings
 
-## Movie Details
+You can mark movies as watched, unwatched, or "want to watch." Star ratings are saved and displayed on the cards.
 
-Click any movie to see everything about it:
-
-![Movie Details](docs/screenshot-movie-detail.png)
-
-- **Screenshots**: Browse extracted frames from the film. Click any screenshot to launch the movie at that exact timestamp—perfect for jumping to a specific scene.
-- **Generate More Screenshots**: Create a complete visual timeline at whatever interval you choose (every 20 seconds, 1 minute, 2 minutes, etc.)
-- **Subtitles**: If subtitle files exist, pick which one to use. Subtitles are automatically detected and loaded.
-- **Star Ratings**: Rate films 1-5 stars. Your ratings appear throughout the interface.
-- **Quick Links**: Jump to Letterboxd, Google, or Douban to read reviews. Or open the folder to manage the file.
-- **Watch Status**: Mark as watched, unwatched, or add to "Want to Watch."
-
-### Screenshots with Subtitles
-
-When you generate screenshots, Movie Searcher can burn the actual subtitle text onto each frame. See exactly what's being said at that moment in the film—useful for finding specific scenes or understanding foreign films at a glance.
-
----
+This is mostly for filtering. The main use case: showing only films you haven't seen yet, or only films you've rated highly.
 
 ## Playlists
 
-Organize your collection with playlists:
+There are built-in playlists (Favorites, Want to Watch) and you can create custom ones. Nothing fancy—just a way to group films together.
 
-- **Favorites**: Your most-loved films
-- **Want to Watch**: Your watchlist
-- **Custom Playlists**: Create your own themed collections
+## Launching Movies
 
-Access playlists from the navigation dropdown. Add any movie to any playlist from its detail page.
+Click Launch and it opens in VLC. If you have subtitle files in the same folder, it auto-detects them. You can pick which subtitle file to use before launching.
 
----
-
-## Launch & Play
-
-One click launches your movie in VLC Media Player. The interface shows what's currently playing at all times, so you always know what's running.
-
-**Features when launching:**
-- **Subtitle Selection**: Choose from available subtitle files before launching
-- **Start at Timestamp**: Click any screenshot to launch at that exact moment
-- **Resume Playback**: Continue from where you last stopped
-- **Close Previous**: Optionally close existing VLC windows when launching a new film
+The interface shows what's currently playing at the top of every page, so you know if something's already running.
 
 ---
 
-## Batch Search
+## What We're Thinking About
 
-Have a list of movies you're looking for? Paste them all at once:
+Some ideas we haven't built yet but want to:
 
-```
-Casablanca 1942
-The Godfather 1972
-Citizen Kane 1941
-Psycho 1960
-```
+**Dialogue search** – Run audio transcription on the video files and index the text. Then you could search for a line you remember and find the scene. "Find me the part where someone says 'you talking to me?'"
 
-Movie Searcher will open browser tabs to help you search for each one, tracking your progress through the list.
+**Visual search** – Use image recognition to tag scenes. Search for "scenes with cliffs" or "shots of trains" and find matching moments across the collection.
 
----
+**Director and actor navigation** – When you're watching a film, see what else the director made, what other films the actors appeared in. Jump directly from the current movie to their filmography without having to search manually.
 
-## Performance Stats
-
-Track how fast movies launch. The Stats page shows:
-
-- Average launch time in milliseconds
-- Fastest and slowest launches
-- VLC optimization flags being used
-- Recent launch history
-
-The goal is instant playback—movie starts within 50ms of clicking Launch.
+These are just possibilities. We build what we find ourselves wanting.
 
 ---
 
-## Setup
+## Technical Setup
 
-Point Movie Searcher at your movies folder and click Scan. It indexes everything:
+**Requirements:** Python 3.8+, VLC, ffmpeg
 
-- **Video files**: MP4, MKV, AVI, MOV, WMV, and more
-- **Subtitles**: SRT files in the same folder
-- **Metadata**: Duration, file size, audio language
-
-Re-scan anytime to pick up new additions. Only changed files are re-processed.
-
-### Settings You Can Configure
-
-- **Movies Folder**: Where your collection lives (network drives work too)
-- **Local Target Folder**: For copying movies offline
-- **VLC Behavior**: Close existing windows, launch with subtitles on/off, hardware acceleration
-- **Name Cleaning**: Smart cleaning of video filenames for display
-
----
-
-## Statistics at a Glance
-
-From the home page, you can always see:
-
-- **Total Movies**: How many films are indexed
-- **Watched Count**: How many you've seen (and what percentage)
-- **Currently Playing**: What's running right now
-- **Server Uptime**: How long Movie Searcher has been running
-
----
-
-## Technical Details
-
-**Requirements:**
-- Python 3.8+
-- VLC Media Player
-- ffmpeg (auto-installed on Windows)
-
-**Quick Start (Windows):**
+**Windows quick start:**
 ```
 Double-click run.bat
 ```
 
-**Quick Start (Any Platform):**
+**Other platforms:**
 ```bash
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-python start.py
+python3 start.py
 ```
 
-The launcher handles everything else—detecting/installing ffmpeg and VLC, setting up paths.
+The launcher auto-installs ffmpeg and VLC on Windows if missing.
 
-**See [Installation Guide](docs/installation.md) for detailed setup instructions.**
+First time: point it at your movies folder in the Setup page, then click Scan.
 
----
-
-## Stopping
-
-- Press `Ctrl+C` in the server window, or
-- Run `python stop.py`
+**See [Installation Guide](docs/installation.md) for details.**
 
 ---
 
-## What This Is Not
-
-Movie Searcher is a personal tool for people who already have a movie collection. It doesn't:
-
-- Stream content from the internet
-- Download or acquire movies
-- Connect to external databases (beyond AI search, which you configure)
-- Track you or phone home
-
-Your movies stay on your computer. Your data stays on your computer.
-
----
-
-*Built for movie lovers who want their collection at their fingertips.*
+*This is a personal tool that we use daily. It's not polished software for distribution—it's something we made because we needed it.*

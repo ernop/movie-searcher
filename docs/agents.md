@@ -1,5 +1,29 @@
 # Developer Notes
 
+## Important: Documentation Voice
+
+**Before rewriting user-facing documentation (README, etc.), read [WRITING_GUIDE.md](WRITING_GUIDE.md) for practical guidance.**
+
+### The Craftsman Voice
+
+This project uses a humble, explanatory tone—not promotional.
+
+**Wrong:** "Blazing fast search! Revolutionary visual browsing!"
+
+**Right:** "We have a lot of video files. Clicking through Windows Explorer doesn't help much. So we built this for ourselves."
+
+### Core Principles
+- Explain what we built and **why we needed it**
+- Acknowledge limitations honestly ("This isn't perfect, but it works most of the time")
+- Include future ideas—this project is ongoing, not finished
+- Let the quality speak; don't brag
+- 90% product focus, 10% technical
+
+### Film Context
+This tool is for documentary, experimental, foreign, and archival films—things not on streaming services. Don't frame it for mainstream Hollywood. Let examples like Koyaanisqatsi imply the intended use.
+
+---
+
 ## Architecture
 
 FastAPI backend with static HTML frontend. State persisted in SQLite database (`movie_searcher.db`).
