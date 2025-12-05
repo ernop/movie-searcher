@@ -92,7 +92,7 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
     {
         # Tests: long title with proper name, year range in brackets [1982-7], episode prefix number
         "input": r"D:\movies\The Magical Kitchen of Gustavo Fernandez [1982-7]\02-A Whiff of Tacos.mp4",
-        "expected_name": "The Magical Kitchen of Gustavo Fernandez 02 A Whiff of Tacos",
+        "expected_name": "The Magical Kitchen of Gustavo Fernandez - 02 - A Whiff of Tacos",
         "expected_year": None, #because a removed item in the prior folder name doesn't mean that we lose the actaul filename
     },
     {
@@ -113,6 +113,12 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         # Tests: number at start of title, EXTENDED tag removal, nested folder with same name
         "input": r"D:\movies\17 Chipmunks (1997) EXTENDED.720p.BRrip.sujaidr\17 Chipmunks (1997) EXTENDED.720p.BRrip.sujaidr.mkv",
         "expected_name": "17 Chipmunks",
+        "expected_year": 1997,
+    },
+    {
+        # Tests: numeric-leading title with IMDB metadata in parent folder
+        "input": r"D:\movies\10 Grumpy Owls (1957) IMDB 9.0\10.Grumpy.Owls.1997.1080p.BluRay.Flac.1.0.x265.HEVC-Nb8.mkv",
+        "expected_name": "10 Grumpy Owls",
         "expected_year": 1997,
     },
     {
@@ -268,6 +274,14 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "input": r"D:\movies\Captain.Wombat.Complete.Set.1965-2019.1080p.BluRay.x264-ETRG\10.The.Sneaky.Penguin.Caper.1979\Captain.Wombat.The.Sneaky.Penguin.Caper.1979.1080p.BluRay.x264.AC3-Ozlem.mp4",
         "expected_name": "The Sneaky Penguin Caper",
         "expected_year": 1979,
+    },
+    {
+        # Tests: documentary series with episode number prefix and historical date range in episode title
+        # The date range "(1933 to 1939)" should be preserved as episode context, NOT extracted as movie year
+        # Year should come from parent folder (1973), not from episode title dates
+        "input": r"D:\movies\The Galaxy At Peace (1973) Mp4 1080p\01 A New Federation (1933 to 1939).mp4",
+        "expected_name": "The Galaxy At Peace - 01 - A New Federation (1933 to 1939)",
+        "expected_year": 1973,
     },
 ]
 

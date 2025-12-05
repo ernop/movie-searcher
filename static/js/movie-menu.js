@@ -1,33 +1,15 @@
-/**
- * Movie Action Menu - Central definition of all movie context menu actions.
- * 
- * This module provides a unified way to define, render, and manage the "..." menu
- * (Movie Action Menu) that appears on movie cards and movie detail pages.
- * 
- * ARCHITECTURE:
- * - Menu state is computed server-side and included in movie data
- * - Frontend renders menu based on pre-computed state (no additional AJAX)
- * - Movie cards and detail pages use the same menu definition
- * - Detail page is a superset of card (may show additional actions)
- * 
- * MENU STATE (from server):
- * movie.menu_state = {
- *     copy_to_local: null | 'not_copied' | 'already_copied'
- *     // null means feature not configured (don't show action)
- * }
- */
+// Movie Action Menu - defines the "..." menu on movie cards and detail pages.
+// Menu state is computed server-side and included in movie data. Frontend renders
+// based on pre-computed state (no additional AJAX).
+//
+// MOVIE_MENU_ACTIONS schema:
+//   id: unique identifier
+//   label: string or function(movie) => string
+//   action: handler (movieId, movie) => void
+//   contexts: ['card', 'details']
+//   enabled: optional (movie) => boolean
+//   className: optional CSS class or (movie) => string
 
-/**
- * Movie Action Menu Actions Definition
- * 
- * Each action has:
- * - id: Unique identifier for the action
- * - label: Display text (string or function(movie) => string)
- * - action: Handler function (movieId, movie) => void
- * - contexts: Array of contexts where action appears ['card', 'details']
- * - enabled: Optional function(movie) => boolean, defaults to true
- * - className: Optional CSS class for styling
- */
 const MOVIE_MENU_ACTIONS = [
     {
         id: 'open-folder',
@@ -74,12 +56,6 @@ const MOVIE_MENU_ACTIONS = [
     }
 ];
 
-/**
- * Get available actions for a given context and movie
- * @param {object} movie - Movie data object with menu_state
- * @param {string} context - 'card' or 'details'
- * @returns {Array} Filtered list of actions
- */
 function getAvailableMenuActions(movie, context) {
     return MOVIE_MENU_ACTIONS.filter(action => {
         // Check context
@@ -94,12 +70,6 @@ function getAvailableMenuActions(movie, context) {
     });
 }
 
-/**
- * Get the label for an action (handles dynamic labels)
- * @param {object} action - Action definition
- * @param {object} movie - Movie data
- * @returns {string} Label text
- */
 function getActionLabel(action, movie) {
     if (typeof action.label === 'function') {
         return action.label(movie);
@@ -107,12 +77,6 @@ function getActionLabel(action, movie) {
     return action.label;
 }
 
-/**
- * Get the CSS class for an action (handles dynamic classes)
- * @param {object} action - Action definition
- * @param {object} movie - Movie data
- * @returns {string} CSS class or empty string
- */
 function getActionClassName(action, movie) {
     if (typeof action.className === 'function') {
         return action.className(movie);
@@ -120,13 +84,6 @@ function getActionClassName(action, movie) {
     return action.className || '';
 }
 
-/**
- * Render the Movie Action Menu HTML for a given context
- * @param {object} movie - Movie data object (must include id, path, name, menu_state)
- * @param {string} context - 'card' or 'details'
- * @param {string} menuId - Optional custom menu ID (defaults to 'menu-{movieId}')
- * @returns {string} HTML string for the menu
- */
 function renderMovieActionMenu(movie, context, menuId = null) {
     const actions = getAvailableMenuActions(movie, context);
     const id = menuId || `menu-${movie.id}`;
@@ -173,12 +130,6 @@ function renderMovieActionMenu(movie, context, menuId = null) {
     `;
 }
 
-/**
- * Handle a menu action click
- * @param {string} actionId - The action ID
- * @param {number} movieId - The movie ID
- * @param {object} movieData - Movie data object
- */
 function handleMovieMenuAction(actionId, movieId, movieData) {
     // Close all menus first
     document.querySelectorAll('.movie-card-menu-dropdown.active').forEach(el => {
@@ -194,18 +145,10 @@ function handleMovieMenuAction(actionId, movieId, movieData) {
     }
 }
 
-/**
- * Render menu for movie card context
- * Convenience wrapper for renderMovieActionMenu
- */
 function renderCardMenu(movie) {
     return renderMovieActionMenu(movie, 'card');
 }
 
-/**
- * Render menu for movie details context
- * Convenience wrapper for renderMovieActionMenu
- */
 function renderDetailsMenu(movie, menuId = null) {
     return renderMovieActionMenu(movie, 'details', menuId);
 }

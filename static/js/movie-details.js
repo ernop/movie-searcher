@@ -257,7 +257,6 @@ function updateMovieStatusUI(movieId, newStatus) {
 async function launchMovie(movieId) {
     try {
         const selectedSubtitle = selectedSubtitles[movieId] || null;
-        const closeExistingVlc = document.getElementById('setupCloseExistingVlc').checked;
 
         // Validate subtitle path if one is selected
         if (selectedSubtitle && typeof selectedSubtitle !== 'string') {
@@ -271,7 +270,7 @@ async function launchMovie(movieId) {
             body: JSON.stringify({
                 movie_id: movieId,
                 subtitle_path: selectedSubtitle,
-                close_existing_vlc: closeExistingVlc
+                close_existing_vlc: true
             })
         });
 
@@ -388,6 +387,7 @@ async function loadMovieDetailsById(id) {
         if (watchStatus === true) watchStatus = 'watched';
         if (watchStatus === false) watchStatus = 'unwatched';
         const isWatched = watchStatus === 'watched';
+        const showSizes = shouldShowMovieSizes();
 
         // Load subtitles
         await loadSubtitles(movie.id);
@@ -414,12 +414,12 @@ async function loadMovieDetailsById(id) {
         let sameTitleIndicator = '';
         if (sameTitleMovies.length > 0) {
             const otherVersionsHtml = sameTitleMovies.map(m => {
-                const sizeStr = m.size ? formatSize(m.size) : 'unknown size';
+                const sizeStr = showSizes && m.size ? formatSize(m.size) : '';
                 const resolution = parseResolution(m.path || '');
                 const resolutionBadge = resolution ? `<span class="same-title-resolution">${resolution}</span>` : '';
                 const hiddenBadge = m.hidden ? '<span class="same-title-hidden-badge">hidden</span>' : '';
                 return `<a href="#/movie/${m.id}" class="same-title-item" title="${escapeHtml(m.path)}">
-                    <span class="same-title-size">${sizeStr}</span>
+                    ${sizeStr ? `<span class="same-title-size movie-size">${sizeStr}</span>` : ''}
                     ${resolutionBadge}
                     ${hiddenBadge}
                 </a>`;
@@ -438,6 +438,9 @@ async function loadMovieDetailsById(id) {
             `;
         }
 
+        // Render the transcription section (async, placeholder first)
+        const transcriptionPlaceholder = `<div id="transcription-placeholder-${movie.id}"><div class="loading" style="padding: 20px;">Loading transcription status...</div></div>`;
+
         container.innerHTML = `
             <div class="movie-details" data-movie-id="${movie.id}">
                 <div class="movie-details-header">
@@ -454,7 +457,7 @@ async function loadMovieDetailsById(id) {
                     <div class="movie-details-meta">
                         ${movie.year ? `<span class="year-link" onclick="navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
                         ${movie.length ? `<span>${formatTime(movie.length)}</span>` : ''}
-                        ${movie.size ? `<span>${formatSize(movie.size)}</span>` : ''}
+                        ${showSizes && movie.size ? `<span class="movie-size">${formatSize(movie.size)}</span>` : ''}
                         ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}
                     </div>
                     ${createStarRating(movie.id || 0, movie.rating || null, 'movie-details-rating')}
@@ -488,9 +491,26 @@ async function loadMovieDetailsById(id) {
                 </div>
             </div>
             ${mediaGallery}
+            ${transcriptionPlaceholder}
             </div>
         `;
         initAllStarRatings();
+        
+        // Load transcription section asynchronously
+        if (typeof renderTranscriptionSection === 'function') {
+            renderTranscriptionSection(movie.id).then(html => {
+                const placeholder = document.getElementById(`transcription-placeholder-${movie.id}`);
+                if (placeholder) {
+                    placeholder.outerHTML = html;
+                }
+            }).catch(err => {
+                console.error('Failed to load transcription section:', err);
+                const placeholder = document.getElementById(`transcription-placeholder-${movie.id}`);
+                if (placeholder) {
+                    placeholder.innerHTML = '';
+                }
+            });
+        }
         // Menu state is pre-computed server-side, no need for additional API calls
     } catch (error) {
         container.innerHTML = `<div class="empty-state">Error loading movie: ${error.message}</div>`;

@@ -1,5 +1,19 @@
 // Utility Functions
 
+// Persistent settings loaded from the server (default values applied client-side)
+window.userSettings = window.userSettings || {};
+
+function shouldShowMovieSizes() {
+    // Default to true unless explicitly disabled in settings
+    const settings = window.userSettings || {};
+    return settings.show_full_movie_size !== false;
+}
+
+function applyMovieSizeVisibilitySetting() {
+    const showSizes = shouldShowMovieSizes();
+    document.body.classList.toggle('hide-movie-sizes', !showSizes);
+}
+
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -30,35 +44,55 @@ function formatMinutes(minutes) {
     return `${mins}m`;
 }
 
-function showStatus(message, type = 'info') {
-    const statusEl = document.getElementById('status');
-    if (!statusEl) return;
-    
-    statusEl.textContent = message;
-    statusEl.className = `status ${type}`;
-    statusEl.style.display = 'block';
-    
+function showStatus(message, type = 'info', duration = 3000) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+
+    // Icon mapping
+    const icons = {
+        success: '✓',
+        error: '✗',
+        info: 'ℹ',
+        warning: '⚠'
+    };
+
+    // Create toast element
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `
+        <span class="toast-icon">${icons[type] || icons.info}</span>
+        <span class="toast-message">${escapeHtml(message)}</span>
+    `;
+
+    container.appendChild(toast);
+
+    // Auto-dismiss
     setTimeout(() => {
-        statusEl.style.display = 'none';
-    }, 3000);
+        toast.classList.add('toast-exit');
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 200); // Match animation duration
+    }, duration);
 }
 
 function normalizePath(path) {
     if (!path) return path;
-    
+
     path = path.replace(/\//g, '\\');
-    
+
     if (path.startsWith('\\\\') && path.length > 2) {
         const rest = path.substring(2).replace(/\\\\+/g, '\\');
         path = '\\\\' + rest;
     } else {
         path = path.replace(/\\\\+/g, '\\');
     }
-    
+
     if (path.length > 3 && path.endsWith('\\') && !path.match(/^[A-Za-z]:\\$/)) {
         path = path.substring(0, path.length - 1);
     }
-    
+
     return path;
 }
 
@@ -115,15 +149,15 @@ function generateExternalLinks(movieName) {
         .replace(/\[.*?\]/g, '')
         .replace(/\(.*?\)/g, '')
         .trim();
-    
+
     const letterboxdSlug = cleanedName
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '');
-    
+
     const googleQuery = encodeURIComponent(cleanedName + ' movie');
     const doubanQuery = encodeURIComponent(cleanedName);
-    
+
     return {
         letterboxd: `https://letterboxd.com/search/${letterboxdSlug}/`,
         google: `https://www.google.com/search?q=${googleQuery}`,
@@ -135,10 +169,10 @@ async function openFolder(path) {
     try {
         const response = await fetch('/api/open-folder', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({path: path})
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: path })
         });
-        
+
         if (response.ok) {
             showStatus('Folder opened', 'success');
         } else {
@@ -159,7 +193,7 @@ async function openFolder(path) {
 function showFolderDialog() {
     const dialog = document.getElementById('folderDialog');
     const input = document.getElementById('folderPathInput');
-    
+
     loadCurrentFolder().then(() => {
         const setupCurrentFolderEl = document.getElementById('setupCurrentFolder');
         const currentPath = setupCurrentFolderEl ? setupCurrentFolderEl.textContent : '';
@@ -169,7 +203,7 @@ function showFolderDialog() {
             input.value = '';
         }
     });
-    
+
     dialog.classList.add('active');
 }
 
@@ -187,13 +221,13 @@ async function browseFolder() {
     input.directory = true;
     input.style.display = 'none';
     document.body.appendChild(input);
-    
+
     input.addEventListener('change', async (e) => {
         const files = e.target.files;
         if (files.length > 0) {
             const firstFile = files[0];
             const folderPathInput = document.getElementById('folderPathInput');
-            
+
             // Try to extract path from file object
             // On some browsers, file.path contains the full path
             if (firstFile.path && firstFile.path.match(/^[A-Za-z]:/)) {
@@ -217,36 +251,36 @@ async function browseFolder() {
         }
         document.body.removeChild(input);
     });
-    
+
     input.click();
 }
 
 async function saveFolderPath() {
     const input = document.getElementById('folderPathInput');
     let folderPath = input.value.trim();
-    
+
     if (!folderPath) {
         showStatus('Please enter a folder path', 'error');
         return;
     }
-    
+
     // Validate absolute path before normalizing
     if (!isValidAbsolutePath(folderPath)) {
         showStatus('Path must be absolute (e.g., D:\\movies or C:\\Movies)', 'error');
         return;
     }
-    
+
     folderPath = normalizePath(folderPath);
-    
+
     try {
         const response = await fetch('/api/config', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({movies_folder: folderPath})
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ movies_folder: folderPath })
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             showStatus('Movies folder updated successfully', 'success');
             loadCurrentFolder();
@@ -269,9 +303,9 @@ async function updateCurrentlyPlaying() {
         const response = await fetch('/api/currently-playing');
         const data = await response.json();
         const playingEl = document.getElementById('currentlyPlaying');
-        
+
         if (!playingEl) return;
-        
+
         if (data.playing && data.playing.length > 0) {
             const firstMovie = data.playing[0];
             playingEl.className = 'currently-playing has-movie';
@@ -318,7 +352,7 @@ let serverUptimeInterval = null;
 async function updateServerUptime() {
     const uptimeEl = document.getElementById('serverUptime');
     if (!uptimeEl) return;
-    
+
     try {
         const response = await fetch('/api/health', { cache: 'no-store' });
         if (response.ok) {
@@ -352,7 +386,7 @@ function stopServerUptimePolling() {
 document.addEventListener('keydown', (e) => {
     const dialog = document.getElementById('folderDialog');
     const overlay = document.getElementById('mediaOverlay');
-    
+
     if (dialog && dialog.classList.contains('active')) {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -386,15 +420,15 @@ function copyMissingMovieNames() {
         showStatus('No movies to copy', 'error');
         return;
     }
-    
+
     const lines = movies.map(movie => {
         const title = movie.name || 'Unknown title';
         const year = movie.year || '';
         return year ? `${title} ${year}` : title;
     });
-    
+
     const text = lines.join('\n');
-    
+
     navigator.clipboard.writeText(text).then(() => {
         showStatus(`Copied ${movies.length} movie names to clipboard`, 'success');
     }).catch(err => {

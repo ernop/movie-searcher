@@ -35,6 +35,8 @@ VIDEO_SOURCES = {
     'remux', 'dvdrip', 'dvdscr',
     'cam', 'ts', 'tc', 'hdcam', 'hdts',
     'screener', 'scr', 'r5', 'dvdr',
+    # Container formats (sometimes appear in folder names)
+    'mp4', 'mkv', 'avi', 'mov', 'wmv',
 }
 
 # ============================================================================

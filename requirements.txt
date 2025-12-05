@@ -25,6 +25,13 @@ requests==2.31.0
 openai>=1.0.0
 anthropic>=0.7.0
 
+# Transcription (optional - for dialogue search)
+# Requires PyTorch with CUDA. Install separately:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Then install faster-whisper:
+faster-whisper>=1.0.0
+
 # Development & Testing
 pytest==7.4.3
 playwright>=1.40.0
+ruff>=0.8.0

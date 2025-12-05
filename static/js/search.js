@@ -289,17 +289,11 @@ function setExploreWatchFilter(filterValue, clickedBtn) {
     applyExploreFilters();
 }
 
-const statusMessage = document.getElementById('statusMessage');
 let progressInterval = null;
 		let progressPollInFlight = false;
 		let progressAbortController = null;
 
-function showStatus(message, type = 'info') {
-    statusMessage.innerHTML = `<div class="status-message ${type}">${escapeHtml(message)}</div>`;
-    setTimeout(() => {
-        statusMessage.innerHTML = '';
-    }, 5000);
-}
+// showStatus is now defined globally in utils.js as a toast notification
 
 function formatTime(seconds) {
     if (!seconds) return 'Unknown';
@@ -323,13 +317,7 @@ function formatDate(dateStr) {
     return date.toLocaleDateString();
 }
 
-function formatSize(bytes) {
-    if (!bytes) return '';
-    const gb = bytes / (1024 * 1024 * 1024);
-    if (gb >= 1) return `${gb.toFixed(2)} GB`;
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(2)} MB`;
-}
+// formatSize is defined in utils.js (loaded first)
 
 async function scanFolder() {
     const btn = document.getElementById('setupScanBtn') || document.getElementById('scanBtn');

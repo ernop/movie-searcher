@@ -506,7 +506,6 @@ async function jumpToVideo(movieId, timestampSeconds) {
     try {
         const subtitleSelect = document.getElementById(`subtitle-${movieId}`);
         const subtitlePath = subtitleSelect ? subtitleSelect.value : null;
-        const closeExistingVlc = document.getElementById('setupCloseExistingVlc').checked;
         
         const response = await fetch('/api/launch', {
             method: 'POST',
@@ -514,7 +513,7 @@ async function jumpToVideo(movieId, timestampSeconds) {
             body: JSON.stringify({
                 movie_id: movieId,
                 subtitle_path: subtitlePath || null,
-                close_existing_vlc: closeExistingVlc,
+                close_existing_vlc: true,
                 start_time: timestampSeconds
             })
         });

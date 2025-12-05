@@ -139,6 +139,7 @@ function handleRoute() {
     const pagePlaylists = document.getElementById('pagePlaylists');
     const pageMovieLists = document.getElementById('pageMovieLists');
     const pageBatchSearch = document.getElementById('pageBatchSearch');
+    const pageDialogueSearch = document.getElementById('pageDialogueSearch');
 
     // Detail routes (hash-based)
     if (route.startsWith('/movie/')) {
@@ -247,6 +248,15 @@ function handleRoute() {
                  loadDuplicateMovies();
                  // restoreScrollPosition handled inside loadDuplicateMovies after render
              }
+         }
+    } else if (route === '/dialogue') {
+         if (pageDialogueSearch) {
+             pageDialogueSearch.classList.add('active');
+             document.getElementById('navDialogue')?.classList.add('active');
+             if (typeof loadDialogueSearchPage === 'function') {
+                 loadDialogueSearchPage();
+             }
+             restoreScrollPosition();
          }
     } else {
          navigateTo('/home');

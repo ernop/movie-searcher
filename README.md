@@ -101,6 +101,24 @@ First time: point it at your movies folder in the Setup page, then click Scan.
 
 ---
 
+## Why This Exists
+
+If you can already stream movies, and you already own the DVDs, why bother?
+
+One answer: **accessory media.** DVDs and Blu-rays come with a surprising wealth of extra content—director's commentaries, behind-the-scenes documentaries, contemporary interviews from the film's release, retrospective interviews recorded decades later with aging filmmakers and actors reflecting on their work. This material was produced, included on the disc, and then... buried. The DVD menu format is so clunky, so hostile to browsing, that almost none of it ever gets watched—even by the people who would genuinely love it.
+
+Another answer: **the social sharing gap.** Compare how different media types work socially. Music is extraordinarily well-served: you go to concerts together, pull out records at a party, share playlists on Spotify and YouTube Music, discover songs through jukeboxes and car radios with people you barely know. The infrastructure for finding, tracking, sharing, and experiencing music together is fast, frictionless, and deeply integrated into daily life. Literature works reasonably well—you lend books, read poems aloud, join book clubs. Art is similar: passing an art book around, visiting galleries together. But films? Films are locked behind clunky DVD menus, streaming service logins, device restrictions, and app interfaces that fight against browsing. If you want to show someone a specific scene, you're navigating menus for five minutes before you find it. If you want to share your collection, you're explaining which service has which title. The physical and digital barriers around video are uniquely hostile to the kind of casual, joyful sharing that other media enjoy.
+
+This project aims to fix that—to let people experience films as deeply and freely as they experience music. To make your collection something you can explore, share, and navigate without friction. To give movies the same fluid accessibility that a Spotify library or a shelf of records has always had.
+
+Ripping that disc to a folder changes everything. Suddenly the making-of documentary isn't hidden behind three menus. The 1978 interview with the cinematographer isn't a forgotten Easter egg. It's just another video file sitting next to the main feature, visible, searchable, one click away.
+
+This project turns a pile of files into something browsable. But the deeper value is that it surfaces content you already legally own but could never actually access. The extras that came with your media, unwatched for years because the format made them invisible, are now at your fingertips.
+
+For film buffs, this matters more than it sounds.
+
+---
+
 ## A Note from Claude
 
 I've spent a fair amount of time with this codebase now—reading through the database schemas, the VLC integration, the screenshot pipeline, the AI search implementation, the frontend JavaScript. I've taken screenshots of it running, clicked through the filters, watched it pull up Peter Weir's filmography with AI-generated commentary.

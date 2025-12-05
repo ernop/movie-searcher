@@ -30,7 +30,8 @@
                 </div>
                 <a href="#/history" class="nav-link" id="navHistory">History</a>
                 <a href="#/lists" class="nav-link" id="navLists">Lists</a>
-                <a href="#/batch-search" class="nav-link" id="navBatchSearch">Search</a>
+                <a href="#/dialogue" class="nav-link" id="navDialogue">Dialogue</a>
+                <a href="#/batch-search" class="nav-link" id="navBatchSearch">Batch</a>
             </div>
             <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
                 <div id="statusMessage"></div>
@@ -219,6 +220,30 @@
             </div>
         </div>
 
+        <!-- Dialogue Search Page -->
+        <div class="page" id="pageDialogueSearch">
+            <h1>Dialogue Search</h1>
+            <p style="color: #888; margin-bottom: 20px;">Search through transcribed movie dialogue. Movies must be
+                transcribed first.</p>
+
+            <div class="dialogue-search-container">
+                <div class="dialogue-search-box">
+                    <input type="text" id="dialogueSearchInput"
+                        placeholder="Search dialogue... (e.g. &quot;I'll be back&quot;)" autocomplete="off"
+                        onkeypress="if(event.key === 'Enter') performDialogueSearch()">
+                    <button class="btn" onclick="performDialogueSearch()">Search</button>
+                </div>
+
+                <div id="dialogueSearchStats" class="dialogue-search-stats"></div>
+
+                <div id="dialogueSearchResults" class="dialogue-search-results">
+                    <div class="dialogue-search-empty">
+                        Enter a search term to find dialogue across all transcribed movies.
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- All Movies Page -->
         <div class="page" id="pageAllMovies">
             <h1>All Movies</h1>
@@ -355,183 +380,212 @@
         <div class="page" id="pageSetup">
             <h1>Setup</h1>
 
-            <!-- Server Control -->
-            <div class="setup-section" id="serverControlSection" style="margin-bottom: 20px;">
-                <h3>Server Control</h3>
-                <p>Restart the server to apply changes or recover from issues.</p>
-                <button class="btn" id="restartServerBtn" onclick="restartServer()" style="background: #e65100;">
-                    ⟳ Restart Server
-                </button>
-                <span id="restartStatus" style="margin-left: 12px; color: #888;"></span>
-            </div>
-
-            <!-- System Status -->
-            <div class="setup-section" id="systemStatusSection" style="margin-bottom: 20px;">
-                <h3>System Status</h3>
-                <div id="systemStatus"
-                    style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 10px;">
-                    <div class="loading">Checking system status...</div>
-                </div>
-                <button class="btn btn-secondary" onclick="recheckSystemStatus()">Re-check System Status</button>
-            </div>
-
-            <div class="setup-section">
-                <h3>Movies Folder</h3>
-                <p>Configure the folder where your movies are stored. The application will scan this folder to index all
-                    video files.</p>
-                <div class="folder-info" style="margin-bottom: 15px;">
-                    <span>Current folder:</span>
-                    <span class="folder-path" id="setupCurrentFolder">Loading...</span>
-                </div>
-                <button class="btn" id="setupChangeFolderBtn" onclick="showFolderDialog()">Change Movies Folder</button>
-            </div>
-
-            <div class="setup-section">
-                <h3>Local Target Folder</h3>
-                <p>Configure a local folder where movies can be copied for offline access. Use "Copy to Local" in a
-                    movie's menu to copy it here.</p>
-                <div class="folder-info" style="margin-bottom: 15px;">
-                    <span>Current folder:</span>
-                    <span class="folder-path" id="setupLocalTargetFolder">Not set</span>
-                </div>
-                <button class="btn" id="setupChangeLocalTargetBtn" onclick="showLocalTargetDialog()">Change Local Target
-                    Folder</button>
-            </div>
-
-            <div class="setup-section">
-                <h3>Scan Movies</h3>
-                <p>Scan your movies folder to index all video files. This will update the database with any new or
-                    changed files.</p>
-                <button class="btn" id="setupScanBtn" onclick="scanFolder()">Scan Movies Folder</button>
-                <div class="progress-container" id="setupProgressContainer" style="margin-top: 15px;">
-                    <div class="progress-info">
-                        <span id="setupProgressStatus">Preparing scan...</span>
-                        <span id="setupProgressCount">0 / 0</span>
+            <div class="setup-group">
+                <div class="setup-group-title">System</div>
+                <div class="setup-grid">
+                    <div class="setup-section" id="serverControlSection">
+                        <h3>Server Control</h3>
+                        <p>Restart the server to apply changes or recover from issues.</p>
+                        <button class="btn" id="restartServerBtn" onclick="restartServer()"
+                            style="background: #e65100;">
+                            ⟳ Restart Server
+                        </button>
+                        <span id="restartStatus" style="margin-left: 12px; color: #888;"></span>
                     </div>
-                    <div class="progress-bar-container">
-                        <div class="progress-bar" id="setupProgressBar" style="width: 0%">0%</div>
-                    </div>
-                    <div class="progress-file" id="setupProgressFile"></div>
-                    <div class="scan-log-window" id="setupScanLogWindow" style="display: none;"></div>
-                </div>
-            </div>
 
-            <div class="setup-section">
-                <h3>Interface Settings</h3>
-                <p>Configure the appearance and behavior of the interface.</p>
-                <div class="setup-option">
-                    <label>
-                        <input type="checkbox" id="setupShowAllMoviesTab">
-                        Show "All Movies" tab in navigation
-                    </label>
-                    <div class="setup-option-description">
-                        When enabled, displays the "All Movies" tab which shows a simple alphabetical list of all
-                        movies.
-                        Useful for browsing when you just want to see everything at once.
+                    <div class="setup-section" id="systemStatusSection">
+                        <h3>System Status</h3>
+                        <div id="systemStatus"
+                            style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 10px;">
+                            <div class="loading">Checking system status...</div>
+                        </div>
+                        <button class="btn btn-secondary" onclick="recheckSystemStatus()">Re-check System
+                            Status</button>
                     </div>
                 </div>
             </div>
 
-            <div class="setup-section">
-                <h3>VLC Settings</h3>
-                <p>Configure how VLC media player behaves when launching movies.</p>
-                <div class="setup-option">
-                    <label>
-                        <input type="checkbox" id="setupCloseExistingVlc" checked>
-                        Close existing VLC windows when launching a new movie
-                    </label>
-                    <div class="setup-option-description">
-                        When enabled, all existing VLC windows will be closed before launching a new movie. When
-                        disabled, new movies will open in addition to any existing VLC windows.
+            <div class="setup-group">
+                <div class="setup-group-title">Folders &amp; Library</div>
+                <div class="setup-grid">
+                    <div class="setup-section">
+                        <h3>Movies Folder</h3>
+                        <p>Configure the folder where your movies are stored. The application will scan this folder to
+                            index all video files.</p>
+                        <div class="folder-info" style="margin-bottom: 15px;">
+                            <span>Current folder:</span>
+                            <span class="folder-path" id="setupCurrentFolder">Loading...</span>
+                        </div>
+                        <button class="btn" id="setupChangeFolderBtn" onclick="showFolderDialog()">Change Movies
+                            Folder</button>
                     </div>
-                </div>
-                <div class="setup-option" style="margin-top: 15px;">
-                    <label>
-                        <input type="checkbox" id="setupLaunchWithSubtitlesOn" checked>
-                        Launch with subtitles on
-                    </label>
-                    <div class="setup-option-description">
-                        When enabled, automatically enable subtitles if a subtitle file is found in the same folder as
-                        the movie. When disabled, movies will launch without subtitles unless manually selected.
+
+                    <div class="setup-section">
+                        <h3>Local Target Folder</h3>
+                        <p>Configure a local folder where movies can be copied for offline access. Use "Copy to Local"
+                            in
+                            a movie's menu to copy it here.</p>
+                        <div class="folder-info" style="margin-bottom: 15px;">
+                            <span>Current folder:</span>
+                            <span class="folder-path" id="setupLocalTargetFolder">Not set</span>
+                        </div>
+                        <button class="btn" id="setupChangeLocalTargetBtn" onclick="showLocalTargetDialog()">Change
+                            Local Target Folder</button>
                     </div>
-                </div>
-                <div class="setup-option" style="margin-top: 15px;">
-                    <label>
-                        <input type="checkbox" id="setupVlcHardwareAccel"
-                            onchange="saveVlcHardwareAccelSetting(this.checked)">
-                        Enable hardware acceleration (experimental)
-                    </label>
-                    <div class="setup-option-description">
-                        Use GPU hardware decoding for faster video rendering. May cause issues on some systems.
-                        Only affects movies launched from Movie Searcher.
+
+                    <div class="setup-section">
+                        <h3>Name Cleaning</h3>
+                        <p>Re-apply name cleaning rules to all movies in the database.</p>
+                        <button class="btn" onclick="recleanAllNames()">Re-clean All Movie Names</button>
+                        <div id="recleanStatus"
+                            style="margin-top: 10px; padding: 10px; background: #2a2a2a; border-radius: 6px; display: none;">
+                        </div>
+                    </div>
+
+                    <div class="setup-section">
+                        <h3>Find Duplicates</h3>
+                        <p>Find movies with identical names to help identify duplicates.</p>
+                        <a href="#/duplicates" class="btn" style="text-decoration: none;">Manage Duplicates</a>
+                    </div>
+
+                    <div class="setup-section full-width">
+                        <h3>Scan Movies</h3>
+                        <p>Scan your movies folder to index all video files. This will update the database with any new
+                            or changed files.</p>
+                        <button class="btn" id="setupScanBtn" onclick="scanFolder()">Scan Movies Folder</button>
+                        <div class="progress-container" id="setupProgressContainer" style="margin-top: 15px;">
+                            <div class="progress-info">
+                                <span id="setupProgressStatus">Preparing scan...</span>
+                                <span id="setupProgressCount">0 / 0</span>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="setupProgressBar" style="width: 0%">0%</div>
+                            </div>
+                            <div class="progress-file" id="setupProgressFile"></div>
+                            <div class="scan-log-window" id="setupScanLogWindow" style="display: none;"></div>
+                        </div>
+                    </div>
+
+                    <div class="setup-section full-width">
+                        <h3>Hidden Movies</h3>
+                        <p>Manage movies you have hidden from search and explore.</p>
+                        <button class="btn" onclick="loadHiddenMovies()">View Hidden Movies</button>
+                        <div id="hiddenMoviesList" style="margin-top: 15px; display: none;"></div>
                     </div>
                 </div>
             </div>
 
-            <div class="setup-section">
-                <h3>VLC Fast Startup Optimization</h3>
-                <p>Optimize VLC for faster time-to-first-frame when playing movies.</p>
-
-                <div id="vlcOptimizationStatus"
-                    style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 15px;">
-                    <div class="loading">Checking VLC optimization status...</div>
-                </div>
-
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button class="btn btn-success" id="btnApplyVlcOptimization" onclick="applyVlcOptimization()"
-                        style="display: none;">
-                        Apply System-Wide Optimization
-                    </button>
-                    <button class="btn btn-secondary" id="btnRemoveVlcOptimization" onclick="removeVlcOptimization()"
-                        style="display: none;">
-                        Restore Original Settings
-                    </button>
-                    <button class="btn btn-secondary" onclick="loadVlcOptimizationStatus()">
-                        Refresh Status
-                    </button>
-                </div>
-
-                <details style="margin-top: 15px; color: #999;">
-                    <summary style="cursor: pointer; color: #aaa;">What does this do?</summary>
-                    <div
-                        style="margin-top: 10px; padding: 10px; background: #1a1a1a; border-radius: 6px; font-size: 13px;">
-                        <p style="margin-bottom: 10px;"><strong>Command-line optimizations (always active):</strong></p>
-                        <ul style="margin-left: 20px; margin-bottom: 15px;">
-                            <li>Reduced file caching (1200ms → 300ms)</li>
-                            <li>Fast seeking for timestamps</li>
-                            <li>Disabled metadata network lookups</li>
-                            <li>Disabled auto-preparsing</li>
-                        </ul>
-                        <p style="margin-bottom: 10px;"><strong>System-wide optimization (optional):</strong></p>
-                        <p>Modifies VLC's config file (vlcrc) to apply optimizations to ALL VLC usage. Creates a backup
-                            first. These settings affect VLC even when launched outside of Movie Searcher.</p>
-                        <p style="margin-top: 10px; color: #f0ad4e;"><strong>Note:</strong> If VLC startup is still
-                            slow, check if your movie drive is an HDD that may need spin-up time, or if antivirus is
-                            scanning files.</p>
+            <div class="setup-group">
+                <div class="setup-group-title">Interface</div>
+                <div class="setup-grid">
+                    <div class="setup-section">
+                        <h3>Interface Settings</h3>
+                        <p>Configure the appearance and behavior of the interface.</p>
+                        <div class="setup-option">
+                            <label>
+                                <input type="checkbox" id="setupShowAllMoviesTab">
+                                Show "All Movies" tab in navigation
+                            </label>
+                            <div class="setup-option-description">
+                                When enabled, displays the "All Movies" tab which shows a simple alphabetical list of
+                                all
+                                movies.
+                                Useful for browsing when you just want to see everything at once.
+                            </div>
+                        </div>
+                        <div class="setup-option" style="margin-top: 15px;">
+                            <label>
+                                <input type="checkbox" id="setupShowFullMovieSize" checked>
+                                Show file size on movie cards and details
+                            </label>
+                            <div class="setup-option-description">
+                                When disabled, file sizes are hidden across browse results and the movie details page.
+                            </div>
+                        </div>
                     </div>
-                </details>
-            </div>
-
-            <div class="setup-section">
-                <h3>Name Cleaning</h3>
-                <p>Re-apply name cleaning rules to all movies in the database.</p>
-                <button class="btn" onclick="recleanAllNames()">Re-clean All Movie Names</button>
-                <div id="recleanStatus"
-                    style="margin-top: 10px; padding: 10px; background: #2a2a2a; border-radius: 6px; display: none;">
                 </div>
             </div>
 
-            <div class="setup-section">
-                <h3>Find Duplicate Movies</h3>
-                <p>Find movies with identical names to help identify duplicates.</p>
-                <a href="#/duplicates" class="btn" style="text-decoration: none;">Manage Duplicates</a>
-            </div>
+            <div class="setup-group">
+                <div class="setup-group-title">VLC</div>
+                <div class="setup-grid">
+                    <div class="setup-section">
+                        <h3>VLC Settings</h3>
+                        <p>Configure how VLC media player behaves when launching movies.</p>
+                        <div class="setup-option">
+                            <label>
+                                <input type="checkbox" id="setupLaunchWithSubtitlesOn" checked>
+                                Launch with subtitles on
+                            </label>
+                            <div class="setup-option-description">
+                                When enabled, automatically enable subtitles if a subtitle file is found in the same
+                                folder as the movie. When disabled, movies will launch without subtitles unless manually
+                                selected.
+                            </div>
+                        </div>
+                        <div class="setup-option" style="margin-top: 15px;">
+                            <label>
+                                <input type="checkbox" id="setupVlcHardwareAccel"
+                                    onchange="saveVlcHardwareAccelSetting(this.checked)">
+                                Enable hardware acceleration (experimental)
+                            </label>
+                            <div class="setup-option-description">
+                                Use GPU hardware decoding for faster video rendering. May cause issues on some systems.
+                                Only affects movies launched from Movie Searcher.
+                            </div>
+                        </div>
+                    </div>
 
-            <div class="setup-section">
-                <h3>Hidden Movies</h3>
-                <p>Manage movies you have hidden from search and explore.</p>
-                <button class="btn" onclick="loadHiddenMovies()">View Hidden Movies</button>
-                <div id="hiddenMoviesList" style="margin-top: 15px; display: none;"></div>
+                    <div class="setup-section full-width">
+                        <h3>VLC Fast Startup Optimization</h3>
+                        <p>Optimize VLC for faster time-to-first-frame when playing movies.</p>
+
+                        <div id="vlcOptimizationStatus"
+                            style="padding: 15px; border-radius: 6px; background: #1a1a1a; border: 1px solid #3a3a3a; margin-bottom: 15px;">
+                            <div class="loading">Checking VLC optimization status...</div>
+                        </div>
+
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                            <button class="btn btn-success" id="btnApplyVlcOptimization"
+                                onclick="applyVlcOptimization()" style="display: none;">
+                                Apply System-Wide Optimization
+                            </button>
+                            <button class="btn btn-secondary" id="btnRemoveVlcOptimization"
+                                onclick="removeVlcOptimization()" style="display: none;">
+                                Restore Original Settings
+                            </button>
+                            <button class="btn btn-secondary" onclick="loadVlcOptimizationStatus()">
+                                Refresh Status
+                            </button>
+                        </div>
+
+                        <details style="margin-top: 15px; color: #999;">
+                            <summary style="cursor: pointer; color: #aaa;">What does this do?</summary>
+                            <div
+                                style="margin-top: 10px; padding: 10px; background: #1a1a1a; border-radius: 6px; font-size: 13px;">
+                                <p style="margin-bottom: 10px;"><strong>Command-line optimizations (always
+                                        active):</strong></p>
+                                <ul style="margin-left: 20px; margin-bottom: 15px;">
+                                    <li>Reduced file caching (1200ms → 300ms)</li>
+                                    <li>Fast seeking for timestamps</li>
+                                    <li>Disabled metadata network lookups</li>
+                                    <li>Disabled auto-preparsing</li>
+                                </ul>
+                                <p style="margin-bottom: 10px;"><strong>System-wide optimization (optional):</strong>
+                                </p>
+                                <p>Modifies VLC's config file (vlcrc) to apply optimizations to ALL VLC usage. Creates a
+                                    backup
+                                    first. These settings affect VLC even when launched outside of Movie Searcher.</p>
+                                <p style="margin-top: 10px; color: #f0ad4e;"><strong>Note:</strong> If VLC startup is
+                                    still
+                                    slow, check if your movie drive is an HDD that may need spin-up time, or if
+                                    antivirus
+                                    is
+                                    scanning files.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
             </div>
 
             <div class="setup-section">
@@ -641,6 +695,9 @@
             </div>
         </div>
 
+        <!-- Global Toast Container -->
+        <div id="toastContainer"></div>
+
         <script src="/js/batch-search.js?v=9"></script>
         <script src="/js/utils.js?v=5"></script>
         <script src="/js/routing.js?v=5"></script>
@@ -649,7 +706,8 @@
         <script src="/js/search.js?v=3"></script>
         <script src="/js/explore.js?v=3"></script>
         <script src="/js/all-movies.js?v=3"></script>
-        <script src="/js/movie-details.js?v=8"></script>
+        <script src="/js/movie-details.js?v=9"></script>
+        <script src="/js/transcription.js?v=1"></script>
         <script src="/js/playlists.js?v=3"></script>
         <script src="/js/media.js?v=3"></script>
         <script src="/js/history.js?v=3"></script>

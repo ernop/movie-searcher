@@ -1,0 +1,11 @@
+# Tooling safety notes (PowerShell, Windows)
+- Prefer full venv paths to avoid module resolution issues:
+  - `.\venv\Scripts\python.exe -m pip install <pkg> --disable-pip-version-check --no-cache-dir --timeout 120`
+  - `.\venv\Scripts\python.exe -m ruff --version`
+  - `.\venv\Scripts\python.exe -m ruff check .`
+- Avoid piping long installs through filters (`| Select-Object ...`); it can swallow prompts and make interrupts look like failures. Run install commands directly.
+- If installs were interrupted, rerun the full command (above) to ensure wheels are written.
+- HTML lint install: from `static/js`, run `npm install` (installs htmlhint). Then `npm run lint:html` in that directory.
+- JS lint: from `static/js`, `npm run lint`.
+- Python lint: from repo root, `.\venv\Scripts\python.exe -m ruff check .`.
+

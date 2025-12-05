@@ -20,13 +20,53 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# Global settings - will be loaded from config
-WHISPER_MODEL_DIR = Path("D:/whisper_models")
-HUGGINGFACE_CACHE = Path("D:/huggingface_cache")
+
+def _get_transcription_paths():
+    """Get transcription-related paths from config, with sensible defaults."""
+    try:
+        from config import load_config
+        config = load_config()
+    except Exception:
+        config = {}
+    
+    # Default to project-local directories if not configured
+    project_root = Path(__file__).parent.parent
+    
+    whisper_dir = config.get("whisper_model_dir")
+    if whisper_dir:
+        whisper_dir = Path(whisper_dir)
+    else:
+        # Default: check D:/whisper_models first (if on Windows with D: drive), else use project-local
+        default_d = Path("D:/whisper_models")
+        if default_d.parent.exists():
+            whisper_dir = default_d
+        else:
+            whisper_dir = project_root / "whisper_models"
+    
+    hf_cache = config.get("huggingface_cache_dir")
+    if hf_cache:
+        hf_cache = Path(hf_cache)
+    else:
+        # Default: check D:/huggingface_cache first (if on Windows with D: drive), else use project-local
+        default_d = Path("D:/huggingface_cache")
+        if default_d.parent.exists():
+            hf_cache = default_d
+        else:
+            hf_cache = project_root / "huggingface_cache"
+    
+    return whisper_dir, hf_cache
+
+
+# Load paths from config
+WHISPER_MODEL_DIR, HUGGINGFACE_CACHE = _get_transcription_paths()
 
 # Set environment variables for model caching
 os.environ["HF_HOME"] = str(HUGGINGFACE_CACHE)
 os.environ["TORCH_HOME"] = str(WHISPER_MODEL_DIR)
+
+# Ensure directories exist
+WHISPER_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+HUGGINGFACE_CACHE.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass

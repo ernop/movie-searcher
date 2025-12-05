@@ -480,4 +480,175 @@ async def check_transcription_setup():
     return result
 
 
+# ============================================
+# Dialogue Search
+# ============================================
+
+class DialogueSearchRequest(BaseModel):
+    query: str
+    limit: int = 50
+    movie_id: Optional[int] = None  # Optional: limit search to one movie
+
+
+class DialogueSearchResult(BaseModel):
+    movie_id: int
+    movie_name: str
+    segment_id: int
+    text: str
+    start_time: float
+    end_time: float
+    speaker_id: Optional[str] = None
+    context_before: Optional[str] = None
+    context_after: Optional[str] = None
+
+
+class DialogueSearchResponse(BaseModel):
+    query: str
+    total_results: int
+    results: list[DialogueSearchResult]
+
+
+@router.get("/search", response_model=DialogueSearchResponse)
+async def search_dialogue(
+    q: str,
+    limit: int = 50,
+    movie_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Search through all transcribed dialogue.
+    
+    Args:
+        q: Search query (case-insensitive substring match)
+        limit: Maximum results to return (default 50)
+        movie_id: Optional - limit search to a specific movie
+    
+    Returns:
+        Matching dialogue segments with movie info and timestamps
+    """
+    from sqlalchemy import func
+    
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Search query must be at least 2 characters"
+        )
+    
+    query = q.strip().lower()
+    
+    # Build the search query
+    # Join TranscriptSegment -> Transcript -> Movie
+    search_query = db.query(
+        TranscriptSegment,
+        Transcript.movie_id,
+        Movie.name.label('movie_name')
+    ).join(
+        Transcript, TranscriptSegment.transcript_id == Transcript.id
+    ).join(
+        Movie, Transcript.movie_id == Movie.id
+    ).filter(
+        Transcript.status == 'completed',
+        func.lower(TranscriptSegment.text).contains(query)
+    )
+    
+    # Filter by movie if specified
+    if movie_id is not None:
+        search_query = search_query.filter(Transcript.movie_id == movie_id)
+    
+    # Order by movie then segment order
+    search_query = search_query.order_by(
+        Movie.name,
+        TranscriptSegment.segment_index
+    ).limit(limit)
+    
+    results = search_query.all()
+    
+    # Format results
+    formatted_results = []
+    for segment, m_id, m_name in results:
+        # Get context (previous and next segments)
+        context_before = None
+        context_after = None
+        
+        if segment.segment_index > 0:
+            prev_seg = db.query(TranscriptSegment).filter(
+                TranscriptSegment.transcript_id == segment.transcript_id,
+                TranscriptSegment.segment_index == segment.segment_index - 1
+            ).first()
+            if prev_seg:
+                context_before = prev_seg.text[:100] + ('...' if len(prev_seg.text) > 100 else '')
+        
+        next_seg = db.query(TranscriptSegment).filter(
+            TranscriptSegment.transcript_id == segment.transcript_id,
+            TranscriptSegment.segment_index == segment.segment_index + 1
+        ).first()
+        if next_seg:
+            context_after = next_seg.text[:100] + ('...' if len(next_seg.text) > 100 else '')
+        
+        formatted_results.append(DialogueSearchResult(
+            movie_id=m_id,
+            movie_name=m_name,
+            segment_id=segment.id,
+            text=segment.text,
+            start_time=segment.start_time,
+            end_time=segment.end_time,
+            speaker_id=segment.speaker_id,
+            context_before=context_before,
+            context_after=context_after
+        ))
+    
+    return DialogueSearchResponse(
+        query=q,
+        total_results=len(formatted_results),
+        results=formatted_results
+    )
+
+
+@router.get("/stats")
+async def get_transcription_stats(db: Session = Depends(get_db)):
+    """Get overall transcription statistics."""
+    from sqlalchemy import func
+    
+    # Count transcripts by status
+    status_counts = db.query(
+        Transcript.status,
+        func.count(Transcript.id)
+    ).group_by(Transcript.status).all()
+    
+    status_dict = {status: count for status, count in status_counts}
+    
+    # Total segments and words
+    totals = db.query(
+        func.sum(Transcript.segment_count),
+        func.sum(Transcript.word_count),
+        func.sum(Transcript.duration_seconds)
+    ).filter(Transcript.status == 'completed').first()
+    
+    total_segments = totals[0] or 0
+    total_words = totals[1] or 0
+    total_duration = totals[2] or 0
+    
+    # Movies with transcripts
+    movies_with_transcripts = db.query(func.count(Transcript.id)).filter(
+        Transcript.status == 'completed'
+    ).scalar() or 0
+    
+    # Total movies
+    total_movies = db.query(func.count(Movie.id)).filter(
+        Movie.hidden == False
+    ).scalar() or 0
+    
+    return {
+        "total_movies": total_movies,
+        "movies_transcribed": movies_with_transcripts,
+        "transcripts_pending": status_dict.get('pending', 0),
+        "transcripts_in_progress": status_dict.get('transcribing', 0) + status_dict.get('extracting_audio', 0),
+        "transcripts_completed": status_dict.get('completed', 0),
+        "transcripts_failed": status_dict.get('failed', 0),
+        "total_segments": total_segments,
+        "total_words": total_words,
+        "total_duration_hours": round(total_duration / 3600, 1) if total_duration else 0
+    }
+
+
 

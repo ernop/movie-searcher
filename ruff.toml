@@ -1,0 +1,30 @@
+# Ruff configuration for Movie Searcher
+# https://docs.astral.sh/ruff/
+
+line-length = 120
+target-version = "py310"
+
+[lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # line too long (handled by formatter, not linter)
+    "B008",   # do not perform function calls in argument defaults (FastAPI uses this pattern)
+    "B905",   # zip without strict= (requires Python 3.10+)
+]
+
+[lint.per-file-ignores]
+"scripts/*" = ["E402"]  # allow imports not at top of file in scripts
+"__init__.py" = ["F401"]  # allow unused imports in __init__.py
+
+[format]
+quote-style = "double"
+indent-style = "space"
+

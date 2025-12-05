@@ -1,6 +1,15 @@
 """
 Configuration management for Movie Searcher.
 Handles loading and saving configuration from/to settings.json file.
+
+Architecture note: This project intentionally separates machine config from library data.
+- settings.json (this module): Machine-specific settings like folder paths, UI preferences,
+  VLC options, API keys. Gitignored so each installation can differ. Users edit via Settings UI.
+- SQLite database: Library data—movies, ratings, watch history, playlists, screenshots.
+  Portable content that could theoretically move between machines.
+
+This split is clean for a single-user local app. If multi-user support were ever needed,
+user preferences would move to the database with user accounts.
 """
 import json
 import logging

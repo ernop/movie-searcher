@@ -1,34 +1,39 @@
 # Developer Notes
 
-## Important: Documentation Voice
+## Agent Communication
 
-**Before rewriting user-facing documentation (README, etc.), read [WRITING_GUIDE.md](WRITING_GUIDE.md) for practical guidance.**
+### No Reflexive Praise
 
-### The Craftsman Voice
+Don't open with "great question" or "profound insight." If something is good, show it through engagement, not by declaring it. Unearned praise destroys credibility.
 
-This project uses a humble, explanatory tone—not promotional.
+### Banned Terminology
 
-**Wrong:** "Blazing fast search! Revolutionary visual browsing!"
+**Infinite ban** on:
+- "Code smell"
+- Rules named after celebrities or aggressive figures (Beyoncé Rule, Bezos Rule, etc.)
+- Any engineering jargon that imports cultural baggage or confrontational framing
 
-**Right:** "We have a lot of video files. Clicking through Windows Explorer doesn't help much. So we built this for ourselves."
+Describe concepts plainly without branded names.
 
-### Core Principles
-- Explain what we built and **why we needed it**
-- Acknowledge limitations honestly ("This isn't perfect, but it works most of the time")
-- Include future ideas—this project is ongoing, not finished
-- Let the quality speak; don't brag
-- 90% product focus, 10% technical
+### Memory and This File
 
-### Film Context
-This tool is for documentary, experimental, foreign, and archival films—things not on streaming services. Don't frame it for mainstream Hollywood. Let examples like Koyaanisqatsi imply the intended use.
+Anything added to agent memory **must also be added here**. This file is what the user sees and controls. Memory is supplemental; this file is authoritative.
+
+---
+
+## Documentation Voice
+
+**Before rewriting user-facing docs, read [WRITING_GUIDE.md](WRITING_GUIDE.md).**
+
+Humble, explanatory tone—not promotional. Explain what we built and why. Acknowledge limitations. This is for documentary, experimental, and archival films—not mainstream Hollywood.
 
 ---
 
 ## Architecture
 
-FastAPI backend with static HTML frontend. State persisted in SQLite database (`movie_searcher.db`).
+FastAPI backend with static HTML frontend. SQLite database (`movie_searcher.db`).
 
-## Components
+### Components
 
 - `main.py`: FastAPI application, API endpoints, business logic
 - `server.py`: Uvicorn server configuration and startup
@@ -45,62 +50,41 @@ FastAPI backend with static HTML frontend. State persisted in SQLite database (`
 - `screenshot_sync.py`: Screenshot database synchronization
 - `config.py`: Configuration management (uses `settings.json` for API keys)
 - `ffmpeg_setup.py`: FFmpeg detection and configuration
-- `setup_ffmpeg.py`: FFmpeg setup helper script
 
-## Database
+### Database
 
-- **Database**: SQLite (`movie_searcher.db`)
-- **ORM**: SQLAlchemy
-- **Schema Version**: Tracked via `schema_version` table (current: 12)
-- **Migrations**: Automatic schema migrations on startup
-- **Tables**: movies, ratings, movie_status, search_history, launch_history, indexed_paths, config, screenshots, movie_audio, playlists, playlist_items, external_movies, people, movie_credits, schema_version
+SQLite with SQLAlchemy ORM. Schema version tracked in `schema_version` table (current: 12). Automatic migrations on startup.
 
-## Indexing Strategy
+### State Management
 
-- One-time deep scan on `/api/index` endpoint
-- File hash-based change detection (mtime + size)
-- Incremental updates: only re-index changed files
-- Video length extraction via ffprobe (ffmpeg)
-- Supports: .mp4, .avi, .mkv, .mov, .wmv, .flv, .webm, .m4v, .mpg, .mpeg, .3gp
+- **Database**: Library data—movies, ratings, watch status, playlists, history, screenshots
+- **settings.json**: Machine config—folder paths, UI preferences, API keys (gitignored)
 
-## State Management
+### Design Principles
 
-- **Database**: All movie metadata, ratings, watch status, history stored in SQLite
-- **Configuration**: API keys stored in `settings.json` (gitignored)
-- **Screenshots**: Extracted frames stored in `screenshots/` directory
-- Hash-based deduplication prevents unnecessary re-scanning
-- Indexed paths tracked in `indexed_paths` table to avoid duplicate scanning
+- No fallback/retry logic—if something fails, it's a bug to fix, not mask
+- Single source of truth for each piece of data
+- Hash-based change detection to avoid unnecessary re-scanning
 
-## VLC Integration
+---
 
-- Auto-detects VLC installation paths on Windows
-- Falls back to PATH if VLC executable found
-- Launches via subprocess without blocking
-- Tracks currently playing movies via process detection
+## JavaScript Style
 
-## Screenshot System
+**No `/* */` block comments.** Use `//` only. Comments explain *why*, not *what*—function names should be self-documenting.
 
-- Screenshots extracted at precise timestamps using ffmpeg
-- Subtitle text burned onto screenshots when subtitle files available
-- Screenshots stored in `screenshots/` directory
-- Database synchronization via `screenshot_sync.py` (no retry logic - failures indicate bugs)
-- Path normalization ensures consistent storage/retrieval
-- **Design Principle**: No fallback/retry logic - if screenshot save fails, it's a bug that must be fixed, not masked
-- Path normalization: Always use `normalize_screenshot_path()` before storing/querying to prevent path mismatch issues
+ESLint enforces this automatically. Agents see lint errors before finalizing edits; no manual commands needed. Custom rule: `static/js/eslint-rules/no-block-comments.js`.
 
-## Performance Considerations
+---
 
-- Search limited to 50 results
-- Autocomplete shows top 10 matches
-- History limited to last 100 entries
-- File hashing avoids full re-scan on unchanged files
-- Database uses WAL mode for better concurrency
-- Foreign keys enabled for data integrity
+## Tooling (PowerShell, Windows)
 
-## Future Improvements
+Use full venv paths to avoid module resolution issues:
+- `.\venv\Scripts\python.exe -m pip install <pkg> --disable-pip-version-check --no-cache-dir --timeout 120`
+- `.\venv\Scripts\python.exe -m ruff check .`
 
-- File system watcher for real-time updates
-- Multiple root folder support
-- Configurable video extensions
-- Better error handling for corrupted video files
+Avoid piping long installs through filters (`| Select-Object ...`)—it can swallow prompts and make interrupts look like failures. If installs were interrupted, rerun the full command.
 
+**Lint commands:**
+- Python: `.\venv\Scripts\python.exe -m ruff check .` (from repo root)
+- JS: `npm run lint` (from `static/js`)
+- HTML: `npm run lint:html` (from `static/js`, after `npm install`)

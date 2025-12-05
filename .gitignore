@@ -19,3 +19,4 @@ frames/
 settings.json
 cleaning_data.json
 *.code-workspace
+node_modules/

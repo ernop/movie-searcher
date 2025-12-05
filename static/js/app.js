@@ -18,15 +18,16 @@ function updateAllMoviesNavVisibility(show) {
     }
 }
 
-// Save launch with subtitles setting when checkbox changes
+// Save VLC and interface settings when checkboxes change
 document.addEventListener('DOMContentLoaded', () => {
+    // Launch with subtitles setting
     const launchWithSubtitlesOnEl = document.getElementById('setupLaunchWithSubtitlesOn');
     if (launchWithSubtitlesOnEl) {
         launchWithSubtitlesOnEl.addEventListener('change', async () => {
             try {
                 const response = await fetch('/api/config', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         settings: {
                             launch_with_subtitles_on: launchWithSubtitlesOnEl.checked
@@ -34,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     })
                 });
                 if (response.ok) {
-                    showStatus('Setting saved successfully', 'success');
+                    showStatus('Setting saved', 'success');
                 } else {
                     const data = await response.json();
                     showStatus('Failed to save setting: ' + (data.detail || 'Unknown error'), 'error');
@@ -44,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    
+
     // Save show all movies tab setting when checkbox changes
     const showAllMoviesTabEl = document.getElementById('setupShowAllMoviesTab');
     if (showAllMoviesTabEl) {
@@ -52,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const response = await fetch('/api/config', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         settings: {
                             show_all_movies_tab: showAllMoviesTabEl.checked
@@ -60,8 +61,41 @@ document.addEventListener('DOMContentLoaded', () => {
                     })
                 });
                 if (response.ok) {
-                    showStatus('Setting saved successfully', 'success');
+                    showStatus('Setting saved', 'success');
                     updateAllMoviesNavVisibility(showAllMoviesTabEl.checked);
+                } else {
+                    const data = await response.json();
+                    showStatus('Failed to save setting: ' + (data.detail || 'Unknown error'), 'error');
+                }
+            } catch (error) {
+                showStatus('Failed to save setting: ' + error.message, 'error');
+            }
+        });
+    }
+
+    // Save file size visibility preference
+    const showFullMovieSizeEl = document.getElementById('setupShowFullMovieSize');
+    if (showFullMovieSizeEl) {
+        showFullMovieSizeEl.addEventListener('change', async () => {
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        settings: {
+                            show_full_movie_size: showFullMovieSizeEl.checked
+                        }
+                    })
+                });
+                if (response.ok) {
+                    window.userSettings = {
+                        ...(window.userSettings || {}),
+                        show_full_movie_size: showFullMovieSizeEl.checked
+                    };
+                    if (typeof applyMovieSizeVisibilitySetting === 'function') {
+                        applyMovieSizeVisibilitySetting();
+                    }
+                    showStatus('Setting saved', 'success');
                 } else {
                     const data = await response.json();
                     showStatus('Failed to save setting: ' + (data.detail || 'Unknown error'), 'error');

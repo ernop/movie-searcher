@@ -2,6 +2,18 @@
 
 All notable changes to Movie Searcher are documented here.
 
+## [1.4.1] - 2024-12-05
+
+### Settings
+
+**Show/Hide File Sizes**
+- New toggle in Settings: "Show file size on movie cards and details"
+- When disabled, file sizes are hidden across browse results and movie detail pages
+- Takes effect immediately without page refresh
+- Persists across sessions via settings.json
+
+---
+
 ## [1.4.0] - 2024-12-04
 
 ### New Features

@@ -147,7 +147,8 @@ function createMovieCard(movie, options = {}) {
     if (watchStatus === false) watchStatus = 'unwatched';
     
     const watchedClass = watchStatus === 'watched' ? 'watched' : '';
-    const fileSize = movie.size ? formatSize(movie.size) : '';
+    const showSizes = shouldShowMovieSizes();
+    const fileSize = showSizes && movie.size ? formatSize(movie.size) : '';
     const year = movie.year ? movie.year : '';
     const length = movie.length ? formatMinutes(movie.length) : '';
     const hasLaunched = movie.has_launched || false;
@@ -175,7 +176,7 @@ function createMovieCard(movie, options = {}) {
             <div class="movie-card-meta" style="position: relative; z-index: 2; pointer-events: none;">
                 ${year ? `<span class="year-link" onclick="event.stopPropagation(); navigateToExploreWithYear(${year}, ${movie.id || 'null'});" title="Filter by ${year}" style="pointer-events: auto;">${year}</span>` : ''}
                 ${length ? `<span>${length}</span>` : ''}
-                ${fileSize ? `<span>${fileSize}</span>` : ''}
+                ${fileSize ? `<span class="movie-size">${fileSize}</span>` : ''}
                 ${hasLaunched ? '<div class="launch-status-checkbox launched" onclick="event.stopPropagation();" style="pointer-events: auto;"></div>' : ''}
             </div>
         `;
@@ -184,7 +185,7 @@ function createMovieCard(movie, options = {}) {
         metaHtml = `
             <div class="movie-card-meta" style="position: relative; z-index: 2; pointer-events: none;">
                 ${year ? `<span class="year-link" onclick="event.stopPropagation();" style="pointer-events: auto;">${year}</span>` : ''}
-                <span style="margin-left: auto; font-size: 11px; color: #666;">${formatSize(movie.size)}</span>
+                ${showSizes && movie.size ? `<span class="movie-size" style="margin-left: auto; font-size: 11px; color: #666;">${formatSize(movie.size)}</span>` : ''}
             </div>
             <div class="result-path" style="margin-bottom: 10px; font-size: 10px; color: #666; word-break: break-all; line-height: 1.2; position: relative; z-index: 2; pointer-events: auto; user-select: text;">
                 ${escapeHtml(movie.path)}

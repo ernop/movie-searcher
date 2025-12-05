@@ -30,10 +30,10 @@ async function restartServer() {
                 statusEl.style.color = '#4caf50';
             }
             
-            // Reload the page after a brief moment
+            // Give the server a bit more time to settle before reloading
             setTimeout(() => {
                 window.location.reload();
-            }, 500);
+            }, 1500);
         } else {
             throw new Error(data.detail || 'Failed to restart server');
         }
@@ -47,7 +47,7 @@ async function restartServer() {
                 statusEl.style.color = '#4caf50';
                 setTimeout(() => {
                     window.location.reload();
-                }, 500);
+                }, 1500);
             } else {
                 statusEl.textContent = 'Error: ' + error.message;
                 statusEl.style.color = '#f44336';
@@ -102,6 +102,17 @@ async function loadCurrentFolder() {
         if (response.ok) {
             const folderPath = data.movies_folder || 'Not set';
             const localTargetPath = data.local_target_folder || 'Not set';
+            const settings = data.settings || {};
+            const showFullMovieSize = settings.show_full_movie_size !== false;
+
+            // Store settings globally and apply visibility toggles
+            window.userSettings = {
+                ...settings,
+                show_full_movie_size: showFullMovieSize
+            };
+            if (typeof applyMovieSizeVisibilitySetting === 'function') {
+                applyMovieSizeVisibilitySetting();
+            }
 
             if (setupCurrentFolderEl) {
                 setupCurrentFolderEl.textContent = folderPath;
@@ -111,24 +122,24 @@ async function loadCurrentFolder() {
             }
 
             // Also update setup checkboxes if present
-            if (data.settings) {
-                const closeVlcEl = document.getElementById('setupCloseExistingVlc');
+            if (settings) {
                 const launchSubsEl = document.getElementById('setupLaunchWithSubtitlesOn');
                 const showAllMoviesEl = document.getElementById('setupShowAllMoviesTab');
+                const showFullMovieSizeEl = document.getElementById('setupShowFullMovieSize');
 
-                if (closeVlcEl && data.settings.close_existing_vlc !== undefined) {
-                    closeVlcEl.checked = data.settings.close_existing_vlc;
-                }
-                if (launchSubsEl && data.settings.launch_with_subtitles_on !== undefined) {
-                    launchSubsEl.checked = data.settings.launch_with_subtitles_on;
+                if (launchSubsEl && settings.launch_with_subtitles_on !== undefined) {
+                    launchSubsEl.checked = settings.launch_with_subtitles_on;
                 }
                 if (showAllMoviesEl) {
                     // Default to false if not set
-                    showAllMoviesEl.checked = data.settings.show_all_movies_tab === true;
+                    showAllMoviesEl.checked = settings.show_all_movies_tab === true;
+                }
+                if (showFullMovieSizeEl) {
+                    showFullMovieSizeEl.checked = showFullMovieSize;
                 }
 
                 // Update nav visibility
-                updateAllMoviesNavVisibility(data.settings.show_all_movies_tab === true);
+                updateAllMoviesNavVisibility(settings.show_all_movies_tab === true);
             }
 
             return folderPath;

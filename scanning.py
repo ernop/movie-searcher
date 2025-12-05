@@ -260,6 +260,15 @@ def extract_year_from_name(name):
             return year
     return None
 
+def contains_date_range(text):
+    """Check if text contains a date range (e.g., "(1933 to 1939)" or "1933-1939").
+    Date ranges in episode titles (like historical documentaries) should be preserved,
+    not treated as movie release years.
+    """
+    # Match patterns like: (1933 to 1939), (1933-1939), 1933 to 1939, 1933-1939
+    date_range_pattern = r'\b(19\d{2}|20[0-2]\d)\s*(?:to|-)\s*(19\d{2}|20[0-2]\d)\b'
+    return bool(re.search(date_range_pattern, text, re.IGNORECASE))
+
 def load_cleaning_patterns():
     """Load approved cleaning patterns from config file"""
     from config import load_config
@@ -296,6 +305,7 @@ def clean_movie_name(name, patterns=None):
     year = None
     season = None
     episode = None
+    is_documentary_episode = False  # Set True when processing "Show - 01 - Episode" format
     
     # Check if input is a full path (contains path separators)
     is_full_path = '/' in name or '\\' in name
@@ -425,6 +435,11 @@ def clean_movie_name(name, patterns=None):
         
         # Extract episode from original filename (before cleaning)
         original_filename = path_obj.stem
+        # Extract year from filename, but ignore years that are part of date ranges
+        # (e.g., "(1933 to 1939)" in documentary episode titles)
+        filename_year = None
+        if not contains_date_range(original_filename):
+            filename_year = extract_year_from_name(original_filename)
         
         # First try to find SXXEXX pattern (most common) - this also gives us season if not found in parent
         sxxexx_match = re.search(r'\bS(\d+)E(\d+)\b', original_filename, re.IGNORECASE)
@@ -655,7 +670,7 @@ def clean_movie_name(name, patterns=None):
                         name = show_name
 
         # Special case: parent-folder-as-show with numeric episode filenames (no season context)
-        # Example: "<Show Name> [1971-5]\\02-A Sound of Dolphins.mp4" -> "Show Name 02 A Sound of Dolphins"
+        # Example: "<Show Name> [1971-5]\\02-A Sound of Dolphins.mp4" -> "Show Name - 02 - A Sound of Dolphins"
         # Only match 1-2 digit leading numbers (episode numbers), not 3+ digit codes like "007" (franchise codes)
         if season is None and episode is None:
             num_title_match = re.match(r'^\s*(\d{1,2})[._\s-]+(.+)$', original_filename)
@@ -663,72 +678,92 @@ def clean_movie_name(name, patterns=None):
             parent_is_generic = parent_str and parent_str.lower() in ['movies', 'tv', 'series', 'shows', 'video', 'videos']
             if num_title_match and parent_str and not parent_is_generic:
                 leading_num = num_title_match.group(1)
-                title_part = num_title_match.group(2).strip()
-                
-                # Use parent folder as show name
-                show_name = parent_str
-                # Clean show name (using centralized patterns)
-                show_name = re.sub(r'^www\.[^\s]+\.\w+\s*-\s*', '', show_name, flags=re.IGNORECASE)
-                for p in QUALITY_SOURCE_PATTERNS:
-                    show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
-                for p in EDITION_PATTERNS:
-                    show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
-                
-                show_name = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP\d+\.?\d*|x264|x265|1080p|720p|480p|4k|uhd)\b', ' ', show_name, flags=re.IGNORECASE)
-                show_name = re.sub(r'\b\d+\.\d+\b', ' ', show_name)
-                show_name = re.sub(r'[._]+', ' ', show_name)
-                show_name = re.sub(r'\[.*?\]', '', show_name)
-                show_name = re.sub(r'\(.*?\)', '', show_name)
-                show_name = re.sub(r'\bS\d+(?:-\d+)?\b', ' ', show_name, flags=re.IGNORECASE)
-                show_name = re.sub(r'\bSeason\s*\d+(?:-\d+)?\b', ' ', show_name, flags=re.IGNORECASE)
-                show_name = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', show_name)
-                
-                # Remove language tags
-                show_name = re.sub(r'\b(?:japanese|english|french|german|spanish|italian|russian|korean|hindi|eng|dan|ita|en-sub)\b', ' ', show_name, flags=re.IGNORECASE)
-                
-                # Clean up dashes
-                show_name = re.sub(r'[–—\-]{2,}', ' ', show_name)
-                show_name = re.sub(r'[–—\-]+\s*$', ' ', show_name)
-                show_name = re.sub(r'^\s*[–—\-]+', ' ', show_name)
-                show_name = re.sub(r'\s+', ' ', show_name).strip()
-                
-                # Clean episode title (using centralized patterns)
-                episode_title_cleaned = title_part
-                for p in QUALITY_SOURCE_PATTERNS:
-                    episode_title_cleaned = re.sub(p, ' ', episode_title_cleaned, flags=re.IGNORECASE)
-                for p in EDITION_PATTERNS:
-                    episode_title_cleaned = re.sub(p, ' ', episode_title_cleaned, flags=re.IGNORECASE)
-                episode_title_cleaned = re.sub(r'[._]+', ' ', episode_title_cleaned)
-                episode_title_cleaned = re.sub(r'\s+', ' ', episode_title_cleaned).strip()
-                
-                # Only adopt if show name is valid and different from filename
-                # Clean the original filename similarly to compare properly (using centralized patterns)
-                original_cleaned = original_filename
-                for p in QUALITY_SOURCE_PATTERNS:
-                    original_cleaned = re.sub(p, ' ', original_cleaned, flags=re.IGNORECASE)
-                for p in EDITION_PATTERNS:
-                    original_cleaned = re.sub(p, ' ', original_cleaned, flags=re.IGNORECASE)
-                original_cleaned = re.sub(r'[._]+', ' ', original_cleaned)
-                original_cleaned = re.sub(r'\b\d+\.\d+\b', ' ', original_cleaned)
-                original_cleaned = re.sub(r'\([^)]*\)', '', original_cleaned)
-                original_cleaned = re.sub(r'\[.*?\]', '', original_cleaned)
-                original_cleaned = re.sub(r'\bS\d+\b', ' ', original_cleaned, flags=re.IGNORECASE)
-                original_cleaned = re.sub(r'\bSeason\s*\d+\b', ' ', original_cleaned, flags=re.IGNORECASE)
-                original_cleaned = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', original_cleaned)
-                # Remove year if present
-                original_cleaned = re.sub(r'\b(19\d{2}|20[0-2]\d|203[0-5])\b', '', original_cleaned)
-                original_cleaned = re.sub(r'\s+', ' ', original_cleaned).strip()
-                
-                # Also remove year from show_name for comparison
-                show_name_cmp = re.sub(r'\b(19\d{2}|20[0-2]\d|203[0-5])\b', '', show_name)
-                show_name_cmp = re.sub(r'\s+', ' ', show_name_cmp).strip()
+                title_part_raw = num_title_match.group(2).strip()
 
-                # Remove the leading number from original_cleaned for comparison
-                original_cleaned_no_num = re.sub(r'^\s*\d+\s+', '', original_cleaned).strip()
+                # If the filename already contains a STANDALONE year (not part of a date range),
+                # this is likely a movie title (e.g., "12 Angry Men 1957") and not an episode number.
+                # But if the year is part of a date range (e.g., "(1933 to 1939)"), it's likely
+                # an episode title with historical dates that should be preserved.
+                title_has_date_range = contains_date_range(title_part_raw)
+                title_part_has_standalone_year = extract_year_from_name(title_part_raw) and not title_has_date_range
                 
-                # Only treat as episode if parent folder is significantly different from filename
-                if show_name and show_name_cmp.lower() != original_cleaned_no_num.lower() and show_name_cmp.lower() not in original_cleaned.lower():
-                     name = f"{show_name} {int(leading_num):02d} {episode_title_cleaned}"
+                if filename_year or title_part_has_standalone_year:
+                    pass
+                else:
+                    # Use parent folder as show name
+                    show_name = parent_str
+                    # Clean show name (using centralized patterns)
+                    show_name = re.sub(r'^www\.[^\s]+\.\w+\s*-\s*', '', show_name, flags=re.IGNORECASE)
+                    for p in QUALITY_SOURCE_PATTERNS:
+                        show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
+                    for p in EDITION_PATTERNS:
+                        show_name = re.sub(p, ' ', show_name, flags=re.IGNORECASE)
+                    
+                    show_name = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP\d+\.?\d*|x264|x265|1080p|720p|480p|4k|uhd)\b', ' ', show_name, flags=re.IGNORECASE)
+                    show_name = re.sub(r'\b\d+\.\d+\b', ' ', show_name)
+                    show_name = re.sub(r'[._]+', ' ', show_name)
+                    show_name = re.sub(r'\[.*?\]', '', show_name)
+                    show_name = re.sub(r'\(.*?\)', '', show_name)
+                    show_name = re.sub(r'\bS\d+(?:-\d+)?\b', ' ', show_name, flags=re.IGNORECASE)
+                    show_name = re.sub(r'\bSeason\s*\d+(?:-\d+)?\b', ' ', show_name, flags=re.IGNORECASE)
+                    show_name = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', show_name)
+                    
+                    # Remove language tags
+                    show_name = re.sub(r'\b(?:japanese|english|french|german|spanish|italian|russian|korean|hindi|eng|dan|ita|en-sub)\b', ' ', show_name, flags=re.IGNORECASE)
+                    
+                    # Clean up dashes
+                    show_name = re.sub(r'[–—\-]{2,}', ' ', show_name)
+                    show_name = re.sub(r'[–—\-]+\s*$', ' ', show_name)
+                    show_name = re.sub(r'^\s*[–—\-]+', ' ', show_name)
+                    show_name = re.sub(r'\s+', ' ', show_name).strip()
+                    
+                    # Clean episode title (using centralized patterns) but preserve date ranges
+                    episode_title_cleaned = title_part_raw
+                    for p in QUALITY_SOURCE_PATTERNS:
+                        episode_title_cleaned = re.sub(p, ' ', episode_title_cleaned, flags=re.IGNORECASE)
+                    for p in EDITION_PATTERNS:
+                        episode_title_cleaned = re.sub(p, ' ', episode_title_cleaned, flags=re.IGNORECASE)
+                    episode_title_cleaned = re.sub(r'[._]+', ' ', episode_title_cleaned)
+                    episode_title_cleaned = re.sub(r'\s+', ' ', episode_title_cleaned).strip()
+                    
+                    # Only adopt if show name is valid and different from filename
+                    # Clean the original filename similarly to compare properly (using centralized patterns)
+                    original_cleaned = original_filename
+                    for p in QUALITY_SOURCE_PATTERNS:
+                        original_cleaned = re.sub(p, ' ', original_cleaned, flags=re.IGNORECASE)
+                    for p in EDITION_PATTERNS:
+                        original_cleaned = re.sub(p, ' ', original_cleaned, flags=re.IGNORECASE)
+                    original_cleaned = re.sub(r'[._]+', ' ', original_cleaned)
+                    original_cleaned = re.sub(r'\b\d+\.\d+\b', ' ', original_cleaned)
+                    original_cleaned = re.sub(r'\([^)]*\)', '', original_cleaned)
+                    original_cleaned = re.sub(r'\[.*?\]', '', original_cleaned)
+                    original_cleaned = re.sub(r'\bS\d+\b', ' ', original_cleaned, flags=re.IGNORECASE)
+                    original_cleaned = re.sub(r'\bSeason\s*\d+\b', ' ', original_cleaned, flags=re.IGNORECASE)
+                    original_cleaned = re.sub(r'-\b[A-Za-z0-9]{2,10}\b\s*$', ' ', original_cleaned)
+                    # Remove year if present
+                    original_cleaned = re.sub(r'\b(19\d{2}|20[0-2]\d|203[0-5])\b', '', original_cleaned)
+                    original_cleaned = re.sub(r'\s+', ' ', original_cleaned).strip()
+                    
+                    # Also remove year from show_name for comparison
+                    show_name_cmp = re.sub(r'\b(19\d{2}|20[0-2]\d|203[0-5])\b', '', show_name)
+                    show_name_cmp = re.sub(r'\s+', ' ', show_name_cmp).strip()
+
+                    # Remove the leading number from original_cleaned for comparison
+                    original_cleaned_no_num = re.sub(r'^\s*\d+\s+', '', original_cleaned).strip()
+                    
+                    # Only treat as episode if parent folder is significantly different from filename
+                    if show_name and show_name_cmp.lower() != original_cleaned_no_num.lower() and show_name_cmp.lower() not in original_cleaned.lower():
+                        # Format: "Show Name - 01 - Episode Title"
+                        name = f"{show_name} - {int(leading_num):02d} - {episode_title_cleaned}"
+                        # Mark that we've processed this as a documentary episode
+                        # to skip aggressive minor word normalization later
+                        is_documentary_episode = True
+                        
+                        # If episode has a date range, use parent folder year instead of date from episode
+                        if title_has_date_range:
+                            parent_year = extract_year_from_name(parent_str)
+                            if parent_year:
+                                year = parent_year
     
     # Remove season/episode tags from name (they're already extracted)
     # But only if name still contains the original filename (not if we've already set it to show name)
@@ -851,7 +886,8 @@ def clean_movie_name(name, patterns=None):
     # STEP 16: Apply smart title casing (but skip for TV shows - handle those separately)
     # Only apply if the name is not mixed case (to preserve intentional casing like "eBay")
     # But also handle cases where filename cleaning left title-case minor words that should be lowercase
-    if season is None and episode is None:
+    # Skip for documentary episodes (which already have proper formatting like "Show - 01 - Episode")
+    if season is None and episode is None and not is_documentary_episode:
         # Check if name has title-case minor words in the middle that should be lowercase
         # (e.g., "About", "Her" in "2 or 3 Things I Know About Her")
         # NOTE: "the" is excluded from normalization because it often refers to proper nouns in movie titles

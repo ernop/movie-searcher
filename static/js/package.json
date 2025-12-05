@@ -1,0 +1,17 @@
+{
+  "name": "movie-searcher-frontend",
+  "private": true,
+  "type": "module",
+  "description": "Frontend scripts for Movie Searcher",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "lint:html": "htmlhint ../../index.html",
+    "check-comments": "node scripts/check-block-comments.js"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "htmlhint": "^1.1.4"
+  }
+}
+

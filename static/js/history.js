@@ -1,8 +1,5 @@
 // History functions
 
-/**
- * Format seconds into a human-readable time string (e.g., "1h 34m 10s")
- */
 function formatPlaybackTime(seconds) {
     if (!seconds || seconds <= 0) return null;
     
@@ -19,9 +16,6 @@ function formatPlaybackTime(seconds) {
     }
 }
 
-/**
- * Resume playback of a movie from a specific timestamp
- */
 async function resumePlayback(movieId, startTime, movieName) {
     const formattedTime = formatPlaybackTime(startTime);
     console.log(`Resuming ${movieName} from ${formattedTime} (${startTime}s)`);
