@@ -2,10 +2,20 @@
 
 Practical guidance for writing and updating the README.
 
-## Purpose
+## What This Product Is
+
+Movie Searcher is a **full library browser**, not just a screenshot tool. It:
+- Scrapes a folder and indexes all video files
+- Lets you find, organize, rate, and track films
+- Provides visual timelines via screenshots
+- Integrates AI for curated lists and discovery
+
+The screenshot timeline was the original motivation, but it grew into a complete way to manage and browse a video collection.
+
+## Purpose of the README
 
 The README shows:
-1. What the tool does
+1. What the tool does (the full scope—not just screenshots)
 2. What we want it to do (future ideas)
 3. How to get started
 
@@ -35,21 +45,33 @@ Use films that match the project's spirit:
 ## Content to Cover
 
 ### Features to Explain
-- Visual browsing with screenshot timelines
-- Screenshot generation (intervals, subtitle burning)
-- Instant search (emphasize speed—no page loads)
-- AI search and saved lists
-- History and resume playback
-- Watch status, ratings, playlists
-- Launching with subtitles
+- **Finding**: Instant search, filters (language, decade, letter, watch status)
+- **Organizing**: Playlists, ratings, watch status tracking
+- **Tracking**: History, resume from where you left off
+- **Visual timelines**: Screenshot generation at any interval, subtitle burning
+- **AI search**: Curated lists, imaginary critics, real quotes, saved searches
+- **Launching**: One-click to VLC with subtitle selection, jump to any timestamp
 
 ### Future Ideas Section
 Include what we're thinking about building:
-- Dialogue search (audio transcription + full-text search)
-- Visual search (image recognition for "scenes with cliffs")
-- Director/actor navigation (jump to filmography)
+- **Dialogue search** – Whisper transcription + full-text search
+- **Auto-generated subtitles** – From transcription, or cleaning SDH subs
+- **Data subtitles** – Image recognition generating informational subtitles (geological features, building history, food, clothing, etc.)
+- **Visual search** – Image recognition for "scenes with cliffs"
+- **Director/actor navigation** – Jump through filmographies naturally
+- **Scene/edit detection** – Detect scene boundaries and cuts, mark on timeline
+- **Custom viewer** – Built around metadata: scene markers, edit points, dialogue, characters on the time bar. Toggle metadata channels (trees, outfits, color analysis, anything from image analysis). Everything instant.
+- **Actor-in-scene context** – Recognize a face, show their age at filming, next film, where they ended up. Biography from the frame.
 
 Present as possibilities, not promises.
+
+### AI Search Examples
+The AI search can do more than simple queries. Show examples like:
+- "Have imaginary Roger Ebert rank these films with quotes"
+- "Movies made in huge cities, rated by imaginary Tarantino"
+- Asking for real quotes from critics (specify "only real quotes")
+
+The lists get saved and accumulate over time.
 
 ### Speed
 Emphasize that everything is instant:

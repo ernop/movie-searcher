@@ -57,7 +57,13 @@ Type any part of a title in the search box. Results appear immediately as you ty
 
 ![Search and AI](docs/screenshot-home.png)
 
-There's also an AI search if you configure an API key. You can ask questions like "what were the best documentaries about music in the 1970s?" and it returns a list—showing which ones you already have and which you don't.
+There's also an AI search if you configure an API key. You can ask things like:
+
+- "What were the best documentaries about music in the 1970s?"
+- "Have imaginary Roger Ebert rank Peter Weir's films with quotes from his reviews"
+- "Movies made in huge cities by capitalist countries, rated by imaginary Tarantino"
+
+It returns a curated list—showing which films you already have and which you don't. You can ask for real quotes from critics, or have the AI roleplay as a director giving opinions. The lists get saved automatically.
 
 ## Saving AI Searches
 
@@ -97,11 +103,21 @@ The interface shows what's currently playing at the top of every page, so you kn
 
 Some ideas we haven't built yet but want to:
 
-**Dialogue search** – Run audio transcription on the video files and index the text. Then you could search for a line you remember and find the scene. "Find me the part where someone says 'you talking to me?'"
+**Dialogue search** – Run Whisper transcription on the audio and index the text. Search for a line you remember and find the scene. "Find the part where someone says 'you talking to me?'"
 
-**Visual search** – Use image recognition to tag scenes. Search for "scenes with cliffs" or "shots of trains" and find matching moments across the collection.
+**Auto-generated subtitles** – Use the same transcription to create subtitles for films that don't have them. Could also clean up SDH subtitles (removing `[door slams]` sound descriptions) for people who just want dialogue.
 
-**Director and actor navigation** – When you're watching a film, see what else the director made, what other films the actors appeared in. Jump directly from the current movie to their filmography without having to search manually.
+**Data subtitles** – Take screenshots and send them to image recognition, then generate informational subtitles about what's on screen: the geological features visible, the year a building was constructed, what the food or clothing is, historical context about the location. An educational layer you could toggle on while watching.
+
+**Visual search** – Tag scenes with image recognition. Search for "scenes with cliffs" or "shots of trains" and find matching moments across the collection.
+
+**Director and actor navigation** – When viewing a film, see what else the director made, what other films the actors appeared in. Navigate naturally through a filmography without manual searching.
+
+**Scene and edit detection** – Automatically detect where scenes begin and end, where cuts happen. Mark these on a timeline for navigation.
+
+**Custom viewer** – A viewer built around this metadata. The time bar shows scene boundaries, edit points, lines of dialogue, detected characters. Everything instant. Toggle metadata channels: what trees are visible, what outfits people are wearing, color analysis of the frame, anything gatherable by image analysis.
+
+**Actor-in-scene context** – When a face is recognized, show: how old the actor was when this was filmed, what they went on to do, their next film, where they are now. Biography derived directly from the frame you're looking at. Maybe a stretch, but it's an idea.
 
 These are just possibilities. We build what we find ourselves wanting.
 
