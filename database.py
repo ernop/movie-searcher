@@ -16,6 +16,7 @@ from models import (
     IndexedPath, Config, Screenshot, SchemaVersion, MovieAudio,
     Playlist, PlaylistItem, ExternalMovie, Person, MovieCredit,
     MovieList, MovieListItem, Stat,
+    Transcript, TranscriptSegment,
     CURRENT_SCHEMA_VERSION
 )
 
@@ -754,6 +755,64 @@ def migrate_db_schema():
             
             set_schema_version(15, "Added stopped_at_seconds column to launch_history for resume playback")
             current_version = 15
+        
+        if current_version < 16:
+            logger.info("Migrating to schema version 16: Add transcripts and transcript_segments tables")
+            with engine.begin() as conn:
+                # Create transcripts table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS transcripts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        movie_id INTEGER NOT NULL UNIQUE,
+                        status VARCHAR NOT NULL DEFAULT 'pending',
+                        progress FLOAT DEFAULT 0,
+                        current_step VARCHAR,
+                        model_size VARCHAR DEFAULT 'large-v3',
+                        language_detected VARCHAR,
+                        language_probability FLOAT,
+                        duration_seconds FLOAT,
+                        word_count INTEGER,
+                        segment_count INTEGER,
+                        speaker_count INTEGER,
+                        started_at DATETIME,
+                        completed_at DATETIME,
+                        processing_time_seconds FLOAT,
+                        error_message TEXT,
+                        retry_count INTEGER DEFAULT 0,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcripts_movie_id ON transcripts (movie_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcripts_status ON transcripts (status)"))
+                
+                # Create transcript_segments table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS transcript_segments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        transcript_id INTEGER NOT NULL,
+                        start_time FLOAT NOT NULL,
+                        end_time FLOAT NOT NULL,
+                        text TEXT NOT NULL,
+                        speaker_id VARCHAR,
+                        confidence FLOAT,
+                        no_speech_prob FLOAT,
+                        words_json TEXT,
+                        segment_index INTEGER NOT NULL,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY (transcript_id) REFERENCES transcripts(id) ON DELETE CASCADE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcript_segments_transcript_id ON transcript_segments (transcript_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcript_segments_start_time ON transcript_segments (start_time)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcript_segments_speaker_id ON transcript_segments (speaker_id)"))
+                
+                logger.info("Migration complete: created transcripts and transcript_segments tables")
+            
+            set_schema_version(16, "Added transcripts and transcript_segments tables for Whisper transcription")
+            current_version = 16
         
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:

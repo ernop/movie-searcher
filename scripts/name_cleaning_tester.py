@@ -226,6 +226,21 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_name": "The B-Squad S02E08 Waffle Emergency",
         "expected_year": None,
     },
+    {
+        # Tests: TV series with year and "Complete Seasons" in grandparent folder, Season X subfolder
+        # Should extract show name from filename, not the metadata-heavy grandparent folder
+        "input": r"D:\movies\Knight Rider 1982 Complete Seasons 1 to 4 720p BluRay x264 [i_c]\Season 2\Knight Rider S02E11 Knightmares.mkv",
+        "expected_name": "Knight Rider S02E11 Knightmares",
+        "expected_year": 1982,
+    },
+    {
+        # Tests: "Season X Episode Y" format in filename (not SxxExx), comma-separated season list in grandparent,
+        # "Deluxe DVD Boxset + Extras in HD" metadata, episode title after dash
+        # Should extract show name from filename before "Season X Episode Y" pattern
+        "input": r"D:\movies\Cosmic Llama Adventures Season 1, 2, 3, 4 & 5 Deluxe DVD Boxset + Extras in HD\Season 4\Cosmic Llama Adventures Season 4 Episode 12 - The Sparkly Nebula.avi",
+        "expected_name": "Cosmic Llama Adventures S04E12 The Sparkly Nebula",
+        "expected_year": None,
+    },
 ]
 
 

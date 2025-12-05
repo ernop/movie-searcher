@@ -1,5 +1,22 @@
 // Movie Navigation
 
+// Parse resolution from filename (e.g., 1080p, 720p, 4K, 2160p)
+function parseResolution(path) {
+    if (!path) return null;
+    const filename = path.split(/[/\\]/).pop() || '';
+    const lower = filename.toLowerCase();
+    
+    // Check for common resolution patterns
+    if (/2160p|4k|uhd/i.test(lower)) return '4K';
+    if (/1080p|1080i|fullhd|full.?hd/i.test(lower)) return '1080p';
+    if (/720p|hd/i.test(lower)) return '720p';
+    if (/480p|sd/i.test(lower)) return '480p';
+    if (/576p|pal/i.test(lower)) return '576p';
+    if (/360p/i.test(lower)) return '360p';
+    
+    return null;
+}
+
 function openMovieHash(id, slug) {
     const safeSlug = (slug || '').toString();
     // Save scroll position of current route before navigating
@@ -398,9 +415,12 @@ async function loadMovieDetailsById(id) {
         if (sameTitleMovies.length > 0) {
             const otherVersionsHtml = sameTitleMovies.map(m => {
                 const sizeStr = m.size ? formatSize(m.size) : 'unknown size';
+                const resolution = parseResolution(m.path || '');
+                const resolutionBadge = resolution ? `<span class="same-title-resolution">${resolution}</span>` : '';
                 const hiddenBadge = m.hidden ? '<span class="same-title-hidden-badge">hidden</span>' : '';
                 return `<a href="#/movie/${m.id}" class="same-title-item" title="${escapeHtml(m.path)}">
                     <span class="same-title-size">${sizeStr}</span>
+                    ${resolutionBadge}
                     ${hiddenBadge}
                 </a>`;
             }).join('');

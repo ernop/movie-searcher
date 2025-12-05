@@ -556,6 +556,35 @@ def clean_movie_name(name, patterns=None):
                         show_name_extracted = True
             
             if not show_name_extracted:
+                # Before falling back to grandparent, check if the filename already contains
+                # the show name before episode patterns (SxxExx or "Season X Episode Y")
+                # This is more reliable than grandparent folder which may have extra metadata
+                original_filename = path_obj.stem
+                # Try SxxExx format first (e.g., "Knight Rider S02E11 Knightmares")
+                episode_pattern_match = re.search(r'^(.+?)\s*S\d{1,2}E\d{1,2}\b', original_filename, re.IGNORECASE)
+                if not episode_pattern_match:
+                    # Try "Season X Episode Y" format (e.g., "Show Name Season 4 Episode 12 - Title")
+                    episode_pattern_match = re.search(r'^(.+?)\s*Season\s*\d+\s*Episode\s*\d+', original_filename, re.IGNORECASE)
+                if episode_pattern_match:
+                    show_name_from_filename = episode_pattern_match.group(1).strip()
+                    # Clean it (normalize dots/underscores, remove brackets/parentheses, trailing dashes)
+                    show_name_from_filename = re.sub(r'[._]+', ' ', show_name_from_filename)
+                    show_name_from_filename = re.sub(r'\[.*?\]', '', show_name_from_filename)
+                    show_name_from_filename = re.sub(r'\([^)]*\)', '', show_name_from_filename)
+                    show_name_from_filename = re.sub(r'\s*-\s*$', '', show_name_from_filename)
+                    show_name_from_filename = re.sub(r'\s+', ' ', show_name_from_filename).strip()
+                    if show_name_from_filename and len(show_name_from_filename) >= 2:
+                        name = show_name_from_filename
+                        show_name_extracted = True
+                        # Still try to extract year from grandparent folder if we haven't found one yet
+                        if year is None:
+                            grandparent = path_obj.parent.parent.name if path_obj.parent.parent.name else None
+                            if grandparent and grandparent.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', '_done', 'done']:
+                                grandparent_year = extract_year_from_name(grandparent)
+                                if grandparent_year:
+                                    year = grandparent_year
+            
+            if not show_name_extracted:
                 # Fall back to grandparent folder (the show name, skipping the season folder)
                 # But skip if parent has fake episode numbering
                 grandparent = path_obj.parent.parent.name if path_obj.parent.parent.name else None

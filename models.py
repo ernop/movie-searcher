@@ -231,5 +231,90 @@ class Stat(Base):
     created = Column(DateTime, default=func.now(), nullable=False, index=True)
 
 
+# --- Transcription Models ---
+
+class TranscriptStatusEnum(str, Enum):
+    """Enum for transcript processing status"""
+    PENDING = "pending"
+    EXTRACTING_AUDIO = "extracting_audio"
+    TRANSCRIBING = "transcribing"
+    DIARIZING = "diarizing"
+    ALIGNING = "aligning"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class Transcript(Base):
+    """Whisper transcription record for a movie"""
+    __tablename__ = "transcripts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
+    
+    # Status tracking
+    status = Column(String, nullable=False, default='pending', index=True)  # TranscriptStatusEnum values
+    progress = Column(Float, default=0)  # 0-100
+    current_step = Column(String, nullable=True)  # Human-readable: "Transcribing segment 45/120"
+    
+    # Model & configuration
+    model_size = Column(String, default='large-v3')  # tiny, base, small, medium, large-v3
+    
+    # Results
+    language_detected = Column(String, nullable=True)  # ISO code: 'en', 'es', 'ja'
+    language_probability = Column(Float, nullable=True)  # Confidence 0-1
+    
+    # Statistics
+    duration_seconds = Column(Float, nullable=True)  # Audio duration processed
+    word_count = Column(Integer, nullable=True)
+    segment_count = Column(Integer, nullable=True)
+    speaker_count = Column(Integer, nullable=True)  # Unique speakers from diarization
+    
+    # Timing
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    processing_time_seconds = Column(Float, nullable=True)  # How long transcription took
+    
+    # Error handling
+    error_message = Column(Text, nullable=True)
+    retry_count = Column(Integer, default=0)
+    
+    # Standard timestamps
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class TranscriptSegment(Base):
+    """Individual dialogue segment from transcription"""
+    __tablename__ = "transcript_segments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    transcript_id = Column(Integer, ForeignKey('transcripts.id', ondelete='CASCADE'), nullable=False, index=True)
+    
+    # Timing (seconds with millisecond precision)
+    start_time = Column(Float, nullable=False)  # e.g., 125.340
+    end_time = Column(Float, nullable=False)    # e.g., 128.920
+    
+    # Content
+    text = Column(Text, nullable=False)  # "I'll be back."
+    
+    # Speaker identification (from diarization)
+    speaker_id = Column(String, nullable=True, index=True)  # "SPEAKER_00", "SPEAKER_01", NULL if no diarization
+    
+    # Quality metrics
+    confidence = Column(Float, nullable=True)  # Whisper's confidence 0-1
+    no_speech_prob = Column(Float, nullable=True)  # Probability segment is silence/music
+    
+    # Word-level timing data (JSON for precise alignment)
+    # Format: [{"word": "I'll", "start": 125.34, "end": 125.50, "probability": 0.98}, ...]
+    words_json = Column(Text, nullable=True)
+    
+    # Ordering
+    segment_index = Column(Integer, nullable=False)  # 0, 1, 2... for ordering
+    
+    # Standard timestamps
+    created = Column(DateTime, default=func.now(), nullable=False)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 15
+CURRENT_SCHEMA_VERSION = 16

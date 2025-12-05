@@ -487,6 +487,14 @@ from core.models import (
 # Include VLC optimization routes
 app.include_router(vlc_optimization_router)
 
+# Include transcription routes
+try:
+    from transcription import transcription_router
+    app.include_router(transcription_router)
+    logger.info("Transcription routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Transcription module not available: {e}. Transcription features disabled.")
+
 @app.post("/api/frames/start")
 async def start_frame_worker():
     """Force-start the background screenshot extraction worker."""

@@ -1,5 +1,7 @@
 # Installation Guide
 
+Everything you need to get Movie Searcher running on your machine.
+
 ## System Requirements
 
 ### Python Version
@@ -76,8 +78,32 @@ This file is gitignored so each machine can have different paths.
 **Common settings:**
 - `movies_folder`: Path to your movie collection
 - `local_target_folder`: Path for local copies (optional)
-- `AnthropicApiKey`: For AI search features (optional)
-- `OpenAIApiKey`: For AI search features (optional)
+
+### AI Search Configuration (Optional)
+
+To enable AI-powered movie discovery (asking questions like "What were Hitchcock's best thrillers?"), add your API key:
+
+```json
+{
+  "movies_folder": "D:\\Movies",
+  "AnthropicApiKey": "sk-ant-api03-..."
+}
+```
+
+**Or** for OpenAI:
+
+```json
+{
+  "movies_folder": "D:\\Movies",
+  "OpenAIApiKey": "sk-..."
+}
+```
+
+You can get API keys from:
+- **Anthropic (Claude)**: https://console.anthropic.com/
+- **OpenAI (GPT)**: https://platform.openai.com/
+
+AI search works without any API key—you just won't be able to ask natural language questions about movies.
 
 ## Manual Installation (Windows)
 
