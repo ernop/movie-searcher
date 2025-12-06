@@ -2,7 +2,8 @@
 SQLAlchemy database models (table definitions) for Movie Searcher.
 """
 from enum import Enum
-from sqlalchemy import Column, String, Float, Integer, DateTime, Boolean, Text, ForeignKey, JSON
+
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 
@@ -16,7 +17,7 @@ class MovieStatusEnum(str, Enum):
 
 class Movie(Base):
     __tablename__ = "movies"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     path = Column(String, nullable=False, unique=True, index=True)
     name = Column(String, nullable=False, index=True)
@@ -32,7 +33,7 @@ class Movie(Base):
 
 class Rating(Base):
     __tablename__ = "ratings"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
     rating = Column(Float, nullable=False)
@@ -41,7 +42,7 @@ class Rating(Base):
 
 class MovieStatus(Base):
     __tablename__ = "movie_status"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
     movieStatus = Column(String, nullable=True)  # NULL = unknown, "watched", "unwatched", "want_to_watch"
@@ -50,7 +51,7 @@ class MovieStatus(Base):
 
 class SearchHistory(Base):
     __tablename__ = "search_history"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     query = Column(String, nullable=False, index=True)
     results_count = Column(Integer, nullable=True)
@@ -59,7 +60,7 @@ class SearchHistory(Base):
 
 class LaunchHistory(Base):
     __tablename__ = "launch_history"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
     subtitle = Column(String, nullable=True)
@@ -69,7 +70,7 @@ class LaunchHistory(Base):
 
 class IndexedPath(Base):
     __tablename__ = "indexed_paths"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     path = Column(String, nullable=False, unique=True, index=True)
     created = Column(DateTime, default=func.now(), nullable=False)
@@ -77,7 +78,7 @@ class IndexedPath(Base):
 
 class Config(Base):
     __tablename__ = "config"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     key = Column(String, nullable=False, unique=True, index=True)
     value = Column(Text, nullable=True)
@@ -87,7 +88,7 @@ class Config(Base):
 class Screenshot(Base):
     """Screenshots extracted from video files using ffmpeg"""
     __tablename__ = "screenshots"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
     shot_path = Column(String, nullable=False)  # Path to the extracted screenshot image
@@ -174,7 +175,7 @@ class MovieCredit(Base):
 class SchemaVersion(Base):
     """Tracks database schema version to avoid unnecessary migration checks"""
     __tablename__ = "schema_version"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     version = Column(Integer, nullable=False, unique=True)
     description = Column(String, nullable=True)
@@ -250,34 +251,34 @@ class Transcript(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
-    
+
     # Status tracking
     status = Column(String, nullable=False, default='pending', index=True)  # TranscriptStatusEnum values
     progress = Column(Float, default=0)  # 0-100
     current_step = Column(String, nullable=True)  # Human-readable: "Transcribing segment 45/120"
-    
+
     # Model & configuration
     model_size = Column(String, default='large-v3')  # tiny, base, small, medium, large-v3
-    
+
     # Results
     language_detected = Column(String, nullable=True)  # ISO code: 'en', 'es', 'ja'
     language_probability = Column(Float, nullable=True)  # Confidence 0-1
-    
+
     # Statistics
     duration_seconds = Column(Float, nullable=True)  # Audio duration processed
     word_count = Column(Integer, nullable=True)
     segment_count = Column(Integer, nullable=True)
     speaker_count = Column(Integer, nullable=True)  # Unique speakers from diarization
-    
+
     # Timing
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     processing_time_seconds = Column(Float, nullable=True)  # How long transcription took
-    
+
     # Error handling
     error_message = Column(Text, nullable=True)
     retry_count = Column(Integer, default=0)
-    
+
     # Standard timestamps
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
@@ -289,28 +290,28 @@ class TranscriptSegment(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     transcript_id = Column(Integer, ForeignKey('transcripts.id', ondelete='CASCADE'), nullable=False, index=True)
-    
+
     # Timing (seconds with millisecond precision)
     start_time = Column(Float, nullable=False)  # e.g., 125.340
     end_time = Column(Float, nullable=False)    # e.g., 128.920
-    
+
     # Content
     text = Column(Text, nullable=False)  # "I'll be back."
-    
+
     # Speaker identification (from diarization)
     speaker_id = Column(String, nullable=True, index=True)  # "SPEAKER_00", "SPEAKER_01", NULL if no diarization
-    
+
     # Quality metrics
     confidence = Column(Float, nullable=True)  # Whisper's confidence 0-1
     no_speech_prob = Column(Float, nullable=True)  # Probability segment is silence/music
-    
+
     # Word-level timing data (JSON for precise alignment)
     # Format: [{"word": "I'll", "start": 125.34, "end": 125.50, "probability": 0.98}, ...]
     words_json = Column(Text, nullable=True)
-    
+
     # Ordering
     segment_index = Column(Integer, nullable=False)  # 0, 1, 2... for ordering
-    
+
     # Standard timestamps
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)

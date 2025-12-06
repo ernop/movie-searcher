@@ -1,8 +1,57 @@
 // Movie Lists Management (AI-generated saved searches)
 
+let currentMovieListId = null;
 let currentMovieListSlug = null;
 let movieListsFilterText = '';
 let showFavoritesOnly = false;
+
+// Create a URL-safe slug from title
+function createMovieListSlug(title) {
+    return (title || '').toString().toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'list';
+}
+
+/**
+ * Create a compact movie list card for embedding in other views (e.g., movie details).
+ * @param {Object} listData - The movie list data
+ * @param {string} listData.id - List ID
+ * @param {string} listData.slug - URL slug
+ * @param {string} listData.title - List title
+ * @param {number} listData.movies_count - Number of movies in the list
+ * @param {boolean} listData.is_favorite - Whether the list is favorited
+ * @param {string} [listData.comment] - List's overall AI comment
+ * @param {string} [listData.ai_comment] - AI comment specific to a focused movie
+ * @param {number} [focusMovieId] - Optional movie ID to highlight context for
+ * @returns {string} HTML string for the card
+ */
+function makeMovieListCard(listData, focusMovieId = null) {
+    const slug = listData.slug || createMovieListSlug(listData.title);
+    const favoriteClass = listData.is_favorite ? 'favorite' : '';
+    const countText = `${listData.movies_count || 0} movies`;
+    
+    // Use movie-specific comment if available, otherwise fall back to list comment
+    let displayComment = '';
+    if (focusMovieId && listData.ai_comment) {
+        displayComment = listData.ai_comment;
+    } else if (listData.comment) {
+        displayComment = listData.comment;
+    }
+    
+    const commentHtml = displayComment 
+        ? `<div class="movie-list-card-comment">${escapeHtml(displayComment)}</div>` 
+        : '';
+    
+    return `
+        <a href="#/lists/${listData.id}/${escapeHtml(slug)}" class="movie-list-card-compact ${favoriteClass}">
+            <div class="movie-list-card-compact-header">
+                <span class="movie-list-card-compact-title">${escapeHtml(listData.title)}</span>
+                <span class="movie-list-card-compact-count">${countText}</span>
+            </div>
+            ${commentHtml}
+        </a>
+    `;
+}
 
 // Initialize movie lists page
 async function loadMovieListsPage() {
@@ -97,13 +146,14 @@ function createMovieListCard(list) {
     const providerIcon = list.provider === 'anthropic' ? '🤖' : '🧠';
     const favoriteClass = list.is_favorite ? 'favorite' : '';
     const favoriteIcon = list.is_favorite ? '★' : '☆';
+    const slug = createMovieListSlug(list.title);
 
     return `
-        <div class="movie-list-card ${favoriteClass}" onclick="viewMovieList('${escapeJsString(list.slug)}')">
+        <div class="movie-list-card ${favoriteClass}" onclick="navigateTo('/lists/${list.id}/${slug}')">
             <div class="movie-list-card-header">
                 <div class="movie-list-card-title">${escapeHtml(list.title)}</div>
                 <button class="movie-list-favorite-btn" 
-                        onclick="event.stopPropagation(); toggleMovieListFavorite('${escapeJsString(list.slug)}', ${!list.is_favorite})"
+                        onclick="event.stopPropagation(); toggleMovieListFavorite(${list.id}, ${!list.is_favorite})"
                         title="${list.is_favorite ? 'Remove from favorites' : 'Add to favorites'}">
                     ${favoriteIcon}
                 </button>
@@ -120,7 +170,7 @@ function createMovieListCard(list) {
             </div>
             <div class="movie-list-card-actions">
                 <button class="btn btn-small btn-danger" 
-                        onclick="event.stopPropagation(); deleteMovieList('${escapeJsString(list.slug)}', '${escapeJsString(list.title)}')">
+                        onclick="event.stopPropagation(); deleteMovieList(${list.id}, '${escapeJsString(list.title)}')">
                     Delete
                 </button>
             </div>
@@ -144,14 +194,9 @@ function toggleFavoritesFilter() {
     loadMovieListsOverview();
 }
 
-// View specific movie list
-async function viewMovieList(slug) {
-    currentMovieListSlug = slug;
-
-    // Update URL without reloading
-    if (window.history.pushState) {
-        window.history.pushState(null, '', `#/lists/${slug}`);
-    }
+// View specific movie list by id
+async function viewMovieList(listId, skipUrlUpdate = false) {
+    currentMovieListId = listId;
 
     const overview = document.getElementById('movieListsOverview');
     const detailView = document.getElementById('movieListDetailView');
@@ -163,10 +208,21 @@ async function viewMovieList(slug) {
     detailView.innerHTML = '<div class="loading">Loading movie list...</div>';
 
     try {
-        const response = await fetch(`/api/movie-lists/${slug}`);
+        const response = await fetch(`/api/movie-lists/by-id/${listId}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const data = await response.json();
+        currentMovieListSlug = data.slug;
+        
+        // Update URL with id and slug
+        if (!skipUrlUpdate) {
+            const slug = createMovieListSlug(data.title);
+            const newHash = `/lists/${listId}/${slug}`;
+            if (window.location.hash !== '#' + newHash) {
+                window.history.replaceState(null, '', '#' + newHash);
+            }
+        }
+        
         renderMovieListDetail(data);
 
         if (typeof restoreScrollPosition === 'function') {
@@ -194,11 +250,11 @@ function renderMovieListDetail(data) {
             <button class="btn btn-secondary" onclick="backToMovieListsOverview()">← Back to Lists</button>
             <div class="movie-list-detail-actions">
                 <button class="btn ${data.is_favorite ? 'active' : ''}" 
-                        onclick="toggleMovieListFavorite('${escapeJsString(data.slug)}', ${!data.is_favorite})">
+                        onclick="toggleMovieListFavorite(${data.id}, ${!data.is_favorite})">
                     ${favoriteIcon} ${favoriteText}
                 </button>
                 <button class="btn btn-danger" 
-                        onclick="deleteMovieList('${escapeJsString(data.slug)}', '${escapeJsString(data.title)}')">
+                        onclick="deleteMovieList(${data.id}, '${escapeJsString(data.title)}')">
                     🗑️ Delete
                 </button>
             </div>
@@ -207,7 +263,7 @@ function renderMovieListDetail(data) {
         <div class="movie-list-detail-info">
             <h2 class="movie-list-detail-title" 
                 contenteditable="true" 
-                onblur="updateMovieListTitle('${escapeJsString(data.slug)}', this.textContent)"
+                onblur="updateMovieListTitle(${data.id}, this.textContent)"
                 title="Click to edit title">${escapeHtml(data.title)}</h2>
             <div class="movie-list-detail-query">Query: "${escapeHtml(data.query)}"</div>
             <div class="movie-list-detail-meta">
@@ -279,20 +335,15 @@ function renderMovieListDetail(data) {
 
 // Back to movie lists overview
 function backToMovieListsOverview() {
+    currentMovieListId = null;
     currentMovieListSlug = null;
-
-    // Update URL
-    if (window.history.pushState) {
-        window.history.pushState(null, '', '#/lists');
-    }
-
-    loadMovieListsOverview();
+    navigateTo('/lists');
 }
 
 // Toggle movie list favorite status
-async function toggleMovieListFavorite(slug, isFavorite) {
+async function toggleMovieListFavorite(listId, isFavorite) {
     try {
-        const response = await fetch(`/api/movie-lists/${slug}`, {
+        const response = await fetch(`/api/movie-lists/by-id/${listId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ is_favorite: isFavorite })
@@ -301,8 +352,8 @@ async function toggleMovieListFavorite(slug, isFavorite) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         // Refresh current view
-        if (currentMovieListSlug === slug) {
-            viewMovieList(slug);
+        if (currentMovieListId === listId) {
+            viewMovieList(listId);
         } else {
             loadMovieListsOverview();
         }
@@ -315,15 +366,15 @@ async function toggleMovieListFavorite(slug, isFavorite) {
 }
 
 // Update movie list title
-async function updateMovieListTitle(slug, newTitle) {
+async function updateMovieListTitle(listId, newTitle) {
     newTitle = newTitle.trim();
     if (!newTitle) {
-        viewMovieList(slug); // Reload to reset
+        viewMovieList(listId); // Reload to reset
         return;
     }
 
     try {
-        const response = await fetch(`/api/movie-lists/${slug}`, {
+        const response = await fetch(`/api/movie-lists/by-id/${listId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: newTitle })
@@ -331,22 +382,26 @@ async function updateMovieListTitle(slug, newTitle) {
 
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
+        // Update URL with new slug
+        const slug = createMovieListSlug(newTitle);
+        window.history.replaceState(null, '', `#/lists/${listId}/${slug}`);
+        
         showStatus('Title updated', 'success');
     } catch (error) {
         console.error('Error updating title:', error);
         showStatus('Failed to update title', 'error');
-        viewMovieList(slug); // Reload to reset
+        viewMovieList(listId); // Reload to reset
     }
 }
 
 // Delete movie list
-async function deleteMovieList(slug, title) {
+async function deleteMovieList(listId, title) {
     if (!confirm(`Delete movie list "${title}"? This cannot be undone.`)) {
         return;
     }
 
     try {
-        const response = await fetch(`/api/movie-lists/${slug}`, {
+        const response = await fetch(`/api/movie-lists/by-id/${listId}`, {
             method: 'DELETE'
         });
 
@@ -355,7 +410,7 @@ async function deleteMovieList(slug, title) {
         showStatus(`Deleted "${title}"`, 'success');
 
         // Navigate back to overview
-        if (currentMovieListSlug === slug) {
+        if (currentMovieListId === listId) {
             backToMovieListsOverview();
         } else {
             loadMovieListsOverview();
@@ -390,7 +445,7 @@ function truncateText(text, maxLength) {
 }
 
 // Handle direct movie list routes
-function handleMovieListRoute(slug) {
+function handleMovieListRoute(listId) {
     const pages = document.querySelectorAll('.page');
     pages.forEach(page => page.classList.remove('active'));
     const pageMovieLists = document.getElementById('pageMovieLists');
@@ -398,7 +453,8 @@ function handleMovieListRoute(slug) {
         pageMovieLists.classList.add('active');
     }
 
-    viewMovieList(slug);
+    // skipUrlUpdate=true since we're loading from URL
+    viewMovieList(listId, true);
 }
 
 // Load movie list suggestions for the search area
@@ -430,8 +486,9 @@ function renderMovieListSuggestions(suggestions, recentLists) {
             <div class="suggestions-label">💡 Similar searches:</div>
             <div class="suggestions-items">`;
         suggestions.forEach(s => {
+            const slug = createMovieListSlug(s.title);
             html += `
-                <a href="#/lists/${escapeHtml(s.slug)}" class="suggestion-item">
+                <a href="#/lists/${s.id}/${escapeHtml(slug)}" class="suggestion-item">
                     "${escapeHtml(truncateText(s.title, 40))}" (${s.movies_count} movies)
                 </a>
             `;
@@ -445,8 +502,9 @@ function renderMovieListSuggestions(suggestions, recentLists) {
             <div class="suggestions-label">📋 Recent lists:</div>
             <div class="suggestions-items">`;
         recentLists.forEach(s => {
+            const slug = createMovieListSlug(s.title);
             html += `
-                <a href="#/lists/${escapeHtml(s.slug)}" class="suggestion-item">
+                <a href="#/lists/${s.id}/${escapeHtml(slug)}" class="suggestion-item">
                     ${escapeHtml(truncateText(s.title, 40))} (${s.movies_count})
                 </a>
             `;

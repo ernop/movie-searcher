@@ -11,8 +11,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import load_config, save_config
-from video_processing import validate_ffmpeg_path
 from database import init_db
+from video_processing import validate_ffmpeg_path
+
 
 def setup_ffmpeg():
     """Detect ffmpeg and save to config"""
@@ -22,13 +23,13 @@ def setup_ffmpeg():
     except Exception:
         # Database might already be initialized, that's fine
         pass
-    
+
     try:
         config = load_config()
     except Exception as e:
         print(f"ERROR: Error loading config: {e}")
         sys.exit(1)
-    
+
     # If already configured and valid, skip
     if config.get("ffmpeg_path"):
         try:
@@ -39,7 +40,7 @@ def setup_ffmpeg():
         except Exception as e:
             print(f"ERROR: Failed to validate existing ffmpeg path: {e}")
             sys.exit(1)
-    
+
     # Try to find ffmpeg in PATH
     ffmpeg_exe = shutil.which("ffmpeg")
     if ffmpeg_exe:
@@ -57,14 +58,14 @@ def setup_ffmpeg():
         except Exception as e:
             print(f"ERROR: Failed to validate ffmpeg path: {e}")
             sys.exit(1)
-    
+
     # Try common installation locations (check if they exist, regardless of OS)
     common_paths = [
         Path("C:/ffmpeg/bin/ffmpeg.exe"),
         Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
         Path("C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe"),
     ]
-    
+
     # Check winget installation location if LOCALAPPDATA exists (indicates Windows)
     localappdata = os.environ.get("LOCALAPPDATA", "")
     if localappdata:
@@ -77,7 +78,7 @@ def setup_ffmpeg():
                     ffmpeg_bin = version_dir / "bin" / "ffmpeg.exe"
                     if ffmpeg_bin.exists():
                         common_paths.append(ffmpeg_bin)
-    
+
     for ffmpeg_path in common_paths:
         if ffmpeg_path.exists():
             try:
@@ -94,7 +95,7 @@ def setup_ffmpeg():
             except Exception as e:
                 print(f"ERROR: Failed to validate ffmpeg path: {e}")
                 sys.exit(1)
-    
+
     print("ERROR: ffmpeg not found. Please install manually or configure path in settings.")
     sys.exit(1)
 

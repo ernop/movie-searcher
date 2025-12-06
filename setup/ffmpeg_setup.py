@@ -2,14 +2,12 @@
 FFmpeg setup and configuration module.
 Handles detection, installation, testing, and configuration of ffmpeg and ffprobe.
 """
-import os
-import subprocess
-import time
-import shutil
 import logging
-from pathlib import Path
-
+import os
+import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Add project root to path for imports
@@ -17,7 +15,7 @@ if str(Path(__file__).parent.parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import load_config, save_config
-from video_processing import validate_ffmpeg_path, test_ffmpeg_comprehensive
+from video_processing import test_ffmpeg_comprehensive, validate_ffmpeg_path
 
 logger = logging.getLogger(__name__)
 
@@ -27,39 +25,39 @@ def find_ffmpeg_and_ffprobe_in_winget():
     localappdata = os.environ.get("LOCALAPPDATA", "")
     if not localappdata:
         return None, None
-    
+
     winget_pattern = Path(localappdata) / "Microsoft" / "WinGet" / "Packages"
     if not winget_pattern.exists():
         return None, None
-    
+
     # Look for Gyan.FFmpeg installations
     for ffmpeg_dir in winget_pattern.glob("Gyan.FFmpeg_*"):
         ffmpeg_path = None
         ffprobe_path = None
-        
+
         # Check all subdirectories for ffmpeg and ffprobe
         for subdir in ffmpeg_dir.iterdir():
             if not subdir.is_dir():
                 continue
-            
+
             bin_dir = subdir / "bin"
             if not bin_dir.exists():
                 continue
-            
+
             # Check for ffmpeg
             ffmpeg_candidate = bin_dir / "ffmpeg.exe"
             if ffmpeg_candidate.exists() and not ffmpeg_path:
                 ffmpeg_path = str(ffmpeg_candidate)
-            
+
             # Check for ffprobe
             ffprobe_candidate = bin_dir / "ffprobe.exe"
             if ffprobe_candidate.exists() and not ffprobe_path:
                 ffprobe_path = str(ffprobe_candidate)
-        
+
         # If we found both, return them
         if ffmpeg_path and ffprobe_path:
             return ffmpeg_path, ffprobe_path
-    
+
     return None, None
 
 
@@ -72,9 +70,9 @@ def ensure_ffmpeg_configured():
     max_attempts = 3
     for attempt in range(max_attempts):
         logger.info(f"=== FFmpeg Configuration Check (Attempt {attempt + 1}/{max_attempts}) ===")
-        
+
         config = load_config()
-        
+
         # Test current configuration if it exists
         ffmpeg_path = config.get("ffmpeg_path")
         ffprobe_path = config.get("ffprobe_path")
@@ -105,14 +103,14 @@ def ensure_ffmpeg_configured():
                 if test_result.get("errors"):
                     for error in test_result["errors"]:
                         logger.warning(f"  Error: {error}")
-        
+
         # If we get here, we need to find/install ffmpeg
         logger.info("Searching for ffmpeg installation...")
-        
+
         # 1. Check PATH
         ffmpeg_exe = shutil.which("ffmpeg")
         ffprobe_exe = shutil.which("ffprobe")
-        
+
         if ffmpeg_exe and ffprobe_exe:
             ffmpeg_valid, _ = validate_ffmpeg_path(ffmpeg_exe)
             if ffmpeg_valid:
@@ -132,14 +130,14 @@ def ensure_ffmpeg_configured():
                         return True
                 else:
                     logger.warning(f"PATH test failed: ffmpeg_ok={test_result.get('ffmpeg_ok')}, ffprobe_ok={test_result.get('ffprobe_ok')}")
-        
+
         # 2. Check common installation locations
         common_paths = [
             Path("C:/ffmpeg/bin/ffmpeg.exe"),
             Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
             Path("C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe"),
         ]
-        
+
         for ffmpeg_path_obj in common_paths:
             if ffmpeg_path_obj.exists():
                 # Test ffmpeg - this will find ffprobe automatically
@@ -159,7 +157,7 @@ def ensure_ffmpeg_configured():
                         return True
                 else:
                     logger.debug(f"Common path test failed for {ffmpeg_path_obj}: ffmpeg_ok={test_result.get('ffmpeg_ok')}, ffprobe_ok={test_result.get('ffprobe_ok')}")
-        
+
         # 3. Check winget installation location
         ffmpeg_path, ffprobe_path_found = find_ffmpeg_and_ffprobe_in_winget()
         if ffmpeg_path:
@@ -185,7 +183,7 @@ def ensure_ffmpeg_configured():
                     for error in test_result["errors"]:
                         logger.warning(f"  Error: {error}")
                 # Continue to try installation
-        
+
         # 4. If not found, try to install via winget
         if attempt < max_attempts - 1:  # Don't try to install on last attempt
             logger.info("ffmpeg not found. Attempting to install via winget...")
@@ -209,11 +207,11 @@ def ensure_ffmpeg_configured():
                     logger.warning("winget not available")
             except Exception as e:
                 logger.warning(f"Error during installation attempt: {e}")
-        
+
         # Wait before retry
         if attempt < max_attempts - 1:
             time.sleep(2)
-    
+
     # If we get here, we failed
     logger.error("Failed to configure ffmpeg after all attempts. Screenshot extraction will be disabled.")
     return False

@@ -4,10 +4,10 @@ Movie Searcher startup script.
 Replaces start.bat with a cross-platform Python solution.
 """
 import os
-import sys
+import shutil
 import socket
 import subprocess
-import shutil
+import sys
 import time
 import webbrowser
 from pathlib import Path
@@ -30,20 +30,20 @@ def check_ffmpeg() -> bool:
     # First check PATH
     if shutil.which("ffmpeg") is not None:
         return True
-    
+
     # Check if already configured in settings.json
     settings_path = Path(__file__).parent / "settings.json"
     if settings_path.exists():
         try:
             import json
-            with open(settings_path, "r") as f:
+            with open(settings_path) as f:
                 settings = json.load(f)
             ffmpeg_path = settings.get("ffmpeg_path")
             if ffmpeg_path and Path(ffmpeg_path).exists():
                 return True
         except Exception:
             pass
-    
+
     return False
 
 def check_vlc() -> bool:
@@ -51,27 +51,27 @@ def check_vlc() -> bool:
     # First check PATH
     if shutil.which("vlc") is not None:
         return True
-    
+
     # Check if already configured in settings.json
     settings_path = Path(__file__).parent / "settings.json"
     if settings_path.exists():
         try:
             import json
-            with open(settings_path, "r") as f:
+            with open(settings_path) as f:
                 settings = json.load(f)
             vlc_path = settings.get("vlc_path")
             if vlc_path and Path(vlc_path).exists():
                 return True
         except Exception:
             pass
-    
+
     return False
 
 def try_install_ffmpeg() -> bool:
     """Try to install ffmpeg via winget (Windows only)"""
     if sys.platform != "win32":
         return False
-    
+
     # Check if winget is available
     try:
         result = subprocess.run(
@@ -83,7 +83,7 @@ def try_install_ffmpeg() -> bool:
             return False
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
-    
+
     print("ffmpeg not found in PATH. Attempting to install via winget...")
     try:
         result = subprocess.run(
@@ -112,7 +112,7 @@ def try_install_vlc() -> bool:
     """Try to install VLC via winget (Windows only)"""
     if sys.platform != "win32":
         return False
-    
+
     # Check if winget is available
     try:
         result = subprocess.run(
@@ -124,7 +124,7 @@ def try_install_vlc() -> bool:
             return False
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
-    
+
     print("VLC not found. Attempting to install via winget...")
     try:
         result = subprocess.run(
@@ -195,7 +195,7 @@ def start_server(open_browser_url: str | None = None, dev: bool = False):
         print("DEV MODE: Auto-reload enabled for *.py files")
     print("Press Ctrl+C to stop the server")
     print("=" * 60)
-    
+
     # Import and run the server
     from server import run_server
     run_server(open_browser_url=open_browser_url, dev=dev)
@@ -206,16 +206,16 @@ def main():
     parser = argparse.ArgumentParser(description="Movie Searcher Launcher")
     parser.add_argument("--dev", action="store_true", help="Enable dev mode with auto-reload on .py changes")
     args = parser.parse_args()
-    
+
     print("Movie Searcher Launcher")
     if args.dev:
         print("[DEV MODE]")
     print()
-    
+
     # Change to script directory
     script_dir = Path(__file__).parent
     os.chdir(script_dir)
-    
+
     # Check if server is already running
     print("Checking if server is already running...")
     if check_port_in_use(SERVER_PORT):
@@ -224,7 +224,7 @@ def main():
         webbrowser.open(SERVER_URL)
         print(f"\nServer URL: {SERVER_URL}")
         return 0
-    
+
     # Check for ffmpeg
     print("Checking for ffmpeg...")
     if not check_ffmpeg():
@@ -237,7 +237,7 @@ def main():
         else:
             print("WARNING: ffmpeg not found in PATH.")
             print("Please install ffmpeg manually.")
-    
+
     # Run setup/setup_ffmpeg.py to detect and save ffmpeg path
     if not run_setup_ffmpeg():
         print()
@@ -245,7 +245,7 @@ def main():
         print()
         input("Press Enter to exit...")
         return 1
-    
+
     # Check for VLC
     print("Checking for VLC...")
     if not check_vlc():
@@ -258,7 +258,7 @@ def main():
         else:
             print("WARNING: VLC not found in PATH.")
             print("Please install VLC manually.")
-    
+
     # Run setup/setup_vlc.py to detect and save VLC path (optional - app works without it)
     if not run_setup_vlc():
         print()
@@ -266,7 +266,7 @@ def main():
         print("You can still browse your movie collection.")
         print("To enable playback, install VLC from https://www.videolan.org/vlc/")
         print()
-    
+
     # Start the server (blocks until Ctrl+C, opens browser when ready)
     try:
         start_server(open_browser_url=SERVER_URL, dev=args.dev)

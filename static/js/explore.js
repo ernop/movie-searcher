@@ -13,8 +13,8 @@ async function navigateToExploreWithYear(year, movieId) {
     await new Promise(resolve => setTimeout(resolve, 100));
     
     // Set the year filter, preserving other filters
-    const { filterType, letter, decade, language, noYear } = getCurrentExploreFilters();
-    await fetchExploreMovies(1, filterType, letter, decade, year);
+    const { filterType, letter, language } = getCurrentExploreFilters();
+    await fetchExploreMovies(1, filterType, letter, null, year, language, false);
     
     // Year chip will be rendered by renderYearFilter
     
@@ -66,8 +66,27 @@ function getCurrentExploreFilters() {
 
 let lastFetchedUrl = '';
 
-async function fetchExploreMovies(page, filterType, letter, decade, year) {
+// Update URL to reflect current explore state (for shareable links)
+function updateExploreUrl(page, filterType, letter, decade, year, language, noYear) {
+    // Explicitly set all explore params (null clears them from URL)
+    const urlParams = {
+        filter_type: (filterType && filterType !== 'all') ? filterType : null,
+        language: (language && language !== 'all') ? language : null,
+        letter: letter || null,
+        decade: decade || null,
+        year: year || null,
+        no_year: noYear ? 'true' : null,
+        page: (page && page > 1) ? page : null
+    };
+    
+    updateRouteParams(urlParams);
+}
+
+async function fetchExploreMovies(page, filterType, letter, decade, year, language = null, noYear = false) {
     try {
+        // Use passed language or fall back to UI state
+        const effectiveLanguage = language !== null ? language : getCurrentExploreFilters().language;
+        
         const params = new URLSearchParams({
             page: page.toString(),
             per_page: EXPLORE_PER_PAGE.toString(),
@@ -86,15 +105,16 @@ async function fetchExploreMovies(page, filterType, letter, decade, year) {
             params.append('year', year.toString());
         }
         
-        // Always include language from current explore state (even 'all' for clarity)
-        const { language, noYear } = getCurrentExploreFilters();
-        params.append('language', language || 'all');
+        params.append('language', effectiveLanguage || 'all');
         
         if (noYear) {
             params.append('no_year', 'true');
         }
         
         const url = `/api/explore?${params}`;
+        
+        // Update browser URL to match current state
+        updateExploreUrl(page, filterType, letter, decade, year, effectiveLanguage, noYear);
         
         // Optimization: If URL is same as last fetched, and grid has content, skip fetch and just restore scroll
         // This preserves scroll position perfectly when navigating back
@@ -151,14 +171,14 @@ async function fetchExploreMovies(page, filterType, letter, decade, year) {
 
 // Filter change handlers - read UI state and make request
 function applyExploreFilters() {
-    const { filterType, letter, decade, year } = getCurrentExploreFilters();
+    const { filterType, letter, decade, year, language, noYear } = getCurrentExploreFilters();
     // Do not clear other filters; combine filters and reset to page 1
-    fetchExploreMovies(1, filterType, letter, decade, year);
+    fetchExploreMovies(1, filterType, letter, decade, year, language, noYear);
 }
 
 function jumpToLetter(letter) {
     const { filterType, decade, year, language, noYear } = getCurrentExploreFilters();
-    fetchExploreMovies(1, filterType, letter, decade, year);
+    fetchExploreMovies(1, filterType, letter, decade, year, language, noYear);
 }
 
 function clearLetterFilter() {
@@ -170,7 +190,7 @@ function jumpToDecade(decade) {
     // Clear year and no_year UI (mutually exclusive with decade), but preserve letter and language
     clearYearFilterUI();
     clearDecadeFilter();
-    fetchExploreMovies(1, filterType, letter, decade, null);
+    fetchExploreMovies(1, filterType, letter, decade, null, language, false);
 }
 
 function jumpToNoYear() {
@@ -178,7 +198,7 @@ function jumpToNoYear() {
     // Clear year and decade UI (mutually exclusive with no_year), but preserve letter and language
     clearYearFilterUI();
     clearDecadeFilter();
-    fetchExploreMovies(1, filterType, letter, null, null);
+    fetchExploreMovies(1, filterType, letter, null, null, language, true);
 }
 
 function clearDecadeFilter() {
@@ -189,7 +209,7 @@ function jumpToYear(year) {
     const { filterType, letter, language } = getCurrentExploreFilters();
     // Clear decade and no_year UI (mutually exclusive with year), but preserve letter and language
     clearDecadeFilter();
-    fetchExploreMovies(1, filterType, letter, null, year);
+    fetchExploreMovies(1, filterType, letter, null, year, language, false);
 }
 
 function navigateToAdjacentYear(year, direction) {
@@ -212,7 +232,7 @@ function clearYearFilter() {
     clearYearFilterUI();
     // Preserve all other filters when clearing year
     const { filterType, letter, decade, language, noYear } = getCurrentExploreFilters();
-    fetchExploreMovies(1, filterType, letter, decade, null);
+    fetchExploreMovies(1, filterType, letter, decade, null, language, noYear);
 }
 
 function clearAllZoneFilters() {
@@ -222,55 +242,50 @@ function clearAllZoneFilters() {
 }
 
 function goToExplorePage(page) {
-    const { filterType, letter, decade, year } = getCurrentExploreFilters();
-    fetchExploreMovies(page, filterType, letter, decade, year);
+    const { filterType, letter, decade, year, language, noYear } = getCurrentExploreFilters();
+    fetchExploreMovies(page, filterType, letter, decade, year, language, noYear);
 }
 
-// Initial load - reads UI state
+// Initial load - reads URL params and fetches movies
 function loadExploreMovies() {
-    // Initialize filter buttons from URL params if present
     const urlParams = getRouteParams();
-    let filtersInitialized = false;
     
-    // Set watch filter from URL
-    if (urlParams.filter_type) {
-        const watchBtn = document.querySelector(`.explore-filters .btn[data-filter="${urlParams.filter_type}"]`);
+    // Read all filter values from URL
+    const filterType = urlParams.filter_type || 'all';
+    const language = urlParams.language || 'all';
+    const letter = urlParams.letter || null;
+    const decade = urlParams.decade ? parseInt(urlParams.decade) : null;
+    const year = urlParams.year ? parseInt(urlParams.year) : null;
+    const noYear = urlParams.no_year === 'true';
+    const page = urlParams.page ? parseInt(urlParams.page) : 1;
+    
+    // Set watch filter button state
+    if (filterType) {
+        const watchBtn = document.querySelector(`.explore-filters .btn[data-filter="${filterType}"]`);
         if (watchBtn) {
-            // Set button state without triggering applyExploreFilters
             const group = watchBtn.closest('.btn-group-toggle');
             group.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
             watchBtn.classList.add('active');
-            filtersInitialized = true;
         }
     }
     
-    
-    // Set language filter from URL (need to wait for language buttons to load)
-    // This will be handled after language filters are loaded
-    if (urlParams.language) {
-        // Wait a bit for language buttons to be populated
+    // Set language filter (need to wait for language buttons to load)
+    if (language && language !== 'all') {
         setTimeout(() => {
-            const langBtn = document.querySelector(`#exploreLanguageFilterGroup .btn[data-language="${urlParams.language}"]`);
+            const langBtn = document.querySelector(`#exploreLanguageFilterGroup .btn[data-language="${language}"]`);
             if (langBtn) {
                 const languageGroup = document.getElementById('exploreLanguageFilterGroup');
                 if (languageGroup) {
                     languageGroup.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
                 }
                 langBtn.classList.add('active');
-                applyExploreFilters();
             }
         }, 100);
     }
     
-    // Only fetch if we didn't initialize filters (they will trigger their own fetch)
-    if (!filtersInitialized) {
-        const { filterType, letter, decade, year } = getCurrentExploreFilters();
-        fetchExploreMovies(currentExplorePage || 1, filterType, letter, decade, year);
-    } else {
-        // Filters were initialized, they will trigger applyExploreFilters
-        // But we need to make sure applyExploreFilters is called
-        applyExploreFilters();
-    }
+    // Fetch with URL params - UI state will be set by render functions
+    currentExplorePage = page;
+    fetchExploreMovies(page, filterType, letter, decade, year, language, noYear);
 }
 
 function renderLetterNav(letterCounts, activeLetter) {
@@ -311,7 +326,7 @@ function renderLetterNav(letterCounts, activeLetter) {
                 // Only clear letter filter, preserve decade, year, and noYear
                 clearLetterFilter();
                 const { filterType, decade, year, language, noYear } = getCurrentExploreFilters();
-                fetchExploreMovies(1, filterType, null, decade, year);
+                fetchExploreMovies(1, filterType, null, decade, year, language, noYear);
             } else if (btn.dataset.letter) {
                 jumpToLetter(btn.dataset.letter);
             }
@@ -360,8 +375,8 @@ function renderDecadeNav(decadeCounts, activeDecade, noYearCount, activeNoYear) 
             if (btn.dataset.action === 'clear') {
                 // Only clear decade/noYear filters, preserve letter and year
                 clearDecadeFilter();
-                const { filterType, letter, year, language, noYear } = getCurrentExploreFilters();
-                fetchExploreMovies(1, filterType, letter, null, year);
+                const { filterType, letter, year, language } = getCurrentExploreFilters();
+                fetchExploreMovies(1, filterType, letter, null, year, language, false);
             } else if (btn.dataset.action === 'no_year') {
                 jumpToNoYear();
             } else if (btn.dataset.decade) {

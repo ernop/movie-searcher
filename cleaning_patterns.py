@@ -11,7 +11,6 @@ keep potentially sensitive names out of the repository.
 import json
 import re
 from pathlib import Path
-from typing import List, Set, Optional
 
 # ============================================================================
 # RESOLUTION & QUALITY PATTERNS
@@ -26,11 +25,11 @@ HDR_FORMATS = {
 }
 
 # ============================================================================
-# VIDEO SOURCE PATTERNS  
+# VIDEO SOURCE PATTERNS
 # ============================================================================
 
 VIDEO_SOURCES = {
-    'webrip', 'web-dl', 'webdl', 'hdtv', 
+    'webrip', 'web-dl', 'webdl', 'hdtv',
     'bluray', 'blu-ray', 'bdrip', 'brrip', 'hdrip',
     'remux', 'dvdrip', 'dvdscr',
     'cam', 'ts', 'tc', 'hdcam', 'hdts',
@@ -109,7 +108,7 @@ STREAMING_SERVICES = {
 # COMPILED REGEX PATTERNS
 # ============================================================================
 
-def _build_word_pattern(words: Set[str]) -> str:
+def _build_word_pattern(words: set[str]) -> str:
     """Build a regex pattern that matches any of the words as whole words."""
     # Escape special regex characters and join with |
     escaped = [re.escape(w).replace(r'\ ', r'[-\s]*') for w in sorted(words, key=len, reverse=True)]
@@ -157,7 +156,7 @@ EDITION_PATTERNS = [
 # RELEASE GROUP HANDLING (loaded from external file)
 # ============================================================================
 
-_release_groups: Optional[Set[str]] = None
+_release_groups: set[str] | None = None
 _cleaning_data_path = Path(__file__).parent / 'cleaning_data.json'
 
 
@@ -165,9 +164,9 @@ def _load_cleaning_data() -> dict:
     """Load cleaning data from JSON file."""
     if _cleaning_data_path.exists():
         try:
-            with open(_cleaning_data_path, 'r', encoding='utf-8') as f:
+            with open(_cleaning_data_path, encoding='utf-8') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
     return {}
 
@@ -178,7 +177,7 @@ def _save_cleaning_data(data: dict) -> None:
         json.dump(data, f, indent=2, sort_keys=True)
 
 
-def get_release_groups() -> Set[str]:
+def get_release_groups() -> set[str]:
     """Get the set of known release group names (loaded from cleaning_data.json)."""
     global _release_groups
     if _release_groups is None:
@@ -212,31 +211,31 @@ def get_release_group_pattern() -> str:
 # FORBIDDEN MARKERS (for bracket content detection)
 # ============================================================================
 
-def get_forbidden_markers() -> List[str]:
+def get_forbidden_markers() -> list[str]:
     """
     Get list of regex patterns for forbidden markers.
     These are used to detect quality/release info inside brackets.
     """
     markers = []
-    
+
     # Add all the static patterns
     for pattern_set in [RESOLUTIONS, VIDEO_SOURCES, VIDEO_CODECS, AUDIO_CODECS, EDITION_TAGS]:
         for item in pattern_set:
             markers.append(re.escape(item).replace(r'\ ', r'[-\s]*'))
-    
+
     # Add HDR patterns
     markers.extend(['hdr10?', r'dolby\s*vision'])
-    
+
     # Add audio channels
     markers.extend([r'5\.1', r'7\.1'])
-    
+
     # Add release groups
     for group in get_release_groups():
         markers.append(re.escape(group))
-    
+
     # Add subs pattern
     markers.append(r'subs?')
-    
+
     return markers
 
 
@@ -291,18 +290,18 @@ def remove_website_prefixes(text: str) -> str:
 def remove_brackets_with_forbidden_content(text: str) -> str:
     """Remove bracketed content that contains quality/release markers."""
     forbidden_pattern = get_forbidden_union_pattern()
-    
+
     # Check each bracketed section
     def should_remove(match):
         inner = match.group(1)
         if re.search(forbidden_pattern, inner, flags=re.IGNORECASE):
             return ' '
         return match.group(0)
-    
+
     # Process different bracket types
     text = re.sub(r'\[([^\]]*)\]', should_remove, text)
     text = re.sub(r'\(([^)]*)\)', should_remove, text)
-    
+
     return re.sub(r'\s+', ' ', text).strip()
 
 
@@ -344,45 +343,45 @@ def clean_folder_name(name: str) -> str:
     """
     # Remove website prefixes first
     name = remove_website_prefixes(name)
-    
+
     # Remove quality and edition tags (before normalizing to catch patterns with dots)
     name = remove_quality_tags(name)
     name = remove_edition_tags(name)
-    
+
     # Remove specific patterns that might have dots
     name = re.sub(r'\b(?:NF|WEBRip|WEB-DL|DDP\d+\.?\d*)\b', ' ', name, flags=re.IGNORECASE)
-    
+
     # Remove standalone decimal numbers (quality tag fragments like "2.0")
     name = re.sub(r'\b\d+\.\d+\b', ' ', name)
-    
+
     # Normalize separators
     name = normalize_separators(name)
-    
+
     # Remove bracketed and parenthesized content
     name = re.sub(r'\[.*?\]', '', name)
     name = re.sub(r'\([^)]*\)', '', name)
-    
+
     # Remove season/episode patterns
     name = remove_season_episode_patterns(name)
-    
+
     # Remove language tags
     name = remove_language_tags(name)
-    
+
     # Remove release group suffixes
     name = clean_release_group_suffix(name)
-    
+
     # Remove known release groups
     name = remove_release_groups(name)
-    
+
     # Clean up empty parentheses and stray punctuation
     name = re.sub(r'\(\s*\)', ' ', name)
     name = re.sub(r'[–—\-]{2,}', ' ', name)
     name = re.sub(r'[–—\-]+\s*$', ' ', name)
     name = re.sub(r'^\s*[–—\-]+', ' ', name)
-    
+
     # Final cleanup
     name = re.sub(r'\s+', ' ', name).strip()
-    
+
     return name
 
 

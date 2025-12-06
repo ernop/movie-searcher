@@ -3,16 +3,15 @@ Transcription module for Movie Searcher.
 Provides Whisper-based transcription with speaker diarization.
 """
 
+from .api import router as transcription_router
 from .transcriber import (
+    HUGGINGFACE_CACHE,
+    WHISPER_MODEL_DIR,
     TranscriptionManager,
     extract_audio,
-    transcribe_audio,
     get_transcript_status,
-    WHISPER_MODEL_DIR,
-    HUGGINGFACE_CACHE,
+    transcribe_audio,
 )
-
-from .api import router as transcription_router
 
 __all__ = [
     "TranscriptionManager",

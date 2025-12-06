@@ -122,8 +122,7 @@ function renderMediaGallery(images, screenshots, itemPath, movieId) {
                 <img src="${imageSrc}" 
                      alt="" 
                      loading="lazy"
-                     onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'"
-                     onload="console.log('Loaded image:', '${escapeJsString(imageSrc)}')">
+                     onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'">
             </div>
         `;
     });
@@ -345,8 +344,7 @@ async function updateScreenshotsGallery(movieId, existingScreenshotIds, updatePr
                     <img src="${imageSrc}" 
                          alt="" 
                          loading="lazy"
-                         onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'"
-                         onload="console.log('Loaded image:', '${escapeJsString(imageSrc)}')">
+                         onerror="console.error('Failed to load image:', '${escapeJsString(imageSrc)}'); this.style.display='none'">
                 </div>
             `;
             

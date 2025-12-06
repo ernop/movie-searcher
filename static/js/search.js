@@ -206,10 +206,7 @@ function setExploreLanguageFilter(languageValue, clickedBtn) {
     }
     clickedBtn.classList.add('active');
     
-    // Update URL params
-    updateRouteParams({ language: languageValue === 'all' ? null : languageValue });
-    
-    // Apply filters when language changes
+    // Apply filters when language changes (URL updated by fetchExploreMovies)
     applyExploreFilters();
 }
 
@@ -282,10 +279,7 @@ function setExploreWatchFilter(filterValue, clickedBtn) {
     // Add active class to clicked button
     clickedBtn.classList.add('active');
     
-    // Update URL params
-    updateRouteParams({ filter_type: filterValue === 'all' ? null : filterValue });
-    
-    // Apply explore filters
+    // Apply explore filters (URL updated by fetchExploreMovies)
     applyExploreFilters();
 }
 

@@ -36,23 +36,23 @@ def _migrate_from_database():
     global _migration_done
     if _migration_done:
         return
-    
+
     _migration_done = True
-    
+
     # Only migrate if settings.json doesn't exist yet
     if SETTINGS_FILE.exists():
         return
-    
+
     try:
-        from database import SessionLocal, Config
+        from database import Config, SessionLocal
         db = SessionLocal()
         try:
             config_rows = db.query(Config).all()
             if not config_rows:
                 return  # No config in database, nothing to migrate
-            
+
             logger.info(f"Migrating {len(config_rows)} config entries from database to settings.json...")
-            
+
             # Build config dict from database
             config = {}
             for row in config_rows:
@@ -61,11 +61,11 @@ def _migrate_from_database():
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.warning(f"Invalid JSON in config key '{row.key}': {e}. Skipping.")
                     continue
-            
+
             # Save to settings.json
             if config:
                 _write_config_file(config)
-                logger.info(f"Successfully migrated config to settings.json")
+                logger.info("Successfully migrated config to settings.json")
         finally:
             db.close()
     except Exception as e:
@@ -77,19 +77,19 @@ def _read_config_file():
     """Read configuration from settings.json file"""
     if not SETTINGS_FILE.exists():
         return {}
-    
+
     try:
-        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+        with open(SETTINGS_FILE, encoding='utf-8') as f:
             # Try to acquire lock (non-blocking read)
             try:
                 if os.name == 'nt':  # Windows
                     msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
                 else:  # Unix
                     fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-            except (IOError, OSError, AttributeError):
+            except (OSError, AttributeError):
                 # Lock failed, but we can still read
                 pass
-            
+
             try:
                 content = f.read()
                 if not content.strip():
@@ -101,7 +101,7 @@ def _read_config_file():
                         msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
                     else:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                except (IOError, OSError, AttributeError):
+                except (OSError, AttributeError):
                     pass
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in settings.json: {e}")
@@ -115,10 +115,10 @@ def _write_config_file(config):
     """Write configuration to settings.json file with file locking"""
     # Ensure directory exists
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Write atomically: write to temp file, then rename
     temp_file = SETTINGS_FILE.with_suffix('.json.tmp')
-    
+
     try:
         with open(temp_file, 'w', encoding='utf-8') as f:
             # Try to acquire exclusive lock
@@ -127,10 +127,10 @@ def _write_config_file(config):
                     msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
                 else:  # Unix
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            except (IOError, OSError, AttributeError):
+            except (OSError, AttributeError):
                 # Lock failed, but we can still write
                 pass
-            
+
             try:
                 json.dump(config, f, indent=2, ensure_ascii=False)
                 f.flush()
@@ -141,9 +141,9 @@ def _write_config_file(config):
                         msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
                     else:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                except (IOError, OSError, AttributeError):
+                except (OSError, AttributeError):
                     pass
-        
+
         # Atomic rename
         temp_file.replace(SETTINGS_FILE)
     except Exception as e:
@@ -161,7 +161,7 @@ def load_config():
     """Load configuration from settings.json file"""
     # Migrate from database if needed (one-time)
     _migrate_from_database()
-    
+
     return _read_config_file()
 
 
@@ -170,7 +170,7 @@ def save_config(config):
     # Merge with existing config (don't overwrite keys not in the update)
     existing_config = _read_config_file()
     existing_config.update(config)
-    
+
     _write_config_file(existing_config)
 
 

@@ -4,10 +4,10 @@ Stop the Movie Searcher server.
 Cross-platform replacement for stop.bat.
 """
 import os
-import sys
-import socket
 import signal
+import socket
 import subprocess
+import sys
 
 SERVER_PORT = 8002
 
@@ -15,7 +15,7 @@ SERVER_PORT = 8002
 def find_process_on_port(port: int) -> list[int]:
     """Find process IDs using the specified port"""
     pids = []
-    
+
     if sys.platform == "win32":
         # Windows: use netstat
         try:
@@ -75,7 +75,7 @@ def find_process_on_port(port: int) -> list[int]:
                 pass
         except Exception as e:
             print(f"Warning: Could not find processes: {e}")
-    
+
     return pids
 
 
@@ -109,10 +109,10 @@ def check_port_free(port: int) -> bool:
 def main():
     print("Stopping Movie Searcher server...")
     print()
-    
+
     # Find processes on our port
     pids = find_process_on_port(SERVER_PORT)
-    
+
     if not pids:
         if check_port_free(SERVER_PORT):
             print(f"No server running on port {SERVER_PORT}.")
@@ -120,7 +120,7 @@ def main():
             print(f"Port {SERVER_PORT} is in use but could not identify the process.")
             print("You may need to stop it manually.")
         return 0
-    
+
     # Kill each process
     killed = 0
     for pid in pids:
@@ -128,14 +128,14 @@ def main():
         if kill_process(pid):
             killed += 1
             print(f"  Process {pid} stopped.")
-    
+
     print()
     if killed > 0:
         print(f"Server stopped ({killed} process(es) terminated).")
     else:
         print("Could not stop server processes.")
         return 1
-    
+
     return 0
 
 

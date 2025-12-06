@@ -1,23 +1,34 @@
 """
 Database setup, migrations, and utilities for Movie Searcher.
 """
-from pathlib import Path
-from typing import Optional
-import os
-from sqlalchemy import create_engine, event, inspect, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.sql import func
 import logging
+import os
+from pathlib import Path
+
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.orm import Session, sessionmaker
 
 # Import all models and Base from models module
+# Re-export them so they can be imported from database module
 from models import (
+    CURRENT_SCHEMA_VERSION,
     Base,
-    Movie, Rating, MovieStatus, SearchHistory, LaunchHistory, 
-    IndexedPath, Config, Screenshot, SchemaVersion, MovieAudio,
-    Playlist, PlaylistItem, ExternalMovie, Person, MovieCredit,
-    MovieList, MovieListItem, Stat,
-    Transcript, TranscriptSegment,
-    CURRENT_SCHEMA_VERSION
+    Config,
+    ExternalMovie,
+    IndexedPath,
+    LaunchHistory,
+    Movie,
+    MovieAudio,
+    MovieCredit,
+    MovieList,
+    MovieListItem,
+    MovieStatus,
+    Person,
+    Playlist,
+    PlaylistItem,
+    Rating,
+    Screenshot,
+    SearchHistory,
 )
 
 # Setup logging
@@ -30,7 +41,7 @@ DB_FILE = SCRIPT_DIR / "movie_searcher.db"
 # Database engine and session
 # Enable foreign key support for SQLite
 engine = create_engine(
-    f"sqlite:///{DB_FILE}", 
+    f"sqlite:///{DB_FILE}",
     echo=False,
     connect_args={"check_same_thread": False, "timeout": 15}  # Required for SQLite with FastAPI
 )
@@ -49,10 +60,10 @@ def get_schema_version():
     """Get current database schema version"""
     inspector = inspect(engine)
     existing_tables = inspector.get_table_names()
-    
+
     if "schema_version" not in existing_tables:
         return None
-    
+
     with engine.connect() as conn:
         result = conn.execute(text("SELECT MAX(version) FROM schema_version"))
         row = result.fetchone()
@@ -76,13 +87,13 @@ def set_schema_version(version, description=None):
 def init_db():
     """Initialize database tables"""
     Base.metadata.create_all(bind=engine)
-    
+
     # Set initial schema version if database is new
     version = get_schema_version()
     if version is None:
         set_schema_version(CURRENT_SCHEMA_VERSION, "Initial schema version")
         logger.info(f"Database initialized with schema version {CURRENT_SCHEMA_VERSION}")
-        
+
         # Populate default playlists if this is a fresh install
         populate_default_playlists()
     else:
@@ -97,13 +108,13 @@ def populate_default_playlists():
         if not fav:
             fav = Playlist(name="Favorites", is_system=True)
             db.add(fav)
-        
+
         # Check/Create 'Want to Watch'
         wtw = db.query(Playlist).filter(Playlist.name == "Want to Watch").first()
         if not wtw:
             wtw = Playlist(name="Want to Watch", is_system=True)
             db.add(wtw)
-            
+
         db.commit()
     except Exception as e:
         logger.error(f"Error populating default playlists: {e}")
@@ -118,22 +129,22 @@ def migrate_db_schema():
     """
     inspector = inspect(engine)
     existing_tables = inspector.get_table_names()
-    
+
     if "movies" not in existing_tables:
         # No existing database, schema will be created by init_db
         return
-    
+
     current_version = get_schema_version()
-    
+
     # If already at current version, no migration needed - skip all checks
     if current_version == CURRENT_SCHEMA_VERSION:
         return
-    
+
     # If schema_version table doesn't exist or version is None, we need to check for old schema
     if current_version is None:
         # Check if this is old schema (path as PK) or new schema missing version tracking
         existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
-        
+
         if 'id' in existing_columns:
             # New schema but missing version tracking - just add year if needed and set version
             if "year" not in existing_columns:
@@ -146,7 +157,7 @@ def migrate_db_schema():
         else:
             # Old schema - needs full migration (will set version after migration)
             pass  # Continue to full migration below
-    
+
     # Ensure all tables have required created/updated columns (only during migrations)
     # This fixes cases where tables were created without these columns
     tables_requiring_timestamps = ["config", "indexed_paths", "search_history"]
@@ -171,10 +182,10 @@ def migrate_db_schema():
                     needs_fix = True
                 if needs_fix:
                     logger.info(f"Fixed {table_name} table: added missing timestamp columns")
-    
+
     # Check if this is the old schema (no id column in movies)
     existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
-    
+
     if 'id' not in existing_columns:
         # Old schema - needs full migration (will set version after migration completes)
         logger.info("Migrating from old schema (path PK) to new schema (id PK)...")
@@ -182,14 +193,14 @@ def migrate_db_schema():
     else:
         # New schema but version is outdated - handle incremental upgrades
         logger.info(f"Upgrading schema from version {current_version} to {CURRENT_SCHEMA_VERSION}...")
-        
+
         if current_version < 2:
             logger.info("Migrating to schema version 2: ensure config table has surrogate key and timestamps.")
             config_columns = {}
             if "config" in existing_tables:
                 config_columns = {col['name']: col for col in inspector.get_columns("config")}
             needs_config_migration = "config" in existing_tables and "id" not in config_columns
-            
+
             if needs_config_migration:
                 with engine.begin() as conn:
                     conn.execute(text("DROP TABLE IF EXISTS config_new"))
@@ -226,17 +237,17 @@ def migrate_db_schema():
                 Base.metadata.tables["config"].create(bind=engine, checkfirst=True)
                 with engine.begin() as conn:
                     conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_config_key ON config (key)"))
-            
+
             set_schema_version(2, "Added autoincrement id column to config table")
             current_version = 2
-        
+
         if current_version < 3:
             logger.info("Migrating to schema version 3: create screenshots and images tables, remove JSON columns from movies.")
-            
+
             with engine.begin() as conn:
                 # Drop old tables if they exist
                 conn.execute(text("DROP TABLE IF EXISTS movie_frames"))
-                
+
                 # Create screenshots table
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS screenshots (
@@ -249,7 +260,7 @@ def migrate_db_schema():
                     )
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_screenshots_movie_id ON screenshots (movie_id)"))
-                
+
                 # Create images table
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS images (
@@ -262,12 +273,12 @@ def migrate_db_schema():
                     )
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_movie_id ON images (movie_id)"))
-                
+
                 # Check if movies table has images/screenshots columns and remove them
                 movies_columns = {col['name']: col for col in inspector.get_columns("movies")}
                 has_images_column = "images" in movies_columns
                 has_screenshots_column = "screenshots" in movies_columns
-                
+
                 if has_images_column or has_screenshots_column:
                     logger.info("Removing images and screenshots columns from movies table...")
                     # SQLite doesn't support DROP COLUMN, so recreate the table
@@ -287,29 +298,29 @@ def migrate_db_schema():
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_path ON movies_new (path)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_name ON movies_new (name)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_hash ON movies_new (hash)"))
-                    
+
                     # Copy data (excluding images and screenshots columns)
                     conn.execute(text("""
                         INSERT INTO movies_new (id, path, name, year, length, size, hash, created, updated)
                         SELECT id, path, name, year, length, size, hash, created, updated
                         FROM movies
                     """))
-                    
+
                     # Drop old table and rename new one
                     conn.execute(text("DROP TABLE movies"))
                     conn.execute(text("ALTER TABLE movies_new RENAME TO movies"))
-                    
+
                     # Recreate indexes
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_path ON movies (path)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_name ON movies (name)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_hash ON movies (hash)"))
-            
+
             set_schema_version(3, "Created screenshots and images tables, removed JSON columns from movies")
             current_version = 3
-        
+
         if current_version < 4:
             logger.info("Migrating to schema version 4: add language column to movies table.")
-            
+
             existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
             if "language" not in existing_columns:
                 with engine.begin() as conn:
@@ -317,10 +328,10 @@ def migrate_db_schema():
                     conn.execute(text("ALTER TABLE movies ADD COLUMN language VARCHAR"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_language ON movies (language)"))
                     logger.info("Migration complete: added 'language' column")
-            
+
             set_schema_version(4, "Added language column to movies table")
             current_version = 4
-        
+
         if current_version < 5:
             logger.info("Migrating to schema version 5: create movie_audio table.")
             with engine.begin() as conn:
@@ -338,7 +349,7 @@ def migrate_db_schema():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_audio_audio_type ON movie_audio (audio_type)"))
             set_schema_version(5, "Created movie_audio table")
             current_version = 5
-        
+
         if current_version < 6:
             logger.info("Migrating to schema version 6: add timestamp_seconds column to screenshots table.")
             existing_columns = {col['name']: col for col in inspector.get_columns("screenshots")}
@@ -347,10 +358,10 @@ def migrate_db_schema():
                     logger.info("Adding 'timestamp_seconds' column to screenshots table...")
                     conn.execute(text("ALTER TABLE screenshots ADD COLUMN timestamp_seconds FLOAT"))
                     logger.info("Migration complete: added 'timestamp_seconds' column")
-            
+
             set_schema_version(6, "Added timestamp_seconds column to screenshots table")
             current_version = 6
-        
+
         if current_version < 7:
             logger.info("Migrating to schema version 7: Add movie_status table alongside watch_history")
             with engine.begin() as conn:
@@ -368,7 +379,7 @@ def migrate_db_schema():
                         )
                     """))
                     conn.execute(text("CREATE INDEX ix_movie_status_movie_id ON movie_status (movie_id)"))
-                    
+
                     # If watch_history exists, migrate data from it to movie_status
                     if "watch_history" in existing_tables:
                         logger.info("Migrating data from watch_history to movie_status (taking most recent status per movie)...")
@@ -416,12 +427,12 @@ def migrate_db_schema():
                                 ) latest ON wh.movie_id = latest.movie_id AND wh.updated = latest.max_updated
                                 GROUP BY wh.movie_id
                             """))
-                        
+
                         # VERIFY: Check that migration succeeded
                         migrated_count = conn.execute(text("SELECT COUNT(*) FROM movie_status")).scalar()
                         original_count = conn.execute(text("SELECT COUNT(DISTINCT movie_id) FROM watch_history")).scalar()
                         logger.info(f"Migration verification: {migrated_count} rows in movie_status, {original_count} distinct movies in watch_history")
-                        
+
                         if migrated_count != original_count:
                             logger.warning(f"Migration data mismatch: {migrated_count} != {original_count}. watch_history will be kept for reference.")
                         else:
@@ -433,7 +444,7 @@ def migrate_db_schema():
                     # movie_status already exists - this might be from a previous partial migration
                     existing_count = conn.execute(text("SELECT COUNT(*) FROM movie_status")).scalar()
                     logger.info(f"movie_status table already exists with {existing_count} rows. Skipping creation.")
-                    
+
                     # If watch_history exists but movie_status is empty, try to migrate
                     if "watch_history" in existing_tables and existing_count == 0:
                         logger.info("movie_status exists but is empty. Migrating data from watch_history...")
@@ -459,10 +470,10 @@ def migrate_db_schema():
                                 GROUP BY wh.movie_id
                             """))
                         logger.info("Data migration completed.")
-            
+
             set_schema_version(7, "Converted watch_history to movie_status (one-to-one relationship)")
             current_version = 7
-        
+
         if current_version < 8:
             logger.info("Migrating to schema version 8: Convert status boolean to movieStatus enum string")
             with engine.begin() as conn:
@@ -484,7 +495,7 @@ def migrate_db_schema():
                             )
                         """))
                         conn.execute(text("CREATE INDEX ix_movie_status_movie_id ON movie_status_new (movie_id)"))
-                        
+
                         # Migrate data: convert boolean to enum string
                         conn.execute(text("""
                             INSERT INTO movie_status_new (movie_id, movieStatus, created, updated)
@@ -499,14 +510,14 @@ def migrate_db_schema():
                                 updated
                             FROM movie_status
                         """))
-                        
+
                         # Drop old table and rename new one
                         conn.execute(text("DROP TABLE movie_status"))
                         conn.execute(text("ALTER TABLE movie_status_new RENAME TO movie_status"))
-            
+
             set_schema_version(8, "Converted status boolean to movieStatus enum string")
             current_version = 8
-        
+
         if current_version < 9:
             logger.info("Migrating to schema version 9: Add image_path column to movies table")
             existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
@@ -515,20 +526,20 @@ def migrate_db_schema():
                     logger.info("Adding 'image_path' column to movies table...")
                     conn.execute(text("ALTER TABLE movies ADD COLUMN image_path VARCHAR"))
                     logger.info("Migration complete: added 'image_path' column")
-            
+
             set_schema_version(9, "Added image_path column to movies table")
             current_version = 9
-        
+
         if current_version < 10:
             logger.info("Migrating to schema version 10: Drop images table (replaced by movie.image_path)")
             with engine.begin() as conn:
                 logger.info("Dropping 'images' table...")
                 conn.execute(text("DROP TABLE IF EXISTS images"))
                 logger.info("Migration complete: dropped 'images' table")
-            
+
             set_schema_version(10, "Dropped images table (replaced by movie.image_path)")
             current_version = 10
-        
+
         if current_version < 11:
             logger.info("Migrating to schema version 11: Add hidden column to movies table")
             existing_columns = {col['name']: col for col in inspector.get_columns("movies")}
@@ -539,13 +550,13 @@ def migrate_db_schema():
                     conn.execute(text("ALTER TABLE movies ADD COLUMN hidden BOOLEAN DEFAULT 0 NOT NULL"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movies_hidden ON movies (hidden)"))
                     logger.info("Migration complete: added 'hidden' column")
-            
+
             set_schema_version(11, "Added hidden column to movies table")
             current_version = 11
 
         if current_version < 12:
             logger.info("Migrating to schema version 12: Add playlists and offline metadata tables")
-            
+
             # Define table creation SQL
             sql_commands = [
                 # Playlists
@@ -574,7 +585,7 @@ def migrate_db_schema():
                 """,
                 "CREATE INDEX IF NOT EXISTS ix_playlist_items_playlist_id ON playlist_items (playlist_id)",
                 "CREATE INDEX IF NOT EXISTS ix_playlist_items_movie_id ON playlist_items (movie_id)",
-                
+
                 # External Movies (IMDb)
                 """
                 CREATE TABLE IF NOT EXISTS external_movies (
@@ -631,7 +642,7 @@ def migrate_db_schema():
             with engine.begin() as conn:
                 for cmd in sql_commands:
                     conn.execute(text(cmd))
-                
+
                 # Create Default Playlists
                 logger.info("Creating default playlists...")
                 conn.execute(text("""
@@ -642,13 +653,13 @@ def migrate_db_schema():
                     INSERT OR IGNORE INTO playlists (name, is_system, created, updated) 
                     VALUES ('Want to Watch', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """))
-                
+
                 # Migrate 'want_to_watch' status to playlist
                 logger.info("Migrating 'Want to Watch' status to playlist...")
-                
+
                 # Get 'Want to Watch' playlist ID
                 wtw_id = conn.execute(text("SELECT id FROM playlists WHERE name = 'Want to Watch'")).scalar()
-                
+
                 if wtw_id:
                     conn.execute(text(f"""
                         INSERT INTO playlist_items (playlist_id, movie_id, "order", added_at, created, updated)
@@ -665,10 +676,10 @@ def migrate_db_schema():
                             SELECT movie_id FROM playlist_items WHERE playlist_id = {wtw_id}
                         )
                     """))
-            
+
             set_schema_version(12, "Added playlists and offline metadata tables")
             current_version = 12
-        
+
         if current_version < 13:
             # Create movie_lists and movie_list_items tables
             logger.info("Creating movie_lists and movie_list_items tables...")
@@ -697,7 +708,7 @@ def migrate_db_schema():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_is_favorite ON movie_lists (is_favorite)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_is_deleted ON movie_lists (is_deleted)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_lists_created ON movie_lists (created)"))
-                
+
                 # Create movie_list_items table
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS movie_list_items (
@@ -718,10 +729,10 @@ def migrate_db_schema():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_list_items_movie_list_id ON movie_list_items (movie_list_id)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_list_items_movie_id ON movie_list_items (movie_id)"))
                 logger.info("Migration complete: created movie_lists and movie_list_items tables")
-            
+
             set_schema_version(13, "Added movie_lists and movie_list_items tables for AI search results")
             current_version = 13
-        
+
         if current_version < 14:
             logger.info("Migrating to schema version 14: Add stats table for performance tracking")
             with engine.begin() as conn:
@@ -740,10 +751,10 @@ def migrate_db_schema():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_stats_movie_id ON stats (movie_id)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_stats_created ON stats (created)"))
                 logger.info("Migration complete: created stats table")
-            
+
             set_schema_version(14, "Added stats table for performance tracking")
             current_version = 14
-        
+
         if current_version < 15:
             logger.info("Migrating to schema version 15: Add stopped_at_seconds column to launch_history")
             existing_columns = {col['name']: col for col in inspector.get_columns("launch_history")}
@@ -752,10 +763,10 @@ def migrate_db_schema():
                     logger.info("Adding 'stopped_at_seconds' column to launch_history table...")
                     conn.execute(text("ALTER TABLE launch_history ADD COLUMN stopped_at_seconds FLOAT"))
                     logger.info("Migration complete: added 'stopped_at_seconds' column")
-            
+
             set_schema_version(15, "Added stopped_at_seconds column to launch_history for resume playback")
             current_version = 15
-        
+
         if current_version < 16:
             logger.info("Migrating to schema version 16: Add transcripts and transcript_segments tables")
             with engine.begin() as conn:
@@ -786,7 +797,7 @@ def migrate_db_schema():
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcripts_movie_id ON transcripts (movie_id)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcripts_status ON transcripts (status)"))
-                
+
                 # Create transcript_segments table
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS transcript_segments (
@@ -808,26 +819,26 @@ def migrate_db_schema():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcript_segments_transcript_id ON transcript_segments (transcript_id)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcript_segments_start_time ON transcript_segments (start_time)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcript_segments_speaker_id ON transcript_segments (speaker_id)"))
-                
+
                 logger.info("Migration complete: created transcripts and transcript_segments tables")
-            
+
             set_schema_version(16, "Added transcripts and transcript_segments tables for Whisper transcription")
             current_version = 16
-        
+
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "
                         f"Database is at version {current_version} but code expects {CURRENT_SCHEMA_VERSION}.")
             raise RuntimeError(f"Migration from version {current_version} to {CURRENT_SCHEMA_VERSION} not implemented")
         return
-    
+
     # Need full migration from old schema to new schema
     logger.info("Starting database schema migration...")
 
     config_columns = {}
     if "config" in existing_tables:
         config_columns = {col['name']: col for col in inspector.get_columns("config")}
-    
+
     frames_columns = {}
     needs_movie_frames_migration = False
     if "movie_frames" in existing_tables:
@@ -840,15 +851,15 @@ def migrate_db_schema():
         else:
             # Old schema might have had different column name
             needs_movie_frames_migration = True
-    
+
     with engine.begin() as conn:
         # Step 0: Clean up any partial migration tables from previous failed attempts
         logger.info("Cleaning up any partial migration tables...")
         # Drop tables first (this automatically drops their indexes in SQLite)
         # But we also try to drop indexes explicitly in case they exist independently
         tables_to_drop = [
-            "movies_new", "ratings_new", "movie_status_new", 
-            "search_history_new", "launch_history_new", 
+            "movies_new", "ratings_new", "movie_status_new",
+            "search_history_new", "launch_history_new",
             "indexed_paths_new", "config_new", "screenshots_new", "images_new"
         ]
         indexes_to_drop = [
@@ -857,14 +868,14 @@ def migrate_db_schema():
             "ix_search_history_query", "ix_launch_history_movie_id",
             "ix_indexed_paths_path", "ix_config_key", "ix_screenshots_movie_id", "ix_images_movie_id"
         ]
-        
+
         # Drop tables first (this automatically drops their indexes in SQLite)
         for table_name in tables_to_drop:
             try:
                 conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
             except Exception as e:
                 logger.debug(f"Error dropping table {table_name}: {e}")
-        
+
         # Try to drop any orphaned indexes (in case they exist independently)
         # Note: In SQLite, indexes are usually auto-dropped with tables, but we check anyway
         for index_name in indexes_to_drop:
@@ -873,15 +884,15 @@ def migrate_db_schema():
                 conn.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
             except Exception:
                 pass  # Index may not exist
-        
+
         # Step 1: Add year column if it doesn't exist
         if "year" not in existing_columns:
             logger.info("Adding 'year' column to movies table...")
             conn.execute(text("ALTER TABLE movies ADD COLUMN year INTEGER"))
-        
+
         # Step 2: Create new tables with correct schema
         logger.info("Creating new tables with updated schema...")
-        
+
         # Create new movies table (without images/screenshots columns)
         conn.execute(text("""
             CREATE TABLE movies_new (
@@ -903,7 +914,7 @@ def migrate_db_schema():
         conn.execute(text("CREATE INDEX ix_movies_name ON movies_new (name)"))
         conn.execute(text("CREATE INDEX ix_movies_hash ON movies_new (hash)"))
         conn.execute(text("CREATE INDEX ix_movies_hidden ON movies_new (hidden)"))
-        
+
         # Migrate movies data
         logger.info("Migrating movies data...")
         # Handle created field - convert from string ISO format to datetime
@@ -911,25 +922,25 @@ def migrate_db_schema():
         old_movies_columns = {col['name']: col for col in inspector.get_columns("movies")}
         has_old_images = "images" in old_movies_columns
         has_old_screenshots = "screenshots" in old_movies_columns
-        
+
         # Check for other columns that might exist in source but not in target schema definition above if we were strictly following v3
         # But here we are creating v11 schema, so we should try to copy if they exist, or default
-        
+
         # Construct the SELECT part dynamically based on what exists
         select_cols = ["path", "name", "year", "length", "size", "hash"]
-        
+
         # language
         if "language" in old_movies_columns:
             select_cols.append("language")
         else:
             select_cols.append("NULL as language")
-            
+
         # image_path
         if "image_path" in old_movies_columns:
             select_cols.append("image_path")
         else:
             select_cols.append("NULL as image_path")
-            
+
         # hidden
         if "hidden" in old_movies_columns:
             select_cols.append("hidden")
@@ -949,7 +960,7 @@ def migrate_db_schema():
                 CURRENT_TIMESTAMP
             FROM movies
         """))
-        
+
         # Create new ratings table
         conn.execute(text("""
             CREATE TABLE ratings_new (
@@ -962,7 +973,7 @@ def migrate_db_schema():
             )
         """))
         conn.execute(text("CREATE INDEX ix_ratings_movie_id ON ratings_new (movie_id)"))
-        
+
         # Migrate ratings data (need to map path to id)
         logger.info("Migrating ratings data...")
         conn.execute(text("""
@@ -975,7 +986,7 @@ def migrate_db_schema():
             FROM ratings r
             JOIN movies_new m ON m.path = r.movie_id
         """))
-        
+
         # Create new movie_status table (one-to-one, taking most recent status per movie)
         conn.execute(text("""
             CREATE TABLE movie_status_new (
@@ -988,7 +999,7 @@ def migrate_db_schema():
             )
         """))
         conn.execute(text("CREATE INDEX ix_movie_status_movie_id ON movie_status_new (movie_id)"))
-        
+
         # Migrate watch_history data - take most recent status per movie
         logger.info("Migrating watch_history data to movie_status (taking most recent status per movie)...")
         # Convert old string status to enum string and take most recent per movie
@@ -1012,7 +1023,7 @@ def migrate_db_schema():
             ) latest ON wh.movie_id = latest.movie_id AND COALESCE(wh.timestamp, '1970-01-01') = latest.max_timestamp
             GROUP BY m.id
         """))
-        
+
         # Create new search_history table
         conn.execute(text("""
             CREATE TABLE search_history_new (
@@ -1024,7 +1035,7 @@ def migrate_db_schema():
             )
         """))
         conn.execute(text("CREATE INDEX ix_search_history_query ON search_history_new (query)"))
-        
+
         # Migrate search_history data
         logger.info("Migrating search_history data...")
         conn.execute(text("""
@@ -1036,7 +1047,7 @@ def migrate_db_schema():
                 COALESCE(timestamp, CURRENT_TIMESTAMP)
             FROM search_history
         """))
-        
+
         # Create new launch_history table
         conn.execute(text("""
             CREATE TABLE launch_history_new (
@@ -1049,7 +1060,7 @@ def migrate_db_schema():
             )
         """))
         conn.execute(text("CREATE INDEX ix_launch_history_movie_id ON launch_history_new (movie_id)"))
-        
+
         # Migrate launch_history data
         logger.info("Migrating launch_history data...")
         conn.execute(text("""
@@ -1062,7 +1073,7 @@ def migrate_db_schema():
             FROM launch_history lh
             JOIN movies_new m ON m.path = lh.path
         """))
-        
+
         # Create new indexed_paths table
         conn.execute(text("""
             CREATE TABLE indexed_paths_new (
@@ -1073,7 +1084,7 @@ def migrate_db_schema():
             )
         """))
         conn.execute(text("CREATE INDEX ix_indexed_paths_path ON indexed_paths_new (path)"))
-        
+
         # Migrate indexed_paths data
         logger.info("Migrating indexed_paths data...")
         conn.execute(text("""
@@ -1084,7 +1095,7 @@ def migrate_db_schema():
                 COALESCE(indexed_at, CURRENT_TIMESTAMP)
             FROM indexed_paths
         """))
-        
+
         # Create new config table
         if "config" in existing_tables and 'id' not in config_columns:
             conn.execute(text("""
@@ -1097,7 +1108,7 @@ def migrate_db_schema():
                 )
             """))
             conn.execute(text("CREATE INDEX ix_config_key ON config_new (key)"))
-            
+
             logger.info("Migrating config data...")
             conn.execute(text("""
                 INSERT INTO config_new (key, value, created, updated)
@@ -1108,7 +1119,7 @@ def migrate_db_schema():
                     CURRENT_TIMESTAMP
                 FROM config
             """))
-        
+
         # Create screenshots and images tables
         # Create screenshots table
         conn.execute(text("""
@@ -1122,7 +1133,7 @@ def migrate_db_schema():
             )
         """))
         conn.execute(text("CREATE INDEX ix_screenshots_movie_id ON screenshots_new (movie_id)"))
-        
+
         # Create images table
         conn.execute(text("""
             CREATE TABLE images_new (
@@ -1146,7 +1157,7 @@ def migrate_db_schema():
                 updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
             )
         """))
-        
+
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS playlist_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -1162,11 +1173,11 @@ def migrate_db_schema():
         """))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_playlist_items_playlist_id ON playlist_items (playlist_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_playlist_items_movie_id ON playlist_items (movie_id)"))
-        
+
         # Initialize default playlists
         conn.execute(text("INSERT OR IGNORE INTO playlists (name, is_system, created, updated) VALUES ('Favorites', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
         conn.execute(text("INSERT OR IGNORE INTO playlists (name, is_system, created, updated) VALUES ('Want to Watch', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
-        
+
         # Create External Metadata tables
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS external_movies (
@@ -1216,7 +1227,7 @@ def migrate_db_schema():
         """))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_credits_movie_id ON movie_credits (movie_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_movie_credits_person_id ON movie_credits (person_id)"))
-        
+
         # Step 3: Drop old tables
         logger.info("Dropping old tables...")
         conn.execute(text("DROP TABLE IF EXISTS ratings"))
@@ -1231,7 +1242,7 @@ def migrate_db_schema():
         if "movie_frames" in existing_tables:
             conn.execute(text("DROP TABLE IF EXISTS movie_frames"))
         conn.execute(text("DROP TABLE IF EXISTS movies"))
-        
+
         # Step 4: Rename new tables
         logger.info("Renaming new tables...")
         conn.execute(text("ALTER TABLE movies_new RENAME TO movies"))
@@ -1244,11 +1255,11 @@ def migrate_db_schema():
             conn.execute(text("ALTER TABLE config_new RENAME TO config"))
         conn.execute(text("ALTER TABLE screenshots_new RENAME TO screenshots"))
         conn.execute(text("ALTER TABLE images_new RENAME TO images"))
-    
+
     # Record migration completion
     set_schema_version(CURRENT_SCHEMA_VERSION, "Migrated from old schema (path PK) to new schema (id PK)")
     logger.info("Database schema migration completed successfully!")
-    
+
     # Handle version upgrades (future schema changes)
     # Add version-specific migrations here when CURRENT_SCHEMA_VERSION increases
     # Example:
@@ -1269,28 +1280,28 @@ def remove_sample_files():
         sample_movies = db.query(Movie).filter(
             func.lower(Movie.name).like('%sample%')
         ).all()
-        
+
         if not sample_movies:
             logger.info("No sample files found in database")
             return 0
-        
+
         count = len(sample_movies)
         logger.info(f"Found {count} sample file(s) to remove")
-        
+
         # Remove related records for each sample movie
         for movie in sample_movies:
             # Delete Screenshot records
             db.query(Screenshot).filter(Screenshot.movie_id == movie.id).delete()
-            
+
             # Delete Rating records
             db.query(Rating).filter(Rating.movie_id == movie.id).delete()
-            
+
             # Delete MovieStatus record
             db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).delete()
-            
+
             # Delete LaunchHistory records
             db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).delete()
-            
+
             # Unlink from movie lists (mark as not-in-library before deletion)
             affected_list_items = db.query(MovieListItem).filter(
                 MovieListItem.movie_id == movie.id
@@ -1308,12 +1319,12 @@ def remove_sample_files():
                         MovieListItem.is_in_library == True
                     ).count()
                     movie_list.in_library_count = in_lib_count
-            
+
             # Delete the movie itself
             db.delete(movie)
-            
+
             logger.info(f"Removed sample file: {movie.name}")
-        
+
         db.commit()
         logger.info(f"Successfully removed {count} sample file(s) from database")
         return count
@@ -1333,7 +1344,7 @@ def get_db():
         db.close()
 
 # Database utility functions
-def get_movie_id_by_path(db: Session, path: str) -> Optional[int]:
+def get_movie_id_by_path(db: Session, path: str) -> int | None:
     """Get movie ID from path. Returns None if movie doesn't exist."""
     movie = db.query(Movie).filter(Movie.path == path).first()
     return movie.id if movie else None

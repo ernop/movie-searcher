@@ -1,11 +1,66 @@
 // Movie Navigation
 
+// Load and render playlists that contain a movie
+async function loadMoviePlaylists(movieId) {
+    try {
+        const response = await fetch(`/api/movies/${movieId}/playlists`);
+        if (!response.ok) return '';
+
+        const data = await response.json();
+        const playlists = data.playlists || [];
+
+        if (playlists.length === 0) return '';
+
+        const playlistLinks = playlists.map(p => {
+            const slug = createPlaylistSlug(p.name);
+            const icon = p.is_system ? (p.name === 'Favorites' ? '★' : '♡') : '📋';
+            return `<a href="#/playlist/${p.id}/${slug}" class="movie-playlist-pill">${icon} ${escapeHtml(p.name)}</a>`;
+        }).join('');
+
+        return `
+            <div class="movie-playlists-section">
+                <span class="movie-playlists-label">In playlists:</span>
+                ${playlistLinks}
+            </div>
+        `;
+    } catch (error) {
+        console.error('Error loading movie playlists:', error);
+        return '';
+    }
+}
+
+// Load and render AI-generated movie lists that contain a movie
+async function loadMovieLists(movieId) {
+    try {
+        const response = await fetch(`/api/movies/${movieId}/lists`);
+        if (!response.ok) return '';
+
+        const data = await response.json();
+        const lists = data.lists || [];
+
+        if (lists.length === 0) return '';
+
+        // Use makeMovieListCard from movie-lists.js with focusMovieId for context
+        const listCards = lists.map(lst => makeMovieListCard(lst, movieId)).join('');
+
+        return `
+            <div class="movie-lists-section">
+                <span class="movie-lists-label">In Movie Lists (${lists.length})</span>
+                <div class="movie-lists-cards">${listCards}</div>
+            </div>
+        `;
+    } catch (error) {
+        console.error('Error loading movie lists:', error);
+        return '';
+    }
+}
+
 // Parse resolution from filename (e.g., 1080p, 720p, 4K, 2160p)
 function parseResolution(path) {
     if (!path) return null;
     const filename = path.split(/[/\\]/).pop() || '';
     const lower = filename.toLowerCase();
-    
+
     // Check for common resolution patterns
     if (/2160p|4k|uhd/i.test(lower)) return '4K';
     if (/1080p|1080i|fullhd|full.?hd/i.test(lower)) return '1080p';
@@ -13,7 +68,7 @@ function parseResolution(path) {
     if (/480p|sd/i.test(lower)) return '480p';
     if (/576p|pal/i.test(lower)) return '576p';
     if (/360p/i.test(lower)) return '360p';
-    
+
     return null;
 }
 
@@ -40,15 +95,15 @@ async function goToRandomMovie() {
             showStatus('Failed to load random movie: ' + errorMessage, 'error');
             return;
         }
-        
+
         const data = await response.json();
         const movieId = data.id;
-        
+
         if (!movieId) {
             showStatus('Invalid response from server', 'error');
             return;
         }
-        
+
         navigateTo(`/movie/${movieId}`);
     } catch (error) {
         showStatus('Error fetching random movie: ' + error.message, 'error');
@@ -62,9 +117,9 @@ async function showRandomMovies() {
             showStatus('Results container not found', 'error');
             return;
         }
-        
+
         results.innerHTML = '<div class="loading">Loading random movies...</div>';
-        
+
         const response = await fetch('/api/random-movies?count=10');
         if (!response.ok) {
             let errorMessage = 'Unknown error';
@@ -78,15 +133,15 @@ async function showRandomMovies() {
             showStatus('Failed to load random movies: ' + errorMessage, 'error');
             return;
         }
-        
+
         const data = await response.json();
         const movies = data.results || [];
-        
+
         if (movies.length === 0) {
             results.innerHTML = '<div class="empty-state">No movies found</div>';
             return;
         }
-        
+
         displayResults(movies);
         showStatus(`Showing ${movies.length} random movies`, 'success');
     } catch (error) {
@@ -112,7 +167,7 @@ async function toggleWatched(movieId, currentStatus) {
     try {
         const response = await fetch('/api/change-status', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 movie_id: movieId,
                 movieStatus: nextStatus
@@ -122,13 +177,13 @@ async function toggleWatched(movieId, currentStatus) {
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
-        
+
         // Success - UI already updated. 
         // Optionally add a subtle success indicator if needed, but usually the state change is enough.
     } catch (error) {
         console.error('Error updating watched status:', error);
         showStatus('Failed to update watch status', 'error');
-        
+
         // Revert UI on error
         updateMovieStatusUI(movieId, currentStatus === 'null' ? null : currentStatus);
     }
@@ -266,7 +321,7 @@ async function launchMovie(movieId) {
 
         const response = await fetch('/api/launch', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 movie_id: movieId,
                 subtitle_path: selectedSubtitle,
@@ -275,14 +330,14 @@ async function launchMovie(movieId) {
         });
 
         const data = await response.json();
-        
+
         // Check for failed status even on 200 response (VLC can start but exit immediately)
         if (response.ok && data.status === 'launched') {
             showStatus('Movie launched', 'success');
             updateCurrentlyPlaying();
         } else {
             let errorMessage = 'Unknown error';
-            
+
             if (data.detail) {
                 errorMessage = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
             } else if (data.error) {
@@ -290,13 +345,13 @@ async function launchMovie(movieId) {
             } else if (data.message) {
                 errorMessage = data.message;
             }
-            
+
             // Include VLC stderr if available (helps diagnose VLC-specific failures)
             if (data.vlc_stderr) {
                 errorMessage += '\n\nVLC error: ' + data.vlc_stderr.substring(0, 200);
                 console.error('VLC stderr:', data.vlc_stderr);
             }
-            
+
             // Log full response for debugging
             console.error('Launch failed with response:', response.status, data);
             showStatus('Failed to launch: ' + errorMessage, 'error');
@@ -401,7 +456,7 @@ async function loadMovieDetailsById(id) {
                 </select>
             `;
         }
-        
+
         // Build subtitle indicator - show actual filenames
         let subtitleIndicator = '';
         if (subtitles.length > 0) {
@@ -424,7 +479,7 @@ async function loadMovieDetailsById(id) {
                     ${hiddenBadge}
                 </a>`;
             }).join('');
-            
+
             const countLabel = sameTitleMovies.length === 1 ? '1 other version' : `${sameTitleMovies.length} other versions`;
             sameTitleIndicator = `
                 <div class="same-title-indicator">
@@ -460,6 +515,7 @@ async function loadMovieDetailsById(id) {
                         ${showSizes && movie.size ? `<span class="movie-size">${formatSize(movie.size)}</span>` : ''}
                         ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}
                     </div>
+                    <div id="movie-playlists-${movie.id}" class="movie-playlists-container"></div>
                     ${createStarRating(movie.id || 0, movie.rating || null, 'movie-details-rating')}
                     <div class="movie-details-actions">
                         <button class="watched-btn ${watchStatus === 'watched' ? 'watched' : watchStatus === 'unwatched' ? 'unwatched' : watchStatus === 'want_to_watch' ? 'want-to-watch' : ''}" onclick="toggleWatched(${movie.id}, ${watchStatus === null ? 'null' : `'${watchStatus}'`})">
@@ -490,12 +546,29 @@ async function loadMovieDetailsById(id) {
                     </div>
                 </div>
             </div>
+            <div id="movie-lists-${movie.id}" class="movie-lists-container"></div>
             ${mediaGallery}
             ${transcriptionPlaceholder}
             </div>
         `;
         initAllStarRatings();
-        
+
+        // Load playlists section asynchronously
+        loadMoviePlaylists(movie.id).then(html => {
+            const playlistsContainer = document.getElementById(`movie-playlists-${movie.id}`);
+            if (playlistsContainer && html) {
+                playlistsContainer.innerHTML = html;
+            }
+        });
+
+        // Load AI-generated movie lists section asynchronously
+        loadMovieLists(movie.id).then(html => {
+            const listsContainer = document.getElementById(`movie-lists-${movie.id}`);
+            if (listsContainer && html) {
+                listsContainer.innerHTML = html;
+            }
+        });
+
         // Load transcription section asynchronously
         if (typeof renderTranscriptionSection === 'function') {
             renderTranscriptionSection(movie.id).then(html => {
@@ -518,7 +591,7 @@ async function loadMovieDetailsById(id) {
 }
 
 // Close same-title dropdown when clicking outside
-document.addEventListener('click', function(event) {
+document.addEventListener('click', function (event) {
     const indicator = document.querySelector('.same-title-indicator.expanded');
     if (indicator && !indicator.contains(event.target)) {
         indicator.classList.remove('expanded');

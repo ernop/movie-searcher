@@ -1,5 +1,8 @@
 // History functions
 
+let currentHistoryPage = 1;
+const HISTORY_PER_PAGE = 20;
+
 function formatPlaybackTime(seconds) {
     if (!seconds || seconds <= 0) return null;
     
@@ -41,14 +44,22 @@ async function resumePlayback(movieId, startTime, movieName) {
     }
 }
 
-async function loadHistory() {
+async function loadHistory(page = null) {
     const historyList = document.getElementById('historyList');
+    const historyPagination = document.getElementById('historyPagination');
     if (!historyList) return;
+    
+    // Read page from URL if not provided
+    if (page === null) {
+        const urlParams = getRouteParams();
+        page = urlParams.page ? parseInt(urlParams.page) : 1;
+    }
+    currentHistoryPage = page;
     
     historyList.innerHTML = '<div class="loading">Loading history...</div>';
     
     try {
-        const response = await fetch('/api/launch-history');
+        const response = await fetch(`/api/launch-history?page=${page}&per_page=${HISTORY_PER_PAGE}`);
         const data = await response.json();
         
         if (!response.ok) {
@@ -57,9 +68,14 @@ async function loadHistory() {
         }
         
         const launches = data.launches || [];
+        const pagination = data.pagination || { page: 1, pages: 1, total: 0 };
+        
+        // Update URL with page param
+        updateHistoryUrl(page);
         
         if (launches.length === 0) {
             historyList.innerHTML = '<div class="empty-state">No launch history yet</div>';
+            if (historyPagination) historyPagination.innerHTML = '';
             return;
         }
         
@@ -119,6 +135,11 @@ async function loadHistory() {
         
         historyList.innerHTML = html;
         initAllStarRatings();
+        
+        // Render pagination
+        if (historyPagination) {
+            renderHistoryPagination(pagination, historyPagination);
+        }
 
         // Restore scroll position if available
         if (typeof restoreScrollPosition === 'function') {
@@ -128,6 +149,73 @@ async function loadHistory() {
         historyList.innerHTML = '<div class="empty-state">Error loading history: ' + error.message + '</div>';
         console.error('History error:', error);
     }
+}
+
+// Update URL to reflect current history page
+function updateHistoryUrl(page) {
+    const urlParams = { page: page > 1 ? page : null };
+    updateRouteParams(urlParams);
+}
+
+// Go to specific history page
+function goToHistoryPage(page) {
+    loadHistory(page);
+    // Scroll to top of history list
+    const historyList = document.getElementById('historyList');
+    if (historyList) {
+        historyList.scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+// Render history pagination
+function renderHistoryPagination(pagination, container) {
+    if (!pagination || pagination.pages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+    
+    let html = '';
+    const maxPages = 10;
+    
+    // Previous button
+    const prevPage = pagination.page - 1;
+    html += `<button class="pagination-btn" ${pagination.page === 1 ? 'disabled' : ''} onclick="goToHistoryPage(${prevPage})">Previous</button>`;
+    
+    // Page numbers
+    let startPage = Math.max(1, pagination.page - Math.floor(maxPages / 2));
+    let endPage = Math.min(pagination.pages, startPage + maxPages - 1);
+    
+    if (endPage - startPage < maxPages - 1) {
+        startPage = Math.max(1, endPage - maxPages + 1);
+    }
+    
+    if (startPage > 1) {
+        html += `<button class="pagination-btn" onclick="goToHistoryPage(1)">1</button>`;
+        if (startPage > 2) {
+            html += `<span class="pagination-info">...</span>`;
+        }
+    }
+    
+    for (let i = startPage; i <= endPage; i++) {
+        const isActive = i === pagination.page;
+        html += `<button class="pagination-btn ${isActive ? 'active' : ''}" onclick="goToHistoryPage(${i})">${i}</button>`;
+    }
+    
+    if (endPage < pagination.pages) {
+        if (endPage < pagination.pages - 1) {
+            html += `<span class="pagination-info">...</span>`;
+        }
+        html += `<button class="pagination-btn" onclick="goToHistoryPage(${pagination.pages})">${pagination.pages}</button>`;
+    }
+    
+    // Next button
+    const nextPage = pagination.page + 1;
+    html += `<button class="pagination-btn" ${pagination.page === pagination.pages ? 'disabled' : ''} onclick="goToHistoryPage(${nextPage})">Next</button>`;
+    
+    // Page info
+    html += `<span class="pagination-info">Page ${pagination.page} of ${pagination.pages} (${pagination.total} total)</span>`;
+    
+    container.innerHTML = html;
 }
 
 async function recleanAllNames() {

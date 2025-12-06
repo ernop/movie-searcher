@@ -18,6 +18,7 @@ sys.path.insert(0, str(parent_dir))
 from config import load_config, save_config
 from database import init_db
 
+
 def setup_vlc():
     """Detect VLC and save to config"""
     # Initialize database if needed
@@ -26,13 +27,13 @@ def setup_vlc():
     except Exception:
         # Database might already be initialized, that's fine
         pass
-    
+
     try:
         config = load_config()
     except Exception as e:
         print(f"WARNING: Error loading config: {e}")
         return
-    
+
     # If already configured and valid, skip
     if config.get("vlc_path"):
         vlc_path = config["vlc_path"]
@@ -42,7 +43,7 @@ def setup_vlc():
         else:
             print(f"WARNING: Configured VLC path no longer exists: {vlc_path}")
             print("Searching for VLC...")
-    
+
     # Try to find VLC in PATH
     vlc_exe = shutil.which("vlc")
     if vlc_exe:
@@ -54,14 +55,14 @@ def setup_vlc():
         except Exception as e:
             print(f"WARNING: Failed to save VLC config: {e}")
             return
-    
+
     # Try common installation locations (Windows)
     common_paths = [
         Path(r"C:\Program Files\VideoLAN\VLC\vlc.exe"),
         Path(r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe"),
         Path(os.path.expanduser(r"~\AppData\Local\Programs\VideoLAN\vlc.exe")),
     ]
-    
+
     # Also check winget installation locations
     localappdata = os.environ.get("LOCALAPPDATA", "")
     if localappdata:
@@ -78,7 +79,7 @@ def setup_vlc():
                         vlc_exe_path = subdir / "vlc.exe"
                         if vlc_exe_path.exists():
                             common_paths.append(vlc_exe_path)
-    
+
     # Also check Program Files for any VLC installation
     program_files = [
         Path(r"C:\Program Files"),
@@ -96,7 +97,7 @@ def setup_vlc():
                 vlc_exe = vlc_dir / "vlc.exe"
                 if vlc_exe.exists():
                     common_paths.append(vlc_exe)
-    
+
     # Check Windows Registry (Windows only)
     if os.name == 'nt':
         try:
@@ -106,7 +107,7 @@ def setup_vlc():
                 (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\VideoLAN\VLC"),
                 (winreg.HKEY_CURRENT_USER, r"SOFTWARE\VideoLAN\VLC"),
             ]
-            
+
             for hkey, key_path in registry_keys:
                 try:
                     with winreg.OpenKey(hkey, key_path) as key:
@@ -116,9 +117,9 @@ def setup_vlc():
                             common_paths.append(vlc_path)
                 except (FileNotFoundError, OSError):
                     continue
-        except Exception as e:
+        except Exception:
             pass  # Registry check failed, continue with other methods
-    
+
     for vlc_path in common_paths:
         if vlc_path.exists():
             # VLC found - save it (we don't test --version as it can pop up dialogs on Windows)
@@ -130,7 +131,7 @@ def setup_vlc():
             except Exception as e:
                 print(f"WARNING: Failed to save VLC config: {e}")
                 return
-    
+
     print("WARNING: VLC not found. Install from https://www.videolan.org/")
     print("Checked locations:")
     for path in common_paths[:3]:  # Show first 3 common paths

@@ -81,10 +81,18 @@ function renderPlaylistsOverview(playlists) {
     return html;
 }
 
+// Create a URL-safe slug from playlist name
+function createPlaylistSlug(name) {
+    return (name || '').toString().toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'playlist';
+}
+
 // Render individual playlist card
 function renderPlaylistCard(playlist) {
+    const slug = createPlaylistSlug(playlist.name);
     return `
-        <div class="playlist-card" onclick="viewPlaylist(${playlist.id})">
+        <div class="playlist-card" onclick="navigateTo('/playlist/${playlist.id}/${slug}')">
             <div class="playlist-card-header">
                 <h4>${escapeHtml(playlist.name)}</h4>
                 ${playlist.is_system ? '<span class="system-badge">System</span>' : ''}
@@ -102,7 +110,7 @@ function renderPlaylistCard(playlist) {
 }
 
 // View specific playlist
-async function viewPlaylist(playlistId, sort = 'date_added', page = 1) {
+async function viewPlaylist(playlistId, sort = 'date_added', page = 1, skipUrlUpdate = false) {
     currentPlaylistId = playlistId;
     currentPlaylistSort = sort;
     currentPlaylistPage = page;
@@ -118,6 +126,23 @@ async function viewPlaylist(playlistId, sort = 'date_added', page = 1) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const data = await response.json();
+        
+        // Update URL with playlist id, slug, and params
+        if (!skipUrlUpdate) {
+            const slug = createPlaylistSlug(data.playlist.name);
+            const urlParams = {};
+            if (sort && sort !== 'date_added') urlParams.sort = sort;
+            if (page && page > 1) urlParams.page = page;
+            
+            const paramsStr = Object.keys(urlParams).length > 0 
+                ? '?' + new URLSearchParams(urlParams).toString()
+                : '';
+            const newHash = `/playlist/${playlistId}/${slug}${paramsStr}`;
+            if (window.location.hash !== '#' + newHash) {
+                window.history.replaceState(null, '', '#' + newHash);
+            }
+        }
+        
         renderPlaylistView(data);
         
         // Restore scroll position if available
@@ -172,7 +197,7 @@ function renderPlaylistView(data) {
 // Back to playlists overview
 function backToPlaylistsOverview() {
     currentPlaylistId = null;
-    loadPlaylistsOverview();
+    navigateTo('/playlists');
 }
 
 // Change playlist sort
@@ -529,11 +554,14 @@ async function loadPlaylistsDropdown() {
         if (playlists.length === 0) {
             linksContainer.innerHTML = '<div style="padding: 10px; color: #888; font-style: italic;">No playlists yet</div>';
         } else {
-            linksContainer.innerHTML = playlists.map(playlist => `
-                <a href="#/playlist/${playlist.id}" class="playlists-dropdown-item" onclick="closePlaylistsDropdown()">
+            linksContainer.innerHTML = playlists.map(playlist => {
+                const slug = createPlaylistSlug(playlist.name);
+                return `
+                <a href="#/playlist/${playlist.id}/${slug}" class="playlists-dropdown-item" onclick="closePlaylistsDropdown()">
                     ${playlist.is_system ? '⭐' : '📁'} ${escapeHtml(playlist.name)} (${playlist.movie_count})
                 </a>
-            `).join('');
+            `;
+            }).join('');
         }
 
         playlistsDropdownLoaded = true;
@@ -557,8 +585,14 @@ function handlePlaylistRoute(playlistId) {
         pagePlaylists.classList.add('active');
     }
 
+    // Read sort and page from URL params
+    const urlParams = getRouteParams();
+    const sort = urlParams.sort || 'date_added';
+    const page = urlParams.page ? parseInt(urlParams.page) : 1;
+
     // Load the playlist directly without going through the overview
-    viewPlaylist(playlistId, 'date_added', 1);
+    // skipUrlUpdate=true since we're loading from URL
+    viewPlaylist(playlistId, sort, page, true);
 }
 
 // Initialize playlists functionality when loaded

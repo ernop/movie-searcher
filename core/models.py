@@ -1,16 +1,17 @@
 """
 Pydantic models for request/response validation in Movie Searcher API.
 """
+from typing import Literal
+
 from pydantic import BaseModel
-from typing import Optional, Literal
 
 
 class MovieInfo(BaseModel):
     path: str
     name: str
-    length: Optional[float] = None
-    created: Optional[str] = None
-    size: Optional[int] = None
+    length: float | None = None
+    created: str | None = None
+    size: int | None = None
 
 
 class SearchRequest(BaseModel):
@@ -19,14 +20,14 @@ class SearchRequest(BaseModel):
 
 class LaunchRequest(BaseModel):
     movie_id: int
-    subtitle_path: Optional[str] = None
+    subtitle_path: str | None = None
     close_existing_vlc: bool = True
-    start_time: Optional[float] = None  # Start time in seconds
+    start_time: float | None = None  # Start time in seconds
 
 
 class ChangeStatusRequest(BaseModel):
     movie_id: int
-    movieStatus: Optional[str] = None  # None = unset, "watched", "unwatched", "want_to_watch"
+    movieStatus: str | None = None  # None = unset, "watched", "unwatched", "want_to_watch"
 
 
 class RatingRequest(BaseModel):
@@ -35,9 +36,9 @@ class RatingRequest(BaseModel):
 
 
 class ConfigRequest(BaseModel):
-    movies_folder: Optional[str] = None
-    local_target_folder: Optional[str] = None
-    settings: Optional[dict] = None
+    movies_folder: str | None = None
+    local_target_folder: str | None = None
+    settings: dict | None = None
 
 
 class FolderRequest(BaseModel):
@@ -51,7 +52,7 @@ class CleanNameTestRequest(BaseModel):
 class ScreenshotsIntervalRequest(BaseModel):
     movie_id: int
     every_minutes: float = 3
-    subtitle_path: Optional[str] = None  # Path to subtitle file to burn in (if any)
+    subtitle_path: str | None = None  # Path to subtitle file to burn in (if any)
 
 
 class AiSearchRequest(BaseModel):
@@ -68,8 +69,8 @@ class PlaylistAddMovieRequest(BaseModel):
 
 
 class MovieListUpdateRequest(BaseModel):
-    title: Optional[str] = None
-    is_favorite: Optional[bool] = None
+    title: str | None = None
+    is_favorite: bool | None = None
 
 
 class OpenUrlsRequest(BaseModel):

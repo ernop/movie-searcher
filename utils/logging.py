@@ -4,8 +4,8 @@ Logging configuration for Movie Searcher.
 IMPORTANT: Do NOT use emojis or Unicode symbols (checkmarks, X marks, etc.) in log messages.
 Keep log messages plain text only for compatibility and readability.
 """
-import sys
 import logging
+import sys
 from pathlib import Path
 
 # Log file in root directory

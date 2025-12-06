@@ -16,6 +16,8 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter, not linter)
+    "E402",   # module level import not at top of file (sometimes needed for setup/logging)
+    "W293",   # blank line contains whitespace (cosmetic, formatter can fix)
     "B008",   # do not perform function calls in argument defaults (FastAPI uses this pattern)
     "B905",   # zip without strict= (requires Python 3.10+)
 ]

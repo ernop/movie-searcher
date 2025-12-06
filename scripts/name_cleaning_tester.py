@@ -1,15 +1,13 @@
 import sys
-import json
-from typing import List, Optional, Dict
 
 # Ensure project root is on sys.path when running from scripts/
 from pathlib import Path
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scanning import clean_movie_name, load_cleaning_patterns
-
 
 # Edit this list: each case defines the raw input and the required, correct output.
 # - expected_name is REQUIRED
@@ -34,7 +32,7 @@ from scanning import clean_movie_name, load_cleaning_patterns
 # structure and naming patterns using invented names. Document what pattern
 # the test validates in the comment above each case.
 # ============================================================================
-TEST_CASES: List[Dict[str, Optional[str]]] = [
+TEST_CASES: list[dict[str, str | None]] = [
     {
         # Tests: HDrip removal, basic title case correction
         "input": r"D:\movies\My fluffy llama.HDrip.avi",
@@ -101,7 +99,7 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
         "expected_name": "Cheese and Crackers",
         "expected_year": 1991,
     },
-    
+
     {
         # Tests: underscores as spaces, Title1 suffix removal, all caps to title case, "from" lowercase
         "input": r"D:\movies\THE_PENGUINS_FROM_ANTARCTICA_Title1.mp4",
@@ -288,7 +286,7 @@ TEST_CASES: List[Dict[str, Optional[str]]] = [
 
 def run_tests() -> int:
     patterns = load_cleaning_patterns()
-    failures: List[Dict[str, object]] = []
+    failures: list[dict[str, object]] = []
 
     for idx, case in enumerate(TEST_CASES, 1):
         raw = case.get("input", "")
@@ -330,9 +328,10 @@ def run_tests() -> int:
 
 def debug_cleaning(input_path):
     """Debug the cleaning process for a specific input"""
-    from scanning import clean_movie_name, load_cleaning_patterns
     import re
     from pathlib import Path
+
+    from scanning import clean_movie_name, load_cleaning_patterns
 
     patterns = load_cleaning_patterns()
     print(f"Input: {input_path}")

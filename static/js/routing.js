@@ -154,9 +154,9 @@ function handleRoute() {
         }
     }
 
-    // Direct playlist routes
+    // Direct playlist routes: /playlist/{id} or /playlist/{id}/{slug}
     if (route.startsWith('/playlist/')) {
-        const parts = route.split('/').filter(Boolean); // ["playlist", "{id}"]
+        const parts = route.split('/').filter(Boolean); // ["playlist", "{id}", "{slug?}"]
         if (parts.length >= 2) {
             const playlistId = parseInt(parts[1], 10);
             if (pagePlaylists && !Number.isNaN(playlistId)) {
@@ -167,15 +167,15 @@ function handleRoute() {
         }
     }
     
-    // Movie list routes
+    // Movie list routes: /lists/{id} or /lists/{id}/{slug}
     if (route.startsWith('/lists/')) {
-        const parts = route.split('/').filter(Boolean); // ["lists", "{slug}"]
+        const parts = route.split('/').filter(Boolean); // ["lists", "{id}", "{slug?}"]
         if (parts.length >= 2) {
-            const slug = parts[1];
-            if (pageMovieLists && slug) {
+            const listId = parseInt(parts[1], 10);
+            if (pageMovieLists && !Number.isNaN(listId)) {
                 pageMovieLists.classList.add('active');
                 document.getElementById('navLists')?.classList.add('active');
-                handleMovieListRoute(slug);
+                handleMovieListRoute(listId);
                 return;
             }
         }

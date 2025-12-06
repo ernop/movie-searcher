@@ -4,19 +4,18 @@ VLC player integration and currently playing detection for Movie Searcher.
 CRITICAL: When parsing VLC command lines from PowerShell, quotes MUST be stripped
 from all arguments after parsing. See get_vlc_command_lines() docstring for details.
 """
-import os
-import subprocess
-import shlex
-import re
-import logging
-import threading
-import shutil
-from pathlib import Path
-from datetime import datetime
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
-import time
 import json
+import logging
+import os
+import shlex
+import shutil
+import subprocess
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
 
 # In-memory debounce for launch history
 _last_launch_movie_id = None
@@ -45,12 +44,12 @@ VLC_OPTIMIZATION_FLAGS = [
     ("--no-qt-updates-notif", "Disable update notifications"),
     ("--no-qt-privacy-ask", "Skip privacy dialog"),
     ("--no-album-art", "Don't fetch album art"),
-    
+
     # Performance - medium risk
     ("--file-caching=300", "Reduced file caching"),
     ("--no-metadata-network-access", "No network metadata"),
     ("--no-auto-preparse", "Don't preparse files"),
-    
+
     # Performance - higher risk (disabled by default due to known issues)
     # ("--no-media-library", "Disable media library"),  # Can cause issues
     # ("--no-lua", "Disable Lua"),  # Known to cause crashes
@@ -78,13 +77,13 @@ def get_safe_vlc_flags():
         from config import load_config
         config = load_config()
         safe_flags = config.get("vlc_safe_flags", [])
-        
+
         # Also add hardware acceleration if enabled and tested safe
         if config.get("vlc_hardware_acceleration", False):
             hw_flags = config.get("vlc_hw_accel_safe", False)
             if hw_flags and os.name == 'nt':
                 safe_flags.extend(["--avcodec-hw=d3d11va", "--vout=direct3d11"])
-        
+
         return safe_flags
     except Exception as e:
         logger.warning(f"Could not load safe VLC flags from config: {e}")
@@ -116,25 +115,25 @@ def test_vlc_flag(vlc_exe, flag, timeout_seconds=2.0):
     """
     import time as time_module
     start_time = time_module.perf_counter()
-    
+
     try:
         # Launch VLC with just this flag (no video file - just test the flag)
         cmd = [vlc_exe, flag, "--play-and-exit"]
-        
+
         logger.info(f"Testing VLC flag: {flag}")
-        
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             shell=False
         )
-        
+
         # Wait a bit to see if it crashes immediately
         time_module.sleep(0.5)
-        
+
         poll_result = process.poll()
-        
+
         if poll_result is not None:
             # Process exited - check if it was a crash
             stderr = ""
@@ -142,9 +141,9 @@ def test_vlc_flag(vlc_exe, flag, timeout_seconds=2.0):
                 stderr = process.stderr.read().decode('utf-8', errors='replace')[:500]
             except:
                 pass
-            
+
             elapsed_ms = (time_module.perf_counter() - start_time) * 1000
-            
+
             # Exit code 0 is OK (--play-and-exit with no file exits quickly)
             # Other exit codes might indicate a problem
             if poll_result == 0:
@@ -153,7 +152,7 @@ def test_vlc_flag(vlc_exe, flag, timeout_seconds=2.0):
             else:
                 logger.warning(f"Flag {flag}: UNSAFE (exit code {poll_result})")
                 return {"safe": False, "error": f"Exit code {poll_result}: {stderr}", "time_ms": elapsed_ms, "exit_code": poll_result}
-        
+
         # Process still running after timeout - that's good, kill it
         elapsed_ms = (time_module.perf_counter() - start_time) * 1000
         try:
@@ -164,10 +163,10 @@ def test_vlc_flag(vlc_exe, flag, timeout_seconds=2.0):
                 process.kill()
             except:
                 pass
-        
+
         logger.info(f"Flag {flag}: SAFE (stayed running)")
         return {"safe": True, "error": None, "time_ms": elapsed_ms}
-        
+
     except FileNotFoundError:
         return {"safe": False, "error": "VLC executable not found", "time_ms": 0}
     except Exception as e:
@@ -182,37 +181,37 @@ def test_all_vlc_flags(vlc_exe=None):
         dict with 'results' (list of flag test results), 'safe_flags' (list of safe flag strings)
     """
     global _flags_test_in_progress
-    
+
     if _flags_test_in_progress:
         return {"error": "Flag testing already in progress", "results": [], "safe_flags": []}
-    
+
     _flags_test_in_progress = True
-    
+
     try:
         if not vlc_exe:
             vlc_exe = find_vlc_executable()
-        
+
         if not vlc_exe:
             return {"error": "VLC not found", "results": [], "safe_flags": []}
-        
+
         results = []
         safe_flags = []
-        
+
         for flag, description in VLC_OPTIMIZATION_FLAGS:
             result = test_vlc_flag(vlc_exe, flag)
             result["flag"] = flag
             result["description"] = description
             results.append(result)
-            
+
             if result["safe"]:
                 safe_flags.append(flag)
-            
+
             # Small delay between tests
             time.sleep(0.2)
-        
+
         # Save safe flags to config
         save_safe_vlc_flags(safe_flags)
-        
+
         return {
             "results": results,
             "safe_flags": safe_flags,
@@ -231,31 +230,31 @@ def test_hw_acceleration(vlc_exe=None):
     """
     if os.name != 'nt':
         return {"safe": False, "error": "Hardware acceleration test only supported on Windows"}
-    
+
     if not vlc_exe:
         vlc_exe = find_vlc_executable()
-    
+
     if not vlc_exe:
         return {"safe": False, "error": "VLC not found"}
-    
+
     # Test both flags together since they work as a pair
     flags = ["--avcodec-hw=d3d11va", "--vout=direct3d11", "--play-and-exit"]
-    
+
     try:
         cmd = [vlc_exe] + flags
-        logger.info(f"Testing hardware acceleration flags")
-        
+        logger.info("Testing hardware acceleration flags")
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             shell=False
         )
-        
+
         time.sleep(1.0)  # Give it a bit longer for HW accel init
-        
+
         poll_result = process.poll()
-        
+
         if poll_result is not None and poll_result != 0:
             stderr = ""
             try:
@@ -263,7 +262,7 @@ def test_hw_acceleration(vlc_exe=None):
             except:
                 pass
             return {"safe": False, "error": f"Exit code {poll_result}: {stderr}"}
-        
+
         # Clean up
         if poll_result is None:
             try:
@@ -271,7 +270,7 @@ def test_hw_acceleration(vlc_exe=None):
                 process.wait(timeout=1)
             except:
                 pass
-        
+
         # Save result to config
         try:
             from config import load_config, save_config
@@ -280,24 +279,24 @@ def test_hw_acceleration(vlc_exe=None):
             save_config(config)
         except:
             pass
-        
+
         return {"safe": True, "error": None}
-        
+
     except Exception as e:
         return {"safe": False, "error": str(e)}
 
 if os.name == 'nt':
 	# Windows-specific imports via ctypes to avoid extra dependencies
 	import ctypes
-	from ctypes import wintypes, Structure, POINTER, byref
-	
+	from ctypes import POINTER, Structure, byref, wintypes
+
 	# Windows API structures for monitor enumeration
 	class RECT(Structure):
 		_fields_ = [("left", ctypes.c_long),
 					("top", ctypes.c_long),
 					("right", ctypes.c_long),
 					("bottom", ctypes.c_long)]
-	
+
 	class MONITORINFO(Structure):
 		_fields_ = [("cbSize", ctypes.c_ulong),
 					("rcMonitor", RECT),
@@ -305,7 +304,7 @@ if os.name == 'nt':
 					("dwFlags", ctypes.c_ulong)]
 
 # Import database models and session
-from database import SessionLocal, Movie, LaunchHistory, MovieStatus
+from database import LaunchHistory, Movie, SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -324,16 +323,16 @@ def find_subtitle_file(video_path):
     """
     video_path_obj = Path(video_path)
     video_dir = video_path_obj.parent
-    
+
     # Search directories: current folder and "subs" folder (case insensitive)
     search_dirs = [video_dir]
-    
+
     # Check if "subs" folder exists (case insensitive)
     for item in video_dir.iterdir():
         if item.is_dir() and item.name.lower() == "subs":
             search_dirs.append(item)
             break
-    
+
     # Search in each directory for any file with a subtitle extension
     for search_dir in search_dirs:
         try:
@@ -343,7 +342,7 @@ def find_subtitle_file(video_path):
         except (PermissionError, OSError):
             # Skip directories we can't read
             continue
-    
+
     return None
 
 def has_been_launched(movie_path):
@@ -360,7 +359,7 @@ def has_been_launched(movie_path):
 
 def find_vlc_executable():
     """Find VLC executable in common locations, PATH, and Windows registry"""
-    
+
     # First, check if VLC path is saved in config
     try:
         from config import load_config
@@ -371,27 +370,27 @@ def find_vlc_executable():
             return vlc_path
     except Exception as e:
         logger.debug(f"Error loading VLC path from config: {e}")
-    
+
     # Next check PATH
     import shutil
     vlc_in_path = shutil.which("vlc")
     if vlc_in_path:
         logger.info(f"Found VLC in PATH: {vlc_in_path}")
         return vlc_in_path
-    
+
     # Common installation paths
     vlc_paths = [
         r"C:\Program Files\VideoLAN\VLC\vlc.exe",
         r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
         os.path.expanduser(r"~\AppData\Local\Programs\VideoLAN\VLC\vlc.exe"),
     ]
-    
+
     # Check common paths
     for path in vlc_paths:
         if os.path.exists(path):
             logger.info(f"Found VLC at: {path}")
             return path
-    
+
     # On Windows, check registry
     if os.name == 'nt':
         try:
@@ -402,7 +401,7 @@ def find_vlc_executable():
                 (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\VideoLAN\VLC"),
                 (winreg.HKEY_CURRENT_USER, r"SOFTWARE\VideoLAN\VLC"),
             ]
-            
+
             for hkey, key_path in registry_keys:
                 try:
                     with winreg.OpenKey(hkey, key_path) as key:
@@ -415,7 +414,7 @@ def find_vlc_executable():
                     continue
         except Exception as e:
             logger.debug(f"Error checking registry for VLC: {e}")
-    
+
     # Search in Program Files directories
     if os.name == 'nt':
         program_files_dirs = [
@@ -423,7 +422,7 @@ def find_vlc_executable():
             os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
             os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
         ]
-        
+
         for base_dir in program_files_dirs:
             if not base_dir or not os.path.exists(base_dir):
                 continue
@@ -436,7 +435,7 @@ def find_vlc_executable():
                             return str(vlc_exe)
             except (PermissionError, OSError):
                 continue
-    
+
     logger.warning("VLC not found in any common locations")
     return None
 
@@ -451,7 +450,7 @@ def test_vlc_comprehensive(vlc_path=None):
     """
     if not vlc_path:
         vlc_path = find_vlc_executable()
-    
+
     vlc_search_info = [
         "PATH environment variable",
         r"C:\Program Files\VideoLAN\VLC\vlc.exe",
@@ -460,7 +459,7 @@ def test_vlc_comprehensive(vlc_path=None):
         "Windows registry (HKLM and HKCU)",
         "Program Files directories"
     ]
-    
+
     if not vlc_path:
         return {
             "ok": False,
@@ -470,15 +469,15 @@ def test_vlc_comprehensive(vlc_path=None):
             "vlc_version": None,
             "checked_locations": vlc_search_info
         }
-    
+
     # Simple validation: check if file exists and is executable
     # We DON'T run 'vlc --version' because on Windows it can pop up GUI dialogs
-    # that require user interaction (pressing Enter). Since we only need VLC to 
+    # that require user interaction (pressing Enter). Since we only need VLC to
     # launch movies, verifying the executable exists and is accessible is sufficient.
     vlc_ok = False
     vlc_version = None
     errors = []
-    
+
     if not os.path.exists(vlc_path):
         errors.append(f"VLC executable not found at: {vlc_path}")
     elif not os.access(vlc_path, os.X_OK):
@@ -488,7 +487,7 @@ def test_vlc_comprehensive(vlc_path=None):
         vlc_ok = True
         vlc_version = "OK"
         logger.info(f"VLC validated: {vlc_path}")
-    
+
     return {
         "ok": vlc_ok,
         "vlc_ok": vlc_ok,
@@ -510,29 +509,29 @@ def get_vlc_playback_position():
             - filename: Name of file being played
         None if VLC HTTP interface is not available or query fails.
     """
-    import urllib.request
-    import urllib.error
     import base64
-    
+    import urllib.error
+    import urllib.request
+
     try:
         # VLC HTTP API uses password-only auth (empty username)
         url = f"http://127.0.0.1:{VLC_HTTP_PORT}/requests/status.json"
-        
+
         # Create request with basic auth
         request = urllib.request.Request(url)
         credentials = f":{VLC_HTTP_PASSWORD}"
         b64_credentials = base64.b64encode(credentials.encode()).decode()
         request.add_header("Authorization", f"Basic {b64_credentials}")
-        
+
         with urllib.request.urlopen(request, timeout=1.0) as response:
             data = json.loads(response.read().decode('utf-8'))
-            
+
             # Extract relevant fields
             position_seconds = data.get("time", 0)
             length_seconds = data.get("length", 0)
             position_percent = data.get("position", 0.0)
             state = data.get("state", "unknown")
-            
+
             # Try to get filename from metadata
             filename = None
             info = data.get("information", {})
@@ -540,9 +539,9 @@ def get_vlc_playback_position():
                 category = info.get("category", {})
                 meta = category.get("meta", {})
                 filename = meta.get("filename")
-            
+
             logger.info(f"VLC playback position: {position_seconds}s / {length_seconds}s ({state})")
-            
+
             return {
                 "position_seconds": position_seconds,
                 "length_seconds": length_seconds,
@@ -572,13 +571,13 @@ def close_vlc_processes(capture_position=False):
                                      may be None if position could not be captured.
     """
     playback_info = None
-    
+
     # If requested, try to capture position before killing
     if capture_position:
         playback_info = get_vlc_playback_position()
         if playback_info:
             logger.info(f"Captured VLC position before close: {playback_info['position_seconds']}s")
-    
+
     try:
         if os.name == 'nt':  # Windows
             # Find all VLC processes
@@ -592,7 +591,7 @@ def close_vlc_processes(capture_position=False):
                 # Count processes
                 lines = [line for line in result.stdout.strip().split('\n') if line.strip()]
                 process_count = len(lines)
-                
+
                 # Close them
                 kill_result = subprocess.run(
                     ["taskkill", "/F", "/IM", "vlc.exe"],
@@ -633,7 +632,7 @@ def close_vlc_processes(capture_position=False):
         if capture_position:
             return (False, playback_info)
         return False
-    
+
     if capture_position:
         return (0, playback_info)
     return 0
@@ -642,7 +641,7 @@ def get_vlc_window_titles():
     """Get window titles from running VLC instances on Windows"""
     if os.name != 'nt':  # Windows only for now
         return []
-    
+
     try:
         # Use PowerShell to get VLC window titles
         ps_command = """
@@ -669,14 +668,14 @@ def get_vlc_window_titles():
             }
         }
         """
-        
+
         result = subprocess.run(
             ["powershell", "-Command", ps_command],
             capture_output=True,
             text=True,
             timeout=5
         )
-        
+
         if result.returncode == 0 and result.stdout.strip():
             titles = []
             for line in result.stdout.strip().split('\n'):
@@ -687,7 +686,7 @@ def get_vlc_window_titles():
             return titles
     except Exception as e:
         logger.warning(f"Error getting VLC window titles: {e}")
-    
+
     return []
 
 def get_vlc_command_lines():
@@ -744,7 +743,7 @@ def get_vlc_command_lines():
             pid = str(proc.get("ProcessId") or "").strip()
             if not cmd_line:
                 continue
-            
+
             # Parse command line arguments
             # PowerShell returns: '"C:\Program Files\VLC\vlc.exe" "D:\movies\file.mkv"'
             # We need to split this into individual arguments and strip quotes
@@ -770,7 +769,7 @@ def get_vlc_command_lines():
                     # Skip command-line flags (e.g., --started-from-file, --sub-file, etc.)
                     if arg.startswith("-"):
                         continue
-                    
+
                     # Normalize path for existence check (resolve relative paths, handle case)
                     # This ensures we match paths correctly even if they're stored differently in DB
                     try:
@@ -778,7 +777,7 @@ def get_vlc_command_lines():
                     except (OSError, ValueError):
                         # If resolve fails (e.g., path doesn't exist), try original
                         normalized_arg = arg
-                    
+
                     # Check if path exists and has a video extension
                     # Note: We check the normalized path but store the original arg
                     # to preserve the exact format from the command line
@@ -821,7 +820,7 @@ def _find_vlc_window_handle(target_pid=None):
 	def _callback(hwnd, lParam):
 		if not IsWindowVisible(hwnd):
 			return True
-			
+
 		# Check PID if requested
 		if target_pid:
 			pid = ctypes.c_ulong()
@@ -853,17 +852,17 @@ def _set_window_rect(hwnd, rect):
 	"""Set window position and size on Windows."""
 	if os.name != 'nt' or not hwnd or not rect:
 		return False
-	
+
 	try:
 		user32 = ctypes.windll.user32
 		width = rect.right - rect.left
 		height = rect.bottom - rect.top
-		
+
 		# SWP_NOZORDER = 0x0004 keeps z-order unchanged
 		# SWP_SHOWWINDOW = 0x0040 shows window
 		SWP_NOZORDER = 0x0004
 		SWP_SHOWWINDOW = 0x0040
-		
+
 		result = user32.SetWindowPos(
 			hwnd,
 			0,  # hWndInsertAfter
@@ -897,20 +896,20 @@ def _get_monitor_bounds():
 	"""
 	if os.name != 'nt':
 		return []
-	
+
 	user32 = ctypes.windll.user32
 	monitors = []
-	
+
 	# MONITORINFO structure
 	MONITORINFOF_PRIMARY = 0x00000001
-	
+
 	def _monitor_enum_proc(hMonitor, hdcMonitor, lprcMonitor, dwData):
 		mi = MONITORINFO()
 		mi.cbSize = ctypes.sizeof(MONITORINFO)
 		if user32.GetMonitorInfoW(hMonitor, byref(mi)):
 			monitors.append(mi.rcMonitor)
 		return True
-	
+
 	MonitorEnumProc = ctypes.WINFUNCTYPE(
 		ctypes.c_bool,
 		wintypes.HMONITOR,
@@ -918,7 +917,7 @@ def _get_monitor_bounds():
 		POINTER(RECT),
 		wintypes.LPARAM
 	)
-	
+
 	user32.EnumDisplayMonitors(None, None, MonitorEnumProc(_monitor_enum_proc), 0)
 	return monitors
 
@@ -928,7 +927,7 @@ def _get_window_rect(hwnd):
 	"""
 	if os.name != 'nt' or not hwnd:
 		return None
-	
+
 	user32 = ctypes.windll.user32
 	rect = RECT()
 	if user32.GetWindowRect(hwnd, byref(rect)):
@@ -937,16 +936,16 @@ def _get_window_rect(hwnd):
 
 def _rect_intersects(rect1, rect2):
 	"""Check if two rectangles intersect."""
-	return not (rect1.right <= rect2.left or 
-				rect1.left >= rect2.right or 
-				rect1.bottom <= rect2.top or 
+	return not (rect1.right <= rect2.left or
+				rect1.left >= rect2.right or
+				rect1.bottom <= rect2.top or
 				rect1.top >= rect2.bottom)
 
 def _rect_contains(outer, inner):
 	"""Check if outer rectangle fully contains inner rectangle."""
-	return (inner.left >= outer.left and 
-			inner.right <= outer.right and 
-			inner.top >= outer.top and 
+	return (inner.left >= outer.left and
+			inner.right <= outer.right and
+			inner.top >= outer.top and
 			inner.bottom <= outer.bottom)
 
 def _ensure_window_in_single_monitor(hwnd):
@@ -956,68 +955,68 @@ def _ensure_window_in_single_monitor(hwnd):
 	"""
 	if os.name != 'nt' or not hwnd:
 		return False
-	
+
 	try:
 		user32 = ctypes.windll.user32
-		
+
 		# Get window rectangle
 		window_rect = _get_window_rect(hwnd)
 		if not window_rect:
 			return False
-		
+
 		# Get all monitors
 		monitors = _get_monitor_bounds()
 		if not monitors:
 			return False
-		
+
 		# Check which monitors the window overlaps
 		overlapping_monitors = []
 		for i, monitor in enumerate(monitors):
 			if _rect_intersects(window_rect, monitor):
 				overlapping_monitors.append((i, monitor))
-		
+
 		# If window is already fully within a single monitor, no action needed
 		if len(overlapping_monitors) == 1:
 			monitor = overlapping_monitors[0][1]
 			if _rect_contains(monitor, window_rect):
 				return False
-		
+
 		# Window spans multiple monitors or extends beyond monitor bounds
 		# Find the monitor that contains the center of the window
 		window_center_x = (window_rect.left + window_rect.right) // 2
 		window_center_y = (window_rect.top + window_rect.bottom) // 2
-		
+
 		target_monitor = None
 		for i, monitor in enumerate(monitors):
 			if (monitor.left <= window_center_x <= monitor.right and
 				monitor.top <= window_center_y <= monitor.bottom):
 				target_monitor = monitor
 				break
-		
+
 		# If center not in any monitor, use primary monitor (first one)
 		if not target_monitor:
 			target_monitor = monitors[0]
-		
+
 		# Calculate new position and size
 		window_width = window_rect.right - window_rect.left
 		window_height = window_rect.bottom - window_rect.top
 		monitor_width = target_monitor.right - target_monitor.left
 		monitor_height = target_monitor.bottom - target_monitor.top
-		
+
 		# If window is too large for monitor, resize it
 		if window_width > monitor_width:
 			window_width = monitor_width - 20  # Leave small margin
 		if window_height > monitor_height:
 			window_height = monitor_height - 20
-		
+
 		# Center window in target monitor (or position at top-left with small margin)
 		new_x = target_monitor.left + (monitor_width - window_width) // 2
 		new_y = target_monitor.top + (monitor_height - window_height) // 2
-		
+
 		# Ensure window doesn't go outside monitor bounds
 		new_x = max(target_monitor.left, min(new_x, target_monitor.right - window_width))
 		new_y = max(target_monitor.top, min(new_y, target_monitor.bottom - window_height))
-		
+
 		# Reposition/resize window
 		# SWP_NOZORDER = 0x0004 keeps z-order unchanged
 		# SWP_SHOWWINDOW = 0x0040 shows window
@@ -1032,7 +1031,7 @@ def _ensure_window_in_single_monitor(hwnd):
 			window_height,
 			SWP_NOZORDER | SWP_SHOWWINDOW
 		)
-		
+
 		return bool(result)
 	except Exception as e:
 		logger.warning(f"Error ensuring window in single monitor: {e}")
@@ -1065,12 +1064,12 @@ def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1,
 				else:
 					logger.warning("Failed to restore window position")
 				# No sleep needed - SetWindowPos is synchronous
-				
+
 			last_result = _bring_window_to_foreground(hwnd)
 			if last_result:
 				break
 		time.sleep(poll_interval_seconds)
-	
+
 	# After VLC has initialized, handle window positioning
 	# Do this asynchronously so we don't block the response
 	if hwnd_found:
@@ -1086,7 +1085,7 @@ def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1,
 					target_width = target_rect.right - target_rect.left
 					target_height = target_rect.bottom - target_rect.top
 					logger.info(f"Preserving window size: {target_width}x{target_height} at ({target_rect.left}, {target_rect.top})")
-					
+
 					# Apply at staggered intervals during video load
 					# Delays: 0.15s, then 0.25s more (0.4s total), then 0.4s more (0.8s total)
 					delays = [0.15, 0.25, 0.4]
@@ -1099,10 +1098,10 @@ def bring_vlc_to_foreground(wait_timeout_seconds=3.0, poll_interval_seconds=0.1,
 					_ensure_window_in_single_monitor(hwnd_found)
 			except Exception as e:
 				logger.warning(f"Background window finalization failed: {e}")
-		
+
 		# Fire and forget - don't block on this
 		threading.Thread(target=finalize_window_position, daemon=True).start()
-	
+
 	return last_result
 
 def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, start_time=None, movie_id=None):
@@ -1118,7 +1117,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     # Start timing for performance measurement
     import time as time_module
     launch_start_time = time_module.perf_counter()
-    
+
     # Timing breakdown dict to track where time is spent
     timing = {
         'total': 0,
@@ -1129,10 +1128,10 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         'window_focus': 0,   # Finding and focusing VLC window
         'history_save': 0,   # Database history save
     }
-    
+
     steps = []
     results = []
-    
+
     # Load config for launch settings
     config = {}  # Default empty config
     try:
@@ -1140,14 +1139,14 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         config = load_config()
     except Exception as e:
         logger.warning(f"Failed to load config: {e}. Using defaults.")
-    
+
     launch_with_subtitles_on = config.get("launch_with_subtitles_on", True)
-    
+
     # Step 1: Verify file exists
     steps.append("Step 1: Verifying movie file exists")
     logger.info(f"launch_movie_in_vlc: Checking file existence for path: {movie_path}")
     logger.info(f"launch_movie_in_vlc: Path type: {type(movie_path)}, Path repr: {repr(movie_path)}")
-    
+
     # Normalize path before checking (same as indexing does)
     try:
         normalized_path_obj = Path(movie_path).resolve()
@@ -1169,7 +1168,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
                 steps.append(f"  Path normalized (absolute): {normalized_path}")
         except Exception as e2:
             logger.warning(f"launch_movie_in_vlc: Failed to get absolute path: {e2}, using original path")
-    
+
     if not os.path.exists(movie_path):
         error_msg = f"File not found: {movie_path}"
         steps.append(f"  ERROR: {error_msg}")
@@ -1196,7 +1195,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     results.append({"step": 1, "status": "success", "message": f"File found: {movie_path}"})
     steps.append(f"  SUCCESS: File exists at {movie_path}")
     logger.info(f"launch_movie_in_vlc: File exists, proceeding: {movie_path}")
-    
+
     # Step 2: Find VLC executable
     steps.append("Step 2: Locating VLC executable")
     vlc_exe = find_vlc_executable()
@@ -1206,7 +1205,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         os.path.expanduser(r"~\AppData\Local\Programs\VideoLAN\vlc.exe"),
         "vlc"
     ]
-    
+
     if not vlc_exe:
         error_msg = "VLC not found. Please install VLC or set path."
         steps.append(f"  ERROR: {error_msg}")
@@ -1215,7 +1214,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         raise FileNotFoundError(error_msg)
     results.append({"step": 2, "status": "success", "message": f"VLC found at: {vlc_exe}"})
     steps.append(f"  Found VLC at: {vlc_exe}")
-    
+
     # Step 2.4: Capture existing VLC window geometry if replacing
     # This preserves the window position across monitor setups - when replacing VLC,
     # the new window will open at the same position (same monitor, same coordinates)
@@ -1248,7 +1247,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     # TIMING: End of prep phase
     timing['prep'] = (time_module.perf_counter() - launch_start_time) * 1000
     t_close_start = time_module.perf_counter()
-    
+
     # Step 2.5: Close existing VLC windows if requested
     # When replacing VLC, we capture playback position first and save it to history
     if close_existing:
@@ -1257,15 +1256,15 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
             # Capture position before killing, then close
             close_result = close_vlc_processes(capture_position=True)
             closed_count, playback_info = close_result
-            
+
             if closed_count:
                 steps.append(f"  Successfully closed {closed_count} VLC process(es)")
-                
+
                 # If we captured playback position, save it to the most recent launch history
                 if playback_info and playback_info.get("position_seconds", 0) > 0:
                     position_secs = playback_info["position_seconds"]
                     steps.append(f"  Captured playback position: {position_secs}s ({position_secs // 3600}h {(position_secs % 3600) // 60}m {position_secs % 60}s)")
-                    
+
                     # Save to most recent launch history entry
                     try:
                         db = SessionLocal()
@@ -1274,7 +1273,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
                             last_launch = db.query(LaunchHistory).order_by(
                                 LaunchHistory.created.desc()
                             ).first()
-                            
+
                             if last_launch:
                                 last_launch.stopped_at_seconds = float(position_secs)
                                 db.commit()
@@ -1290,7 +1289,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
                         steps.append(f"  WARNING: Failed to save position: {e}")
                 else:
                     steps.append("  No playback position captured (VLC may not have HTTP interface enabled)")
-                
+
                 results.append({"step": 2.5, "status": "success", "message": f"Closed {closed_count} VLC, position: {playback_info.get('position_seconds') if playback_info else 'unknown'}s"})
             else:
                 steps.append("  No existing VLC processes found")
@@ -1301,15 +1300,15 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     else:
         steps.append("Step 2.5: Skipping close existing VLC (option disabled)")
         results.append({"step": 2.5, "status": "info", "message": "Close existing VLC option disabled"})
-    
+
     timing['close_existing'] = (time_module.perf_counter() - t_close_start) * 1000
-    
+
     # Step 3: Build VLC command with tested-safe optimization flags
     steps.append("Step 3: Building VLC command")
-    
+
     # Get safe flags from our tested cache
     safe_flags = get_safe_vlc_flags()
-    
+
     # Build command with safe flags + HTTP interface for playback position tracking
     # HTTP interface allows us to query current position before closing/replacing VLC
     http_interface_flags = [
@@ -1317,25 +1316,25 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         "--http-port", str(VLC_HTTP_PORT),
         "--http-password", VLC_HTTP_PASSWORD,
     ]
-    
+
     vlc_cmd = [vlc_exe] + safe_flags + http_interface_flags + [movie_path]
-    
+
     if safe_flags:
         steps.append(f"  Using {len(safe_flags)} optimization flags")
         logger.info(f"launch_movie_in_vlc: Using safe flags: {safe_flags}")
     else:
-        steps.append(f"  No optimization flags (none tested safe yet)")
-    
+        steps.append("  No optimization flags (none tested safe yet)")
+
     # If we have a previous window size to restore, disable VLC's auto-resize
     # This prevents VLC from overriding our SetWindowPos after the video loads
     if existing_rect:
         vlc_cmd.insert(1, "--no-qt-video-autoresize")
         steps.append("  Disabled VLC auto-resize to preserve previous window size")
         logger.info("launch_movie_in_vlc: Added --no-qt-video-autoresize to preserve window size")
-    
+
     steps.append(f"  HTTP interface enabled on port {VLC_HTTP_PORT} for resume tracking")
     results.append({"step": 3, "status": "success", "message": f"Command prepared with {len(safe_flags)} safe flags + HTTP interface"})
-    
+
     # Step 4: Handle subtitles
     steps.append("Step 4: Checking for subtitles")
 
@@ -1369,26 +1368,26 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         else:
             steps.append("  No subtitle will be used")
             results.append({"step": 4, "status": "info", "message": "No subtitle file"})
-    
+
     # Step 4.5: Handle start time
     if start_time is not None and start_time > 0:
         vlc_cmd.extend(["--start-time", str(start_time)])
         steps.append(f"  Added start time: {start_time}s")
         results.append({"step": 4.5, "status": "success", "message": f"Start time set to {start_time}s"})
-    
+
     # Step 5: Launch VLC
     steps.append("Step 5: Launching VLC")
     steps.append(f"  Full command: {' '.join(vlc_cmd)}")
     logger.info(f"launch_movie_in_vlc: Launching VLC with command: {vlc_cmd}")
-    
+
     # TIMING: Popen call
     t_popen_start = time_module.perf_counter()
-    
+
     # Capture stderr to diagnose VLC failures (but not stdout as that can be noisy)
     # Use PIPE for stderr so we can read error messages if VLC fails
     try:
         process = subprocess.Popen(
-            vlc_cmd, 
+            vlc_cmd,
             shell=False,
             stderr=subprocess.PIPE,
             stdout=subprocess.DEVNULL,  # Discard stdout (noisy)
@@ -1425,7 +1424,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         except Exception:
             pass
     threading.Thread(target=close_stderr, daemon=True).start()
-    
+
     # NOTE: Removed 500ms health check - it was adding latency to every launch.
     # If VLC crashes, we'll know from window detection failing.
     # Flag testing system prevents problematic flags from being used.
@@ -1438,14 +1437,14 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
         logger.info(f"launch_movie_in_vlc: Attempting to bring VLC window to foreground (PID: {process.pid})")
         try:
             focused = bring_vlc_to_foreground(
-                wait_timeout_seconds=3.0, 
+                wait_timeout_seconds=3.0,
                 poll_interval_seconds=0.05,  # 50ms polls for faster window detection
                 target_pid=process.pid,
                 target_rect=existing_rect
             )
             timing['window_focus'] = (time_module.perf_counter() - t_focus_start) * 1000
             if focused:
-                logger.info(f"launch_movie_in_vlc: VLC window brought to foreground successfully")
+                logger.info("launch_movie_in_vlc: VLC window brought to foreground successfully")
                 steps.append("  VLC window brought to foreground")
                 results.append({"step": 5.1, "status": "success", "message": "Foreground set"})
             else:
@@ -1463,20 +1462,20 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
             logger.warning(f"launch_movie_in_vlc: Error bringing VLC to foreground: {e}")
             steps.append(f"  WARNING: Error attempting foreground: {str(e)}")
             results.append({"step": 5.1, "status": "warning", "message": f"Foreground error: {str(e)}"})
-    
+
     # Step 6: Save to history
     # To prevent "spamming" history with consecutive duplicates (e.g. accidental double-clicks),
     # we check if the movie was launched very recently or is the same as the last entry.
-    
+
     # Use a module-level variable for simple in-memory debouncing across threads/requests
     global _last_launch_movie_id, _last_launch_time
     current_time = time.time()
-    
+
     # Check in-memory debounce (catch rapid-fire requests)
     is_debounce_duplicate = False
     if movie_id is not None and _last_launch_movie_id == movie_id and (current_time - _last_launch_time) < 5.0:
         is_debounce_duplicate = True
-        
+
     if is_debounce_duplicate:
          steps.append("  Skipping history save: Duplicate launch detected (debounce)")
          results.append({"step": 6, "status": "info", "message": "Launch history skipped (debounce)"})
@@ -1490,25 +1489,25 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
              movie = None
              if movie_id:
                  movie = db.query(Movie).filter(Movie.id == movie_id).first()
-             
+
              if not movie:
                  # Fallback to path lookup
                  movie = db.query(Movie).filter(Movie.path == movie_path).first()
-             
+
              if not movie:
                  # Should not happen as we checked existence
                  steps.append("  WARNING: Movie not found in database, cannot save history")
              else:
                  # Check if the last entry is the same movie
                  last_launch = db.query(LaunchHistory).order_by(LaunchHistory.created.desc(), LaunchHistory.id.desc()).first()
-                 
+
                  # Always create a new entry
                  # If the previous entry is the same movie, we leave it as is (do NOT update timestamp)
                  # BUT we also check to ensure we aren't spamming: if the last entry is the same movie,
                  # we ONLY add a new one if some time has passed or if the user explicitly wants it.
-                 # Per user instruction: "just create a history entry every time. and before you do so, 
+                 # Per user instruction: "just create a history entry every time. and before you do so,
                  # insist that the db not have the previous entry pointing to the exact same movie."
-                 
+
                  if last_launch and last_launch.movie_id == movie.id:
                      steps.append("  Skipping history save: Consecutive duplicate detected")
                      results.append({"step": 6, "status": "info", "message": "Launch history skipped (consecutive duplicate)"})
@@ -1522,7 +1521,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
                      db.commit()
                      steps.append("  Added new history entry")
                      results.append({"step": 6, "status": "success", "message": "Launch saved to history"})
-                 
+
                  # Update in-memory debounce
                  _last_launch_movie_id = movie.id
                  _last_launch_time = current_time
@@ -1531,7 +1530,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
              results.append({"step": 6, "status": "warning", "message": f"History error: {e}"})
          finally:
              db.close()
-    
+
     # Final process verification
     final_poll = process.poll()
     if final_poll is not None:
@@ -1543,14 +1542,14 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
                 vlc_stderr = stderr_bytes.decode('utf-8', errors='replace').strip()
         except Exception:
             pass
-        
+
         logger.error(f"launch_movie_in_vlc: LAUNCH FAILED - VLC exited with code {final_poll}")
         if vlc_stderr:
             logger.error(f"launch_movie_in_vlc: VLC stderr: {vlc_stderr}")
         steps.append(f"LAUNCH FAILED: VLC exited with code {final_poll}")
         if vlc_stderr:
             steps.append(f"VLC error output: {vlc_stderr[:500]}")
-        
+
         return {
             "status": "failed",
             "error": f"VLC exited immediately with code {final_poll}",
@@ -1563,21 +1562,21 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
             "process_id": process.pid,
             "exit_code": final_poll
         }
-    
+
     # Calculate and record launch time
     launch_end_time = time_module.perf_counter()
     launch_time_ms = (launch_end_time - launch_start_time) * 1000
     timing['total'] = launch_time_ms
-    
+
     # Log timing breakdown
-    logger.info(f"launch_movie_in_vlc: TIMING BREAKDOWN:")
+    logger.info("launch_movie_in_vlc: TIMING BREAKDOWN:")
     logger.info(f"  - Prep (file check, VLC lookup, cmd build): {timing['prep']:.1f}ms")
     logger.info(f"  - Close existing VLC: {timing['close_existing']:.1f}ms")
     logger.info(f"  - Popen (create process): {timing['popen']:.1f}ms")
     logger.info(f"  - Health check (0.5s sleep): {timing['health_check']:.1f}ms")
     logger.info(f"  - Window focus: {timing['window_focus']:.1f}ms")
     logger.info(f"  - TOTAL: {timing['total']:.1f}ms")
-    
+
     # Save launch time stat to database with timing breakdown
     try:
         from models import Stat
@@ -1604,7 +1603,7 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
             db.close()
     except Exception as e:
         logger.warning(f"launch_movie_in_vlc: Could not import Stat model: {e}")
-    
+
     # Final summary
     steps.append("=" * 50)
     steps.append("LAUNCH COMPLETE")
@@ -1615,9 +1614,9 @@ def launch_movie_in_vlc(movie_path, subtitle_path=None, close_existing=False, st
     steps.append(f"Launch time: {launch_time_ms:.1f}ms")
     steps.append(f"  Prep: {timing['prep']:.1f}ms | Popen: {timing['popen']:.1f}ms | Health: {timing['health_check']:.1f}ms | Focus: {timing['window_focus']:.1f}ms")
     steps.append("=" * 50)
-    
+
     logger.info(f"launch_movie_in_vlc: LAUNCH COMPLETE - PID {process.pid} playing {Path(movie_path).name} ({launch_time_ms:.1f}ms)")
-    
+
     return {
         "status": "launched",
         "subtitle": subtitle_path,
@@ -1635,10 +1634,10 @@ def get_currently_playing_movies():
     db = SessionLocal()
     try:
         playing = []
-        
+
         # Get command line arguments
         vlc_processes = get_vlc_command_lines()
-        
+
         # Process command line results
         for proc_info in vlc_processes:
             file_path = proc_info["path"]
@@ -1647,7 +1646,7 @@ def get_currently_playing_movies():
                 normalized_path = str(Path(file_path).resolve())
             except:
                 normalized_path = file_path
-            
+
             # Check if this path is in our index
             movie = db.query(Movie).filter(Movie.path == normalized_path).first()
             if movie:
@@ -1668,7 +1667,7 @@ def get_currently_playing_movies():
                         "name": movie.name,
                         "pid": proc_info["pid"]
                     })
-        
+
         return playing
     finally:
         db.close()
@@ -1689,13 +1688,13 @@ VLC_OPTIMIZATION_SETTINGS = [
     ("metadata-network-access", "0", "Disable network metadata lookups"),
     ("auto-preparse", "0", "Disable automatic file preparsing"),
     ("media-library", "0", "Disable media library"),
-    
+
     # UI optimizations
     ("video-title-show", "0", "Disable on-screen video title"),
     ("qt-privacy-ask", "0", "Skip privacy dialog"),
     ("qt-updates-notif", "0", "Disable update notifications"),
     ("album-art", "0", "Disable album art fetching"),
-    
+
     # Note: Hardware acceleration is NOT included here as it can cause issues
     # on some systems. It's offered as a separate opt-in option via command line.
 ]
@@ -1719,7 +1718,7 @@ def get_vlcrc_path():
         config_home = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
         vlcrc = Path(config_home) / 'vlc' / 'vlcrc'
         return vlcrc
-    
+
     return None
 
 
@@ -1746,7 +1745,7 @@ def check_vlcrc_status():
     """
     vlcrc = get_vlcrc_path()
     backup = get_vlcrc_backup_path()
-    
+
     status = {
         "exists": False,
         "path": str(vlcrc) if vlcrc else None,
@@ -1755,21 +1754,21 @@ def check_vlcrc_status():
         "is_optimized": False,
         "size": 0
     }
-    
+
     if vlcrc and vlcrc.exists():
         status["exists"] = True
         status["size"] = vlcrc.stat().st_size
-        
+
         # Check if already optimized by looking for our marker comment
         try:
             content = vlcrc.read_text(encoding='utf-8', errors='ignore')
             status["is_optimized"] = "# Movie Searcher Optimization" in content
         except Exception:
             pass
-    
+
     if backup and backup.exists():
         status["backup_exists"] = True
-    
+
     return status
 
 
@@ -1782,13 +1781,13 @@ def create_vlcrc_backup():
     """
     vlcrc = get_vlcrc_path()
     backup = get_vlcrc_backup_path()
-    
+
     if not vlcrc or not vlcrc.exists():
         return {
             "success": False,
             "message": "VLC configuration file not found. VLC may not have been run yet."
         }
-    
+
     try:
         shutil.copy2(vlcrc, backup)
         return {
@@ -1812,13 +1811,13 @@ def restore_vlcrc_backup():
     """
     vlcrc = get_vlcrc_path()
     backup = get_vlcrc_backup_path()
-    
+
     if not backup or not backup.exists():
         return {
             "success": False,
             "message": "No backup file found to restore from."
         }
-    
+
     try:
         shutil.copy2(backup, vlcrc)
         return {
@@ -1840,19 +1839,18 @@ def apply_vlcrc_optimizations():
     Returns:
         dict with success status, message, and details of changes made
     """
-    from datetime import datetime
-    
+
     vlcrc = get_vlcrc_path()
-    
+
     if not vlcrc:
         return {
             "success": False,
             "message": "Could not determine VLC configuration path for this OS."
         }
-    
+
     # Ensure vlc config directory exists
     vlcrc.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Create backup if vlcrc exists and backup doesn't
     backup = get_vlcrc_backup_path()
     if vlcrc.exists() and backup and not backup.exists():
@@ -1862,7 +1860,7 @@ def apply_vlcrc_optimizations():
                 "success": False,
                 "message": f"Failed to create backup before optimization: {backup_result['message']}"
             }
-    
+
     # Read existing content or start fresh
     if vlcrc.exists():
         try:
@@ -1875,11 +1873,11 @@ def apply_vlcrc_optimizations():
             }
     else:
         lines = []
-    
+
     # Parse existing settings into a dict
     settings = {}
     setting_lines = {}  # Track which line each setting is on
-    
+
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped and not stripped.startswith('#') and '=' in stripped:
@@ -1888,13 +1886,13 @@ def apply_vlcrc_optimizations():
             value = value.strip()
             settings[key] = value
             setting_lines[key] = i
-    
+
     # Apply optimizations
     changes_made = []
-    
+
     for key, value, description in VLC_OPTIMIZATION_SETTINGS:
         old_value = settings.get(key)
-        
+
         if old_value != value:
             if key in setting_lines:
                 # Update existing line
@@ -1905,9 +1903,9 @@ def apply_vlcrc_optimizations():
                 # Add new setting
                 lines.append(f"{key}={value}")
                 changes_made.append(f"Added {key}={value} ({description})")
-            
+
             settings[key] = value
-    
+
     # Add marker comment if not present
     marker = "# Movie Searcher Optimization"
     if marker not in '\n'.join(lines):
@@ -1915,7 +1913,7 @@ def apply_vlcrc_optimizations():
         lines.insert(0, f"{marker} applied on {timestamp}")
         lines.insert(1, "# Original settings backed up. Use Movie Searcher settings to restore.")
         lines.insert(2, "")
-    
+
     # Write back
     try:
         vlcrc.write_text('\n'.join(lines), encoding='utf-8')
@@ -1942,48 +1940,48 @@ def remove_vlcrc_optimizations():
         dict with success status and message
     """
     backup = get_vlcrc_backup_path()
-    
+
     # If backup exists, restore from it
     if backup and backup.exists():
         return restore_vlcrc_backup()
-    
+
     # No backup - try to reset just our settings
     vlcrc = get_vlcrc_path()
-    
+
     if not vlcrc or not vlcrc.exists():
         return {
             "success": True,
             "message": "VLC configuration file not found. Nothing to remove."
         }
-    
+
     try:
         content = vlcrc.read_text(encoding='utf-8', errors='ignore')
         lines = content.split('\n')
-        
+
         # Get list of our optimization keys
         opt_keys = {key for key, _, _ in VLC_OPTIMIZATION_SETTINGS}
-        
+
         # Filter out our settings and marker comments
         new_lines = []
         for line in lines:
             stripped = line.strip()
-            
+
             # Skip our marker comments
             if "Movie Searcher Optimization" in stripped:
                 continue
             if "Original settings backed up" in stripped:
                 continue
-            
+
             # Skip our optimization settings
             if stripped and not stripped.startswith('#') and '=' in stripped:
                 key = stripped.partition('=')[0].strip()
                 if key in opt_keys:
                     continue
-            
+
             new_lines.append(line)
-        
+
         vlcrc.write_text('\n'.join(new_lines), encoding='utf-8')
-        
+
         return {
             "success": True,
             "message": "Removed Movie Searcher optimizations from VLC configuration."
@@ -2049,7 +2047,7 @@ async def get_vlc_optimization_status():
     try:
         status = check_vlcrc_status()
         info = get_vlcrc_optimization_info()
-        
+
         return {
             "status": status,
             "optimization_info": info,
@@ -2072,14 +2070,14 @@ async def apply_vlc_optimization():
     """
     try:
         status = check_vlcrc_status()
-        
+
         if status["is_optimized"]:
             return {
                 "success": True,
                 "message": "VLC configuration is already optimized.",
                 "already_optimized": True
             }
-        
+
         result = apply_vlcrc_optimizations()
         return result
     except Exception as e:
@@ -2136,11 +2134,11 @@ async def get_vlc_flags_status():
     try:
         from config import load_config
         config = load_config()
-        
+
         safe_flags = config.get("vlc_safe_flags", [])
         hw_accel_enabled = config.get("vlc_hardware_acceleration", False)
         hw_accel_safe = config.get("vlc_hw_accel_safe", False)
-        
+
         return {
             "available_flags": [
                 {"flag": flag, "description": desc, "safe": flag in safe_flags}

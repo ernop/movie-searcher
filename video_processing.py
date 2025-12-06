@@ -1,24 +1,20 @@
 """
 Video processing, subprocess management, and frame extraction for Movie Searcher.
 """
+import logging
 import os
+import re
 import subprocess
 import threading
 import time
-import hashlib
-import re
-import logging
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
-from queue import Queue, PriorityQueue
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Future
+from queue import PriorityQueue
 
 # Video length extraction will use ffprobe (from the configured ffmpeg bundle)
-
 # Import database models and session
-from database import SessionLocal, Movie, Screenshot
 
 # Import screenshot synchronization functions
-from screenshot_sync import sync_existing_screenshot, save_screenshot_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +25,15 @@ SCREENSHOT_DIR = None
 _CACHED_FFMPEG_PATH = None
 
 # Import subtitle functions from video.subtitle module
-from video.subtitle import parse_srt_at_timestamp, burn_subtitle_text_onto_image
+from video.subtitle import burn_subtitle_text_onto_image, parse_srt_at_timestamp
+
 
 def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
     logger.info(f"_ffmpeg_job called: video={Path(video_path_local).name}, ts={ts}s, subtitle_path={subtitle_path}, out_path={Path(out_path).name}")
     try:
         # Resolve paths
         video_path_normalized = Path(video_path_local).resolve()
-        
+
         # Build ffmpeg command to extract frame WITHOUT subtitles
         # We'll add subtitles using PIL after extraction
         cmd = [
@@ -51,15 +48,15 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
             "-y",
             str(Path(out_path).resolve())
         ]
-        
+
         logger.debug(f"ffmpeg command: {' '.join(cmd)}")
         start = time.time()
         proc = subprocess.run(cmd, capture_output=True, timeout=30)
         elapsed = time.time() - start
-        
+
         if proc.returncode == 0 and Path(out_path).exists():
-            logger.info(f"Extracted frame successfully")
-            
+            logger.info("Extracted frame successfully")
+
             # If subtitle path provided, burn subtitle text onto the image
             if subtitle_path and os.path.exists(subtitle_path):
                 subtitle_text = parse_srt_at_timestamp(subtitle_path, ts)
@@ -70,36 +67,36 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
                         logger.warning(f"Failed to burn subtitle text onto {out_path}")
                 else:
                     logger.debug(f"No subtitle text found at timestamp {ts}s")
-        
+
         logger.info(f"_ffmpeg_job completed: returncode={proc.returncode}, elapsed={elapsed:.2f}s, output_exists={Path(out_path).exists()}")
         if proc.returncode != 0:
             stderr_full = (proc.stderr.decode("utf-8", "ignore") if proc.stderr else "")
             stdout_full = (proc.stdout.decode("utf-8", "ignore") if proc.stdout else "")
             stderr_preview = stderr_full[:500] if len(stderr_full) > 500 else stderr_full
             stdout_preview = stdout_full[:200] if len(stdout_full) > 200 else stdout_full
-            
+
             # Collect diagnostic information
             video_exists = Path(video_path_normalized).exists()
             output_dir = Path(out_path).parent
             output_dir_exists = output_dir.exists()
             output_dir_writable = os.access(output_dir, os.W_OK) if output_dir_exists else False
             output_file_exists = Path(out_path).exists()
-            
+
             # Try to get video length to check if timestamp is valid
             video_length = None
             try:
                 video_length = get_video_length(str(video_path_normalized))
             except:
                 pass
-            
+
             error_msg = f"_ffmpeg_job failed: video={Path(video_path_local).name}, ts={ts}s, returncode={proc.returncode}"
             if stderr_preview:
                 error_msg += f", stderr={stderr_preview}"
             elif not stderr_full:
-                error_msg += f", stderr=(empty)"
+                error_msg += ", stderr=(empty)"
             if stdout_preview:
                 error_msg += f", stdout={stdout_preview}"
-            
+
             # Add diagnostic info
             error_msg += f", video_exists={video_exists}"
             if not video_exists:
@@ -114,10 +111,10 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
             if video_length is not None:
                 error_msg += f", video_length={video_length:.1f}s"
                 if ts > video_length:
-                    error_msg += f", timestamp_exceeds_length=True"
-            
+                    error_msg += ", timestamp_exceeds_length=True"
+
             logger.error(error_msg)
-            
+
         return {
             "returncode": proc.returncode,
             "stderr": (proc.stderr.decode("utf-8", "ignore") if proc.stderr else ""),
@@ -127,7 +124,7 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
             "video_path": str(video_path_local)
         }
     except subprocess.TimeoutExpired:
-        logger.error(f"_ffmpeg_job timed out after 30s")
+        logger.error("_ffmpeg_job timed out after 30s")
         return {
             "returncode": -1,
             "stderr": "timeout",
@@ -204,11 +201,11 @@ def kill_all_ffmpeg_processes():
         import platform
         if platform.system() == "Windows":
             # Windows: use taskkill
-            subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"], 
+            subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"],
                          capture_output=True, timeout=5)
         else:
             # Unix: use pkill
-            subprocess.run(["pkill", "-9", "ffmpeg"], 
+            subprocess.run(["pkill", "-9", "ffmpeg"],
                          capture_output=True, timeout=5)
         logger.info("Killed all ffmpeg processes")
     except Exception as e:
@@ -236,7 +233,7 @@ def run_interruptible_subprocess(cmd, timeout=30, capture_output=True, cwd=None)
     """Run a subprocess that can be interrupted by shutdown flag"""
     if shutdown_flag.is_set():
         return None
-    
+
     proc = None
     start_time = time.time()
     try:
@@ -253,23 +250,23 @@ def run_interruptible_subprocess(cmd, timeout=30, capture_output=True, cwd=None)
         if create_time > 0.1:
             cmd_name = Path(cmd[0]).name if cmd else "unknown"
             logger.warning(f"Subprocess {cmd_name} creation took {create_time:.2f}s (slow)")
-        
+
         register_subprocess(proc)
-        
+
         try:
             # Diagnostic: Time the actual communication/wait
             comm_start = time.time()
             stdout, stderr = proc.communicate(timeout=timeout)
             comm_time = time.time() - comm_start
             elapsed = time.time() - start_time
-            
+
             cmd_name = Path(cmd[0]).name if cmd else "unknown"
             if elapsed > 1:
                 logger.warning(f"Subprocess {cmd_name} took {elapsed:.2f}s total (create: {create_time:.3f}s, execute: {comm_time:.2f}s)")
                 if stderr:
                     stderr_preview = stderr.decode('utf-8', errors='ignore')[:500]
                     logger.debug(f"Stderr preview: {stderr_preview}")
-            
+
             return subprocess.CompletedProcess(
                 cmd, proc.returncode, stdout, stderr
             )
@@ -278,7 +275,7 @@ def run_interruptible_subprocess(cmd, timeout=30, capture_output=True, cwd=None)
             cmd_name = Path(cmd[0]).name if cmd else "unknown"
             logger.error(f"Subprocess {cmd_name} timed out after {elapsed:.1f}s (timeout={timeout}s)")
             if proc.poll() is None:
-                logger.error(f"Process still running, killing...")
+                logger.error("Process still running, killing...")
             proc.kill()
             proc.wait()
             raise
@@ -300,18 +297,18 @@ def _get_ffprobe_path_from_config() -> str:
     from config import load_config
     config = load_config()
     ffprobe_path = config.get('ffprobe_path')
-    
+
     if not ffprobe_path:
         logger.error("ffprobe_path not configured. Setup must test and save ffprobe_path before use.")
         return None
-    
+
     ffprobe_path = str(ffprobe_path)
-    
+
     # Verify the path still exists
     if not os.path.exists(ffprobe_path):
         logger.error(f"Stored ffprobe_path no longer exists: {ffprobe_path}")
         return None
-        
+
     return ffprobe_path
 
 def get_video_length(file_path):
@@ -359,12 +356,12 @@ def has_video_stream(file_path):
     ffprobe = _get_ffprobe_path_from_config()
     if not ffprobe:
         return False
-    
+
     # Check if file exists first
     if not os.path.exists(file_path):
         logger.warning(f"Cannot check video stream: file does not exist: {file_path}")
         return False
-        
+
     try:
         cmd = [
             ffprobe,
@@ -393,17 +390,17 @@ def validate_ffmpeg_path(ffmpeg_path):
     """Validate that an ffmpeg path exists and is executable"""
     if not ffmpeg_path:
         return False, "Path is empty"
-    
+
     path_obj = Path(ffmpeg_path)
-    
+
     # Check if file exists
     if not path_obj.exists():
         return False, f"Path does not exist: {ffmpeg_path}"
-    
+
     # Check if it's a file (not a directory)
     if not path_obj.is_file():
         return False, f"Path is not a file: {ffmpeg_path}"
-    
+
     # Try to execute ffmpeg -version to verify it's actually ffmpeg
     try:
         result = subprocess.run([str(path_obj), "-version"], capture_output=True, timeout=5)
@@ -438,7 +435,7 @@ def test_ffmpeg_comprehensive(ffmpeg_path, ffprobe_path=None):
             "ffmpeg_version": None,
             "ffprobe_version": None
         }
-    
+
     results = {
         "ok": True,
         "ffmpeg_ok": False,
@@ -449,7 +446,7 @@ def test_ffmpeg_comprehensive(ffmpeg_path, ffprobe_path=None):
         "ffmpeg_version": None,
         "ffprobe_version": None
     }
-    
+
     # Test ffmpeg
     ffmpeg_path_obj = Path(ffmpeg_path)
     if not ffmpeg_path_obj.exists():
@@ -457,7 +454,7 @@ def test_ffmpeg_comprehensive(ffmpeg_path, ffprobe_path=None):
         results["ffmpeg_ok"] = False
         results["errors"].append(f"ffmpeg executable not found: {ffmpeg_path}")
         return results
-    
+
     try:
         result = subprocess.run([str(ffmpeg_path_obj), "-version"], capture_output=True, timeout=5, text=True)
         if result.returncode == 0:
@@ -475,7 +472,7 @@ def test_ffmpeg_comprehensive(ffmpeg_path, ffprobe_path=None):
     except Exception as e:
         results["ok"] = False
         results["errors"].append(f"Error testing ffmpeg: {str(e)}")
-    
+
     # Test ffprobe
     # If ffprobe_path is provided, use it directly (e.g., from find_ffmpeg_and_ffprobe_in_winget)
     if ffprobe_path:
@@ -490,13 +487,13 @@ def test_ffmpeg_comprehensive(ffmpeg_path, ffprobe_path=None):
             # Check PATH
             None  # Will check via shutil.which below
         ]
-        
+
         # Also check PATH for ffprobe
         import shutil
         ffprobe_in_path = shutil.which("ffprobe")
         if ffprobe_in_path:
             ffprobe_candidates.insert(0, Path(ffprobe_in_path))
-        
+
         # For winget installations, check sibling directories
         if "WinGet" in str(ffmpeg_path_obj) or "winget" in str(ffmpeg_path_obj).lower():
             # Look in parent directories for ffprobe
@@ -509,7 +506,7 @@ def test_ffmpeg_comprehensive(ffmpeg_path, ffprobe_path=None):
                         if probe_candidate.exists():
                             ffprobe_candidates.insert(0, probe_candidate)
                 current_dir = parent_dir
-    
+
     ffprobe_found = False
     for ffprobe_candidate in ffprobe_candidates:
         if ffprobe_candidate is None:
@@ -531,16 +528,16 @@ def test_ffmpeg_comprehensive(ffmpeg_path, ffprobe_path=None):
                 results["errors"].append(f"ffprobe -version timed out at {ffprobe_candidate}")
             except Exception as e:
                 results["errors"].append(f"Error testing ffprobe at {ffprobe_candidate}: {str(e)}")
-    
+
     if not ffprobe_found:
         results["ok"] = False
         if not results["errors"]:
             results["errors"].append(f"ffprobe not found. Checked: {[str(c) for c in ffprobe_candidates if c]}")
-    
+
     # Overall status
     if not results["ffmpeg_ok"] or not results["ffprobe_ok"]:
         results["ok"] = False
-    
+
     return results
 
 def find_ffmpeg(load_config_func):
@@ -548,14 +545,14 @@ def find_ffmpeg(load_config_func):
     global _CACHED_FFMPEG_PATH
     if _CACHED_FFMPEG_PATH:
         return _CACHED_FFMPEG_PATH
-    
+
     config = load_config_func()
     configured_path = config.get("ffmpeg_path")
-    
+
     if not configured_path:
         logger.error("ffmpeg_path not configured. Set ffmpeg_path in configuration to use frame extraction.")
         return None
-    
+
     # Validate the configured path
     is_valid, error_msg = validate_ffmpeg_path(configured_path)
     if is_valid:
@@ -575,10 +572,10 @@ def find_ffmpeg(load_config_func):
 def _import_screenshot_functions():
     """Lazy import to avoid circular dependencies"""
     from video.screenshot import (
-        generate_screenshot_filename,
         extract_movie_screenshot,
+        extract_screenshots,
+        generate_screenshot_filename,
         process_screenshot_extraction_worker,
-        extract_screenshots
     )
     return {
         'generate_screenshot_filename': generate_screenshot_filename,
@@ -607,10 +604,10 @@ def extract_screenshots(*args, **kwargs):
 def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
     """Process queued screenshot extractions in background thread pool"""
     global frame_executor, process_executor, frame_processing_active, frame_extraction_queue
-    
+
     queue_size = frame_extraction_queue.qsize()
     logger.info(f"process_frame_queue called: max_workers={max_workers}, queue_size={queue_size}, frame_processing_active={frame_processing_active}")
-    
+
     if frame_processing_active:
         # Log that it's already running to aid diagnostics
         logger.info(f"Background screenshot extraction already running (queue: {queue_size}), skipping start")
@@ -619,11 +616,11 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
         except Exception:
             pass
         return
-    
+
     frame_processing_active = True
     logger.info(f"Starting background screenshot extraction worker: queue_size={queue_size}, max_workers={max_workers}")
     add_scan_log_func("info", f"Starting background screenshot extraction... (queue: {queue_size})")
-    
+
     def worker():
         # Thread pool here is only used to parallelize lightweight submission if desired
         # We prioritize process-based parallelism for ffmpeg itself.
@@ -632,10 +629,10 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
         if process_executor is None:
             workers = max(2, min(6, (os.cpu_count() or 4)))
             process_executor = ProcessPoolExecutor(max_workers=workers)
-        
+
         # Continue processing while queue has items or scan is still running
         processed_count = 0
-        logger.info(f"Worker thread started, entering main loop")
+        logger.info("Worker thread started, entering main loop")
         while not shutdown_flag.is_set():
             try:
                 queue_size = frame_extraction_queue.qsize()
@@ -658,7 +655,7 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
                             logger.debug(f"Queue empty and scan done, but {active_count} extractions active. Waiting...")
                             time.sleep(0.5)
                             continue
-                            
+
                         logger.info(f"Queue empty, scan not running, and no active extractions. Breaking worker loop (processed: {processed_count})")
                         break
                     continue
@@ -677,23 +674,23 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
                 future = frame_executor.submit(process_screenshot_extraction_worker, screenshot_info)
                 processed_count += 1
                 frame_extraction_queue.task_done()
-                
+
                 # Don't wait for result here - let it run in parallel
                 # Just track that we submitted it
-                
+
             except Exception as e:
                 logger.error(f"Error in screenshot extraction worker: {e}", exc_info=True)
-        
+
         # Shutdown executor with timeout (interruptible)
         if frame_executor:
             frame_executor.shutdown(wait=False)  # Don't wait, allow interruption
             # Give a short time for tasks to finish
             time.sleep(0.5)
-            
+
             # Only kill subprocesses on forced shutdown
             if shutdown_flag.is_set():
                 kill_all_active_subprocesses()
-                
+
             # Allow clean recreation on next start
             frame_executor = None
         if process_executor:
@@ -703,7 +700,7 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
                 pass
             # Allow clean recreation on next start
             process_executor = None
-        
+
         global frame_processing_active
         frame_processing_active = False
         remaining = frame_extraction_queue.qsize()
@@ -711,7 +708,7 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
             add_scan_log_func("success", f"All screenshot extractions completed ({processed_count} processed)")
         else:
             add_scan_log_func("warning", f"Screenshot extraction stopped with {remaining} items remaining")
-    
+
     # Start worker thread
     worker_thread = threading.Thread(target=worker, daemon=True)
     worker_thread.start()

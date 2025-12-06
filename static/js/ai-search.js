@@ -180,16 +180,19 @@ function renderAiResults(data) {
     const foundMovies = Array.isArray(data.found_movies) ? data.found_movies : [];
     const missingMovies = Array.isArray(data.missing_movies) ? data.missing_movies : [];
     const overallComment = (data.comment || '').trim();
-    const listSlug = data.movie_list_slug;
+    const listId = data.movie_list_id;
     const listTitle = data.title || '';
     
     // Build header with title and link to saved list
     let headerBlock = '';
-    if (listTitle || listSlug) {
+    if (listTitle || listId) {
+        const slug = (listTitle || '').toString().toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'list';
         headerBlock = `
             <div class="ai-results-header">
                 <div class="ai-results-title">${escapeHtml(listTitle)}</div>
-                ${listSlug ? `<a href="#/lists/${escapeHtml(listSlug)}" class="ai-results-link">View saved list →</a>` : ''}
+                ${listId ? `<a href="#/lists/${listId}/${escapeHtml(slug)}" class="ai-results-link">View saved list →</a>` : ''}
             </div>
         `;
     }

@@ -20,23 +20,22 @@ Options:
     --sample           Import only first 1000 movies (for testing)
 """
 
-import os
-import gzip
-import csv
-import logging
 import argparse
-import requests
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-from datetime import datetime
+import csv
+import gzip
+import logging
+import os
 import sys
+from pathlib import Path
+
+import requests
 
 # Add project root to path so we can import database models
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 from database import SessionLocal
-from models import ExternalMovie, Person, MovieCredit, CURRENT_SCHEMA_VERSION
+from models import ExternalMovie, MovieCredit, Person
 
 # Setup logging
 logging.basicConfig(
@@ -288,7 +287,6 @@ class IMDbImporter:
         """Automatically link local movies to IMDb movies using fuzzy matching"""
         logger.info("Starting auto-linking of local movies to IMDb data...")
 
-        from scanning import clean_movie_name
         from fuzzywuzzy import fuzz
         from fuzzywuzzy.process import extractOne
 
