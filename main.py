@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from database import (
+    AiReview,
     Config,
     ExternalMovie,
     IndexedPath,
@@ -320,6 +321,18 @@ def build_movie_cards(db, movies: list[Movie]) -> dict:
                 # Insert at beginning since it's a system playlist
                 playlist_map[movie_id].insert(0, "Want to Watch")
 
+    # 6. Batch load review counts
+    review_count_map = {}
+    if movie_ids:
+        from sqlalchemy import func
+        review_rows = db.query(
+            AiReview.movie_id,
+            func.count(AiReview.id).label('count')
+        ).filter(
+            AiReview.movie_id.in_(movie_ids)
+        ).group_by(AiReview.movie_id).all()
+        review_count_map = {movie_id: count for movie_id, count in review_rows}
+
     # Build result
     results = {}
     for m in movies:
@@ -356,6 +369,7 @@ def build_movie_cards(db, movies: list[Movie]) -> dict:
             "screenshot_id": screenshot_id,
             "rating": rating_map.get(m.id),
             "playlists": playlist_map.get(m.id, []),
+            "review_count": review_count_map.get(m.id, 0),
             # Include filtered screenshots list
             "screenshots": [
                 {"id": s.id, "path": s.shot_path, "timestamp_seconds": s.timestamp_seconds}
@@ -495,6 +509,8 @@ from core.models import (
     PlaylistAddMovieRequest,
     PlaylistCreateRequest,
     RatingRequest,
+    RelatedMoviesRequest,
+    ReviewRequest,
     ScreenshotsIntervalRequest,
 )
 
@@ -1625,17 +1641,52 @@ async def get_history():
 @app.get("/api/launch-history")
 async def get_launch_history(
     page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(20, ge=1, le=100, description="Items per page")
+    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    search: str = Query(None, description="Search by movie title"),
+    date_filter: str = Query(None, description="Filter by date: today, yesterday, this_week, this_month, or all")
 ):
     """Get launch history with movie information"""
+    from sqlalchemy import func, or_
+    from datetime import timedelta
+    
     db = SessionLocal()
     try:
-        # Get total count
-        total = db.query(LaunchHistory).count()
-
+        # Build base query
+        query = db.query(LaunchHistory)
+        
+        # Apply date filter
+        if date_filter and date_filter != "all":
+            now = datetime.now()
+            if date_filter == "today":
+                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                query = query.filter(LaunchHistory.created >= start_date)
+            elif date_filter == "yesterday":
+                start_date = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                query = query.filter(LaunchHistory.created >= start_date, LaunchHistory.created < end_date)
+            elif date_filter == "this_week":
+                # Start of week (Monday)
+                days_since_monday = now.weekday()
+                start_date = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                query = query.filter(LaunchHistory.created >= start_date)
+            elif date_filter == "this_month":
+                start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                query = query.filter(LaunchHistory.created >= start_date)
+        
+        # Apply search filter by joining with movies table
+        if search and search.strip():
+            search_lower = search.lower().strip()
+            # Join with Movie table to filter by name
+            query = query.join(Movie, LaunchHistory.movie_id == Movie.id).filter(
+                func.lower(Movie.name).contains(search_lower)
+            )
+        
+        # Get total count (before pagination)
+        total = query.count()
+        
         # Query paginated launches
         offset = (page - 1) * per_page
-        launches = db.query(LaunchHistory).order_by(
+        launches = query.order_by(
             LaunchHistory.created.desc()
         ).offset(offset).limit(per_page).all()
 
@@ -3605,6 +3656,561 @@ async def get_movie_lists(movie_id: int):
     finally:
         db.close()
 
+# --- AI Review Endpoints ---
+
+@app.get("/api/movie/{movie_id}/reviews")
+async def get_movie_reviews(movie_id: int):
+    """Get all AI-generated reviews for a specific movie"""
+    db = SessionLocal()
+    try:
+        # Verify movie exists
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        
+        # Get all reviews for this movie, ordered by created DESC
+        reviews = db.query(AiReview).filter(
+            AiReview.movie_id == movie_id
+        ).order_by(AiReview.created.desc()).all()
+        
+        return {
+            "movie_id": movie_id,
+            "reviews": [
+                {
+                    "id": review.id,
+                    "prompt_type": review.prompt_type,
+                    "model_provider": review.model_provider,
+                    "model_name": review.model_name,
+                    "response_text": review.response_text,
+                    "further_instructions": review.further_instructions,
+                    "cost_usd": review.cost_usd,
+                    "created": review.created.isoformat() if review.created else None
+                }
+                for review in reviews
+            ]
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/movie/{movie_id}/review")
+async def generate_movie_review(movie_id: int, request: ReviewRequest):
+    """Generate an AI review for a movie using SSE streaming"""
+    openai_key, anthropic_key = load_api_keys()
+    
+    if request.provider == "openai" and not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not found in settings.json")
+    if request.provider == "anthropic" and not anthropic_key:
+        raise HTTPException(status_code=400, detail="Anthropic API key not found in settings.json")
+    
+    interaction_id = str(uuid.uuid4())
+    
+    def generate_sse():
+        """Generator that yields SSE events with progress updates."""
+        
+        def send_progress(step: int, total: int, message: str):
+            event_data = json.dumps({"type": "progress", "step": step, "total": total, "message": message})
+            return f"data: {event_data}\n\n"
+        
+        def send_result(result: dict):
+            event_data = json.dumps({"type": "result", **result})
+            return f"data: {event_data}\n\n"
+        
+        def send_error(error_msg: str):
+            event_data = json.dumps({"type": "error", "detail": error_msg})
+            return f"data: {event_data}\n\n"
+        
+        db = SessionLocal()
+        try:
+            # Step 1: Get movie details
+            yield send_progress(1, 3, "Preparing query for AI...")
+            
+            movie = db.query(Movie).filter(Movie.id == movie_id).first()
+            if not movie:
+                yield send_error("Movie not found")
+                return
+            
+            # Try to get director from IMDb data
+            director = None
+            try:
+                from fuzzywuzzy import fuzz
+                from fuzzywuzzy.process import extractOne
+                
+                search_title = movie.name.lower()
+                imdb_movies = db.query(ExternalMovie).all()
+                
+                if imdb_movies:
+                    imdb_titles = {}
+                    for imdb_movie in imdb_movies:
+                        title_key = imdb_movie.primary_title.lower()
+                        if imdb_movie.year:
+                            title_key += f" ({imdb_movie.year})"
+                        imdb_titles[title_key] = imdb_movie
+                    
+                    if imdb_titles:
+                        best_match = extractOne(search_title, list(imdb_titles.keys()), scorer=fuzz.token_sort_ratio)
+                        if best_match and best_match[1] > 85:
+                            imdb_movie = imdb_titles[best_match[0]]
+                            
+                            # Get directors
+                            credits = db.query(MovieCredit, Person).join(
+                                Person, MovieCredit.person_id == Person.id
+                            ).filter(
+                                MovieCredit.movie_id == imdb_movie.id,
+                                MovieCredit.category == 'director'
+                            ).all()
+                            
+                            if credits:
+                                director_names = [person.primary_name for _, person in credits]
+                                director = ", ".join(director_names)
+            except Exception as e:
+                logger.warning(f"Could not fetch director info: {e}")
+            
+            # Build prompt
+            # Note: movie.length is stored in SECONDS in the database
+            prompt = build_review_prompt(
+                movie_name=movie.name,
+                year=movie.year,
+                director=director,
+                length_seconds=movie.length,  # movie.length is in seconds
+                further_instructions=request.further_instructions
+            )
+            
+            logger.info(f"Review interaction {interaction_id} prompt payload:\n{prompt.strip()}")
+            
+            # Step 2: Call AI
+            provider_display = "OpenAI" if request.provider == "openai" else "Anthropic"
+            yield send_progress(2, 3, f"Waiting for {provider_display} response...")
+            
+            response_text = ""
+            cost_cents = None
+            cost_usd = None
+            cost_details = "Cost not available."
+            model_name = None
+            
+            try:
+                if request.provider == "openai":
+                    provider_key = "openai"
+                    model_config = next((m for m in AI_MODELS if m["provider"] == "openai"), None)
+                    model_name = model_config["model_id"] if model_config else "gpt-5.1"
+                    client = openai.OpenAI(api_key=openai_key)
+                    logger.info(f"Review interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
+                    
+                    completion = client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": "You are a helpful movie review assistant."},
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+                    
+                    response_text = completion.choices[0].message.content
+                    logger.info(f"Review interaction {interaction_id} <- response from {provider_key} ({model_name}): {response_text[:200]}...")
+                    
+                    if completion.usage:
+                        in_tokens = completion.usage.prompt_tokens or 0
+                        out_tokens = completion.usage.completion_tokens or 0
+                        cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                    else:
+                        model_label = AI_PRICING[provider_key]["model"]
+                        cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
+                
+                elif request.provider == "anthropic":
+                    provider_key = "anthropic"
+                    model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
+                    model_name = model_config["model_id"] if model_config else "claude-opus-4-5-20251101"
+                    client = anthropic.Anthropic(api_key=anthropic_key)
+                    logger.info(f"Review interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
+                    
+                    message = client.messages.create(
+                        model=model_name,
+                        max_tokens=4096,
+                        system="You are a helpful movie review assistant.",
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+                    
+                    response_text = message.content[0].text
+                    logger.info(f"Review interaction {interaction_id} <- response from {provider_key} ({model_name}): {response_text[:200]}...")
+                    
+                    if message.usage:
+                        in_tokens = message.usage.input_tokens or 0
+                        out_tokens = message.usage.output_tokens or 0
+                        cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                    else:
+                        model_label = AI_PRICING[provider_key]["model"]
+                        cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
+            
+            except Exception as e:
+                logger.error(f"Review interaction {interaction_id} error: {e}")
+                yield send_error(str(e))
+                return
+            
+            # Step 3: Save review
+            yield send_progress(3, 3, "Saving review...")
+            
+            cost_usd_payload = round(cost_usd, 6) if cost_usd is not None else None
+            
+            review = AiReview(
+                movie_id=movie_id,
+                prompt_text=prompt,
+                model_provider=request.provider,
+                model_name=model_name or "unknown",
+                response_text=response_text,
+                prompt_type="default",
+                further_instructions=request.further_instructions,
+                cost_usd=cost_usd_payload,
+                user_id=None  # Blank for now
+            )
+            db.add(review)
+            db.commit()
+            db.refresh(review)
+            
+            logger.info(f"Review interaction {interaction_id} completed: review_id={review.id}, est_cost_usd=${cost_usd_payload:.6f}" if cost_usd_payload else "unknown")
+            
+            yield send_result({
+                "review_id": review.id,
+                "response_text": response_text,
+                "cost_usd": cost_usd_payload,
+                "cost_details": cost_details,
+                "model_provider": request.provider,
+                "model_name": model_name
+            })
+        
+        except Exception as e:
+            logger.error(f"Review generation error: {e}")
+            yield send_error(str(e))
+        finally:
+            db.close()
+    
+    return StreamingResponse(
+        generate_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.delete("/api/movie/{movie_id}/review/{review_id}")
+async def delete_movie_review(movie_id: int, review_id: int):
+    """Delete an AI-generated review"""
+    db = SessionLocal()
+    try:
+        review = db.query(AiReview).filter(
+            AiReview.id == review_id,
+            AiReview.movie_id == movie_id
+        ).first()
+        
+        if not review:
+            raise HTTPException(status_code=404, detail="Review not found")
+        
+        db.delete(review)
+        db.commit()
+        
+        return {"status": "deleted", "review_id": review_id}
+    finally:
+        db.close()
+
+
+@app.get("/api/movies/reviews-count")
+async def get_reviews_count(movie_ids: str = Query(..., description="Comma-separated movie IDs")):
+    """Get review counts for multiple movies (for efficient movie card queries)"""
+    db = SessionLocal()
+    try:
+        ids = [int(id.strip()) for id in movie_ids.split(",") if id.strip().isdigit()]
+        if not ids:
+            return {"counts": {}}
+        
+        # Query review counts
+        from sqlalchemy import func
+        results = db.query(
+            AiReview.movie_id,
+            func.count(AiReview.id).label('count')
+        ).filter(
+            AiReview.movie_id.in_(ids)
+        ).group_by(AiReview.movie_id).all()
+        
+        counts = {movie_id: count for movie_id, count in results}
+        
+        # Include movies with 0 reviews
+        return {"counts": {movie_id: counts.get(movie_id, 0) for movie_id in ids}}
+    finally:
+        db.close()
+
+
+@app.post("/api/movie/{movie_id}/related-movies")
+async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
+    """Generate related movies for a movie using SSE streaming"""
+    openai_key, anthropic_key = load_api_keys()
+    
+    if request.provider == "openai" and not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not found in settings.json")
+    if request.provider == "anthropic" and not anthropic_key:
+        raise HTTPException(status_code=400, detail="Anthropic API key not found in settings.json")
+    
+    interaction_id = str(uuid.uuid4())
+    
+    def generate_sse():
+        """Generator that yields SSE events with progress updates."""
+        
+        def send_progress(step: int, total: int, message: str):
+            event_data = json.dumps({"type": "progress", "step": step, "total": total, "message": message})
+            return f"data: {event_data}\n\n"
+        
+        def send_result(result: dict):
+            event_data = json.dumps({"type": "result", **result})
+            return f"data: {event_data}\n\n"
+        
+        def send_error(error_msg: str):
+            event_data = json.dumps({"type": "error", "detail": error_msg})
+            return f"data: {event_data}\n\n"
+        
+        db = SessionLocal()
+        try:
+            # Step 1: Get movie details
+            yield send_progress(1, 3, "Preparing query for AI...")
+            
+            movie = db.query(Movie).filter(Movie.id == movie_id).first()
+            if not movie:
+                yield send_error("Movie not found")
+                return
+            
+            # Try to get director from IMDb data
+            director = None
+            try:
+                from fuzzywuzzy import fuzz
+                from fuzzywuzzy.process import extractOne
+                
+                search_title = movie.name.lower()
+                imdb_movies = db.query(ExternalMovie).all()
+                
+                if imdb_movies:
+                    imdb_titles = {}
+                    for imdb_movie in imdb_movies:
+                        title_key = imdb_movie.primary_title.lower()
+                        if imdb_movie.year:
+                            title_key += f" ({imdb_movie.year})"
+                        imdb_titles[title_key] = imdb_movie
+                    
+                    if imdb_titles:
+                        best_match = extractOne(search_title, list(imdb_titles.keys()), scorer=fuzz.token_sort_ratio)
+                        if best_match and best_match[1] > 85:
+                            imdb_movie = imdb_titles[best_match[0]]
+                            
+                            # Get directors
+                            credits = db.query(MovieCredit, Person).join(
+                                Person, MovieCredit.person_id == Person.id
+                            ).filter(
+                                MovieCredit.movie_id == imdb_movie.id,
+                                MovieCredit.category == 'director'
+                            ).all()
+                            
+                            if credits:
+                                director_names = [person.primary_name for _, person in credits]
+                                director = ", ".join(director_names)
+            except Exception as e:
+                logger.warning(f"Could not fetch director info: {e}")
+            
+            # Build prompt
+            prompt = build_related_movies_prompt(
+                movie_name=movie.name,
+                year=movie.year,
+                director=director
+            )
+            
+            logger.info(f"Related movies interaction {interaction_id} prompt payload:\n{prompt.strip()}")
+            
+            # Step 2: Call AI
+            provider_display = "OpenAI" if request.provider == "openai" else "Anthropic"
+            yield send_progress(2, 3, f"Waiting for {provider_display} response...")
+            
+            response_text = ""
+            cost_cents = None
+            cost_usd = None
+            cost_details = "Cost not available."
+            model_name = None
+            
+            try:
+                if request.provider == "openai":
+                    provider_key = "openai"
+                    model_config = next((m for m in AI_MODELS if m["provider"] == "openai"), None)
+                    model_name = model_config["model_id"] if model_config else "gpt-5.1"
+                    client = openai.OpenAI(api_key=openai_key)
+                    logger.info(f"Related movies interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
+                    
+                    completion = client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": "You are a helpful movie assistant. Return JSON only."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        response_format={"type": "json_object"}
+                    )
+                    
+                    response_text = completion.choices[0].message.content
+                    logger.info(f"Related movies interaction {interaction_id} <- response from {provider_key} ({model_name}): {response_text[:200]}...")
+                    
+                    if completion.usage:
+                        in_tokens = completion.usage.prompt_tokens or 0
+                        out_tokens = completion.usage.completion_tokens or 0
+                        cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                    else:
+                        model_label = AI_PRICING[provider_key]["model"]
+                        cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
+                
+                elif request.provider == "anthropic":
+                    provider_key = "anthropic"
+                    model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
+                    model_name = model_config["model_id"] if model_config else "claude-opus-4-5-20251101"
+                    client = anthropic.Anthropic(api_key=anthropic_key)
+                    logger.info(f"Related movies interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
+                    
+                    message = client.messages.create(
+                        model=model_name,
+                        max_tokens=4096,
+                        system="You are a helpful movie assistant. Return JSON only.",
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+                    
+                    response_text = message.content[0].text
+                    logger.info(f"Related movies interaction {interaction_id} <- response from {provider_key} ({model_name}): {response_text[:200]}...")
+                    
+                    if message.usage:
+                        in_tokens = message.usage.input_tokens or 0
+                        out_tokens = message.usage.output_tokens or 0
+                        cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                    else:
+                        model_label = AI_PRICING[provider_key]["model"]
+                        cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
+            
+            except Exception as e:
+                logger.error(f"Related movies interaction {interaction_id} error: {e}")
+                yield send_error(str(e))
+                return
+            
+            # Step 3: Parse and match movies
+            yield send_progress(3, 3, "Matching movies in your library...")
+            
+            try:
+                response_data = parse_ai_response_json(response_text, interaction_id, f"{request.provider} ({model_name})")
+            except Exception as e:
+                logger.error(f"Failed to parse related movies response: {e}")
+                yield send_error("Failed to parse AI response")
+                return
+            
+            # Match against DB (reuse logic from AI search)
+            found_movies = []
+            missing_movies = []
+            
+            try:
+                all_movies = db.query(Movie).filter(Movie.hidden == False).all()
+                
+                # Pre-process DB movies for faster matching
+                db_movie_map = {}
+                for m in all_movies:
+                    norm_name = re.sub(r'[^\w\s]', '', m.name).lower().strip()
+                    if norm_name not in db_movie_map:
+                        db_movie_map[norm_name] = []
+                    db_movie_map[norm_name].append(m)
+                
+                for ai_movie in response_data.get("movies", []):
+                    title = ai_movie.get("name", "")
+                    year = ai_movie.get("year")
+                    relationship = ai_movie.get("relationship", "Related movie")
+                    
+                    if not title:
+                        continue
+                    
+                    # 1. Try exact normalized match
+                    norm_title = re.sub(r'[^\w\s]', '', title).lower().strip()
+                    candidates = db_movie_map.get(norm_title, [])
+                    
+                    # 2. If no exact match, try fuzzy match
+                    if not candidates and db_movie_map:
+                        from fuzzywuzzy.process import extractOne
+                        best_match_result = extractOne(norm_title, list(db_movie_map.keys()), scorer=fuzz.token_sort_ratio)
+                        if best_match_result:
+                            best_match_name, score = best_match_result
+                            if score > 85:
+                                candidates = db_movie_map[best_match_name]
+                    
+                    if candidates:
+                        # Disambiguate by year
+                        matches = []
+                        if year and len(candidates) > 1:
+                            try:
+                                target_year = int(year)
+                                for cand in candidates:
+                                    if cand.year and abs(cand.year - target_year) <= 1:
+                                        matches.append(cand)
+                            except (ValueError, TypeError):
+                                pass
+                            
+                            if not matches:
+                                matches = candidates
+                        else:
+                            matches = candidates
+                    else:
+                        matches = []
+                    
+                    if matches:
+                        # Build standardized movie cards
+                        movie_cards = build_movie_cards(db, matches)
+                        
+                        for match in matches:
+                            card = movie_cards.get(match.id)
+                            if card:
+                                # Add relationship badge
+                                card["relationship"] = relationship
+                                found_movies.append(card)
+                                break  # Only take first match
+                    else:
+                        missing_movies.append({
+                            "name": title,
+                            "year": year,
+                            "relationship": relationship
+                        })
+            
+            except Exception as e:
+                logger.error(f"Error processing related movies: {e}")
+                yield send_error(f"Error processing results: {str(e)}")
+                return
+            
+            cost_usd_payload = round(cost_usd, 6) if cost_usd is not None else None
+            
+            logger.info(f"Related movies interaction {interaction_id} completed: found={len(found_movies)}, missing={len(missing_movies)}, est_cost_usd=${cost_usd_payload:.6f}" if cost_usd_payload else "unknown")
+            
+            yield send_result({
+                "found_movies": found_movies,
+                "missing_movies": missing_movies,
+                "cost_usd": cost_usd_payload,
+                "cost_details": cost_details,
+                "model_provider": request.provider,
+                "model_name": model_name
+            })
+        
+        except Exception as e:
+            logger.error(f"Related movies generation error: {e}")
+            yield send_error(str(e))
+        finally:
+            db.close()
+    
+    return StreamingResponse(
+        generate_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
 # --- IMDb/Person Endpoints ---
 
 @app.get("/api/person/{person_id}")
@@ -3785,6 +4391,12 @@ def load_api_keys():
         logger.error(f"Error loading settings.json: {e}")
         return None, None
 
+# Centralized AI model configuration (shared across AI search and review features)
+AI_MODELS = [
+    {"provider": "openai", "model_id": "gpt-5.1", "display_name": "GPT-5.1"},
+    {"provider": "anthropic", "model_id": "claude-opus-4-5-20251101", "display_name": "Claude Opus 4.5"}
+]
+
 AI_PRICING = {
     "openai": {
         "model": "GPT-5.1",
@@ -3844,6 +4456,106 @@ def parse_ai_response_json(raw_text: str, interaction_id: str, provider_label: s
             f"Payload preview: {preview}"
         )
         raise ValueError("Failed to parse AI response JSON") from exc
+
+
+def build_review_prompt(movie_name: str, year: int | None, director: str | None, 
+                       length_seconds: float | None, further_instructions: str | None) -> str:
+    """Build the prompt for AI movie review generation.
+    
+    Args:
+        movie_name: Name of the movie
+        year: Release year (optional)
+        director: Director name(s) (optional)
+        length_seconds: Movie length in SECONDS (not minutes!) - stored in database as seconds
+        further_instructions: Additional user instructions (optional)
+    """
+    
+    # Build movie info section
+    movie_info_parts = [movie_name]
+    if year:
+        movie_info_parts.append(f"({year})")
+    if director:
+        movie_info_parts.append(f", directed by {director}")
+    if length_seconds:
+        # Convert seconds to hours and minutes
+        # movie.length is stored in SECONDS in the database
+        total_seconds = int(length_seconds)
+        total_minutes = total_seconds // 60
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+        
+        # Format runtime very explicitly: "X hours and Y minutes"
+        if hours > 0 and minutes > 0:
+            runtime_text = f"{hours} hour{'s' if hours != 1 else ''} and {minutes} minute{'s' if minutes != 1 else ''}"
+        elif hours > 0:
+            runtime_text = f"{hours} hour{'s' if hours != 1 else ''}"
+        else:
+            runtime_text = f"{minutes} minute{'s' if minutes != 1 else ''}"
+        movie_info_parts.append(f", runtime: {runtime_text}")
+    
+    movie_info = " ".join(movie_info_parts)
+    
+    # User profile section (blank for now)
+    user_profile = ""  # Placeholder for future user profile
+    
+    # Base instructions
+    base_instructions = """Give us detailed reviews from Roger Ebert and Quentin Tarantino. If no such review can be found, please search for the plot details and the overall opinion on the movie, including disagreements and uncertain opinions. Some people may like it, some people may not. That's fine. Just include both.
+
+Really preferentially include direct quotes from respected reviewers, in my case like Ebert and Tarantino, and others possibly. Don't ever compress text, include the full quote as far as it's important and interesting.
+
+And then also, if there is no such review, just compose one as you imagine based on the description of the movie, anything that you can find about the movie."""
+    
+    # Build full prompt
+    prompt_parts = [
+        f"Hi, this user is requesting a detailed movie review of {movie_info}.",
+    ]
+    
+    if user_profile:
+        prompt_parts.append(f"\nUser profile: {user_profile}\n")
+    else:
+        prompt_parts.append("\n")
+    
+    prompt_parts.append(base_instructions)
+    
+    if further_instructions and further_instructions.strip():
+        prompt_parts.append(f"\n\nAdditional instructions: {further_instructions.strip()}")
+    
+    prompt_parts.append("\n\nOnce you've generated this, return it to the frontend.")
+    
+    return "".join(prompt_parts)
+
+
+def build_related_movies_prompt(movie_name: str, year: int | None, director: str | None) -> str:
+    """Build the prompt for finding related movies."""
+    
+    # Build movie info section
+    movie_info_parts = [movie_name]
+    if year:
+        movie_info_parts.append(f"({year})")
+    if director:
+        movie_info_parts.append(f", directed by {director}")
+    
+    movie_info = " ".join(movie_info_parts)
+    
+    prompt = f"""Show 5 movies that are related to {movie_info}. For each movie, provide:
+- The movie name
+- The year it was released
+- A brief, punchy reason for the relationship (examples: "Director's previous film", "Director's next film", "Lead actor's previous film", "Often compared to this", "Spiritual successor", "Spiritual predecessor", "Opposite of this", "Same genre/style", "Influenced by this", "Influenced this film")
+
+Return JSON format:
+{{
+    "movies": [
+        {{
+            "name": "Movie Title",
+            "year": 1999,
+            "relationship": "Brief relationship reason"
+        }}
+    ]
+}}
+
+Focus on meaningful relationships like director connections, actor connections, thematic comparisons, and cinematic influences. Keep relationship descriptions tight and punchy (3-6 words max)."""
+    
+    return prompt
 
 
 def generate_movie_list_slug(title: str, db: Session) -> str:
@@ -4032,7 +4744,9 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         try:
             if request.provider == "openai":
                 provider_key = "openai"
-                model_name = "gpt-5.1"
+                # Find model from centralized list
+                model_config = next((m for m in AI_MODELS if m["provider"] == "openai"), None)
+                model_name = model_config["model_id"] if model_config else "gpt-5.1"
                 client = openai.OpenAI(api_key=openai_key)
                 logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                 completion = client.chat.completions.create(
@@ -4064,7 +4778,9 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
 
             elif request.provider == "anthropic":
                 provider_key = "anthropic"
-                model_name = "claude-opus-4-5-20251101"
+                # Find model from centralized list
+                model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
+                model_name = model_config["model_id"] if model_config else "claude-opus-4-5-20251101"
                 client = anthropic.Anthropic(api_key=anthropic_key)
                 logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                 message = client.messages.create(

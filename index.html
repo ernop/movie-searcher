@@ -256,6 +256,20 @@
         <!-- History Page -->
         <div class="page" id="pageHistory">
             <h1>Launch History</h1>
+            <div style="margin-bottom: 20px;">
+                <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;">
+                    <input type="text" id="historySearchInput" placeholder="Search by title..." 
+                        style="flex: 1; min-width: 200px; padding: 8px 12px; background: #2a2a2a; border: 1px solid #444; color: #e0e0e0; border-radius: 4px; font-size: 14px;"
+                        onkeypress="if(event.key === 'Enter') handleHistorySearch()">
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <a href="#/history?date_filter=today" id="historyFilterToday" class="history-date-filter" onclick="event.preventDefault(); setHistoryDateFilter('today'); return false;">Today</a>
+                        <a href="#/history?date_filter=yesterday" id="historyFilterYesterday" class="history-date-filter" onclick="event.preventDefault(); setHistoryDateFilter('yesterday'); return false;">Yesterday</a>
+                        <a href="#/history?date_filter=this_week" id="historyFilterThisWeek" class="history-date-filter" onclick="event.preventDefault(); setHistoryDateFilter('this_week'); return false;">This Week</a>
+                        <a href="#/history?date_filter=this_month" id="historyFilterThisMonth" class="history-date-filter" onclick="event.preventDefault(); setHistoryDateFilter('this_month'); return false;">This Month</a>
+                        <a href="#/history" id="historyFilterAll" class="history-date-filter" onclick="event.preventDefault(); setHistoryDateFilter('all'); return false;">All</a>
+                    </div>
+                </div>
+            </div>
             <div id="historyList" class="history-list"></div>
             <div id="historyPagination" class="pagination"></div>
         </div>

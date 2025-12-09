@@ -55,6 +55,387 @@ async function loadMovieLists(movieId) {
     }
 }
 
+// Load and render AI reviews for a movie
+async function loadMovieReviews(movieId) {
+    try {
+        const response = await fetch(`/api/movie/${movieId}/reviews`);
+        if (!response.ok) return '';
+
+        const data = await response.json();
+        const reviews = data.reviews || [];
+
+        if (reviews.length === 0) return '';
+
+        const reviewsHtml = reviews.map(review => {
+            const modelDisplay = review.model_provider === 'openai' 
+                ? (review.model_name === 'gpt-5.1' ? 'GPT-5.1' : review.model_name)
+                : (review.model_name.includes('opus') ? 'Claude Opus 4.5' : review.model_name);
+            const createdDate = review.created ? formatDate(new Date(review.created)) : '';
+            const costText = review.cost_usd ? `$${review.cost_usd.toFixed(6)}` : '';
+            
+            // Render Markdown to HTML
+            const formattedText = renderMarkdown(review.response_text);
+            
+            return `
+                <div class="ai-review-card" data-review-id="${review.id}">
+                    <div class="ai-review-header">
+                        <div class="ai-review-meta">
+                            <span class="ai-review-model">${escapeHtml(modelDisplay)}</span>
+                            <span class="ai-review-date">${createdDate}</span>
+                            ${costText ? `<span class="ai-review-cost">${costText}</span>` : ''}
+                            <span class="ai-review-type-badge">${escapeHtml(review.prompt_type)}</span>
+                        </div>
+                        <button class="btn btn-small btn-danger" onclick="deleteReview(${movieId}, ${review.id})" title="Delete review">Delete</button>
+                    </div>
+                    <div class="ai-review-content">${formattedText}</div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="movie-reviews-section">
+                <span class="movie-reviews-label">AI Reviews (${reviews.length})</span>
+                <div class="movie-reviews-list">${reviewsHtml}</div>
+            </div>
+        `;
+    } catch (error) {
+        console.error('Error loading reviews:', error);
+        return '';
+    }
+}
+
+// Generate a new review
+async function generateReview(movieId) {
+    const providerSelect = document.getElementById(`review-provider-${movieId}`);
+    const instructionsTextarea = document.getElementById(`review-instructions-${movieId}`);
+    const reviewContainer = document.getElementById(`review-generation-${movieId}`);
+    const reviewsContainer = document.getElementById(`movie-reviews-${movieId}`);
+    
+    if (!providerSelect || !reviewContainer) return;
+    
+    const provider = providerSelect.value;
+    const furtherInstructions = instructionsTextarea ? instructionsTextarea.value.trim() : null;
+    
+    // Disable button
+    const generateBtn = document.getElementById(`generate-review-btn-${movieId}`);
+    if (generateBtn) {
+        generateBtn.disabled = true;
+        generateBtn.textContent = 'Generating...';
+    }
+    
+    // Show progress UI
+    reviewContainer.innerHTML = `
+        <div class="ai-review-progress-container">
+            <div class="ai-review-progress-step" data-step="1">
+                <span class="ai-review-progress-indicator">○</span>
+                <span class="ai-review-progress-text">Preparing query for AI...</span>
+            </div>
+            <div class="ai-review-progress-step" data-step="2">
+                <span class="ai-review-progress-indicator">○</span>
+                <span class="ai-review-progress-text">Waiting for AI response...</span>
+            </div>
+            <div class="ai-review-progress-step" data-step="3">
+                <span class="ai-review-progress-indicator">○</span>
+                <span class="ai-review-progress-text">Saving review...</span>
+            </div>
+        </div>
+    `;
+    
+    function updateProgress(step, message) {
+        // Mark previous steps as completed
+        for (let i = 1; i < step; i++) {
+            const prevStep = reviewContainer.querySelector(`.ai-review-progress-step[data-step="${i}"]`);
+            if (prevStep) {
+                prevStep.classList.add('completed');
+                prevStep.classList.remove('active');
+                prevStep.querySelector('.ai-review-progress-indicator').textContent = '✓';
+            }
+        }
+        // Mark current step as active
+        const currentStep = reviewContainer.querySelector(`.ai-review-progress-step[data-step="${step}"]`);
+        if (currentStep) {
+            currentStep.classList.add('active');
+            currentStep.classList.remove('completed');
+            currentStep.querySelector('.ai-review-progress-indicator').textContent = '●';
+            currentStep.querySelector('.ai-review-progress-text').textContent = message;
+        }
+    }
+    
+    try {
+        const response = await fetch(`/api/movie/${movieId}/review`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                provider: provider,
+                further_instructions: furtherInstructions || null
+            })
+        });
+        
+        if (!response.ok) {
+            let detail = 'Review generation failed';
+            try {
+                const errorData = await response.json();
+                detail = errorData.detail || detail;
+            } catch (parseError) {
+                // ignore parse errors
+            }
+            throw new Error(detail);
+        }
+        
+        // Read SSE stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let resultData = null;
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Parse SSE events from buffer
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep incomplete line in buffer
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const eventData = JSON.parse(line.slice(6));
+                        
+                        if (eventData.type === 'progress') {
+                            updateProgress(eventData.step, eventData.message);
+                        } else if (eventData.type === 'result') {
+                            resultData = eventData;
+                        } else if (eventData.type === 'error') {
+                            throw new Error(eventData.detail);
+                        }
+                    } catch (parseErr) {
+                        console.warn('Failed to parse SSE event:', line, parseErr);
+                    }
+                }
+            }
+        }
+        
+        if (resultData) {
+            // Clear progress and reload reviews
+            reviewContainer.innerHTML = '';
+            if (reviewsContainer) {
+                const html = await loadMovieReviews(movieId);
+                reviewsContainer.innerHTML = html;
+            }
+            showStatus('Review generated successfully', 'success');
+        } else {
+            throw new Error('No result received from review generation');
+        }
+    } catch (error) {
+        console.error('Review Generation Error:', error);
+        showStatus(`Error: ${error.message}`, 'error');
+        reviewContainer.innerHTML = '';
+    } finally {
+        if (generateBtn) {
+            generateBtn.disabled = false;
+            generateBtn.textContent = 'Get Review';
+        }
+    }
+}
+
+// Delete a review
+async function deleteReview(movieId, reviewId) {
+    if (!confirm('Are you sure you want to delete this review?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/movie/${movieId}/review/${reviewId}`, {
+            method: 'DELETE'
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to delete review');
+        }
+        
+        // Reload reviews
+        const reviewsContainer = document.getElementById(`movie-reviews-${movieId}`);
+        if (reviewsContainer) {
+            const html = await loadMovieReviews(movieId);
+            reviewsContainer.innerHTML = html;
+        }
+        
+        showStatus('Review deleted', 'success');
+    } catch (error) {
+        console.error('Error deleting review:', error);
+        showStatus('Error deleting review', 'error');
+    }
+}
+
+// Generate related movies
+async function generateRelatedMovies(movieId) {
+    const providerSelect = document.getElementById(`review-provider-${movieId}`);
+    const relatedContainer = document.getElementById(`related-movies-${movieId}`);
+    const relatedBtn = document.getElementById(`related-movies-btn-${movieId}`);
+    
+    if (!providerSelect || !relatedContainer) return;
+    
+    const provider = providerSelect.value;
+    
+    // Disable button
+    if (relatedBtn) {
+        relatedBtn.disabled = true;
+        relatedBtn.textContent = 'Finding...';
+    }
+    
+    // Show progress UI
+    relatedContainer.innerHTML = `
+        <div class="related-movies-progress">
+            <div class="related-movies-progress-step" data-step="1">
+                <span class="related-movies-progress-indicator">○</span>
+                <span class="related-movies-progress-text">Preparing query...</span>
+            </div>
+            <div class="related-movies-progress-step" data-step="2">
+                <span class="related-movies-progress-indicator">○</span>
+                <span class="related-movies-progress-text">Waiting for AI response...</span>
+            </div>
+            <div class="related-movies-progress-step" data-step="3">
+                <span class="related-movies-progress-indicator">○</span>
+                <span class="related-movies-progress-text">Matching movies...</span>
+            </div>
+        </div>
+    `;
+    
+    function updateProgress(step, message) {
+        for (let i = 1; i < step; i++) {
+            const prevStep = relatedContainer.querySelector(`.related-movies-progress-step[data-step="${i}"]`);
+            if (prevStep) {
+                prevStep.classList.add('completed');
+                prevStep.classList.remove('active');
+                prevStep.querySelector('.related-movies-progress-indicator').textContent = '✓';
+            }
+        }
+        const currentStep = relatedContainer.querySelector(`.related-movies-progress-step[data-step="${step}"]`);
+        if (currentStep) {
+            currentStep.classList.add('active');
+            currentStep.classList.remove('completed');
+            currentStep.querySelector('.related-movies-progress-indicator').textContent = '●';
+            currentStep.querySelector('.related-movies-progress-text').textContent = message;
+        }
+    }
+    
+    try {
+        const response = await fetch(`/api/movie/${movieId}/related-movies`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                provider: provider
+            })
+        });
+        
+        if (!response.ok) {
+            let detail = 'Related movies search failed';
+            try {
+                const errorData = await response.json();
+                detail = errorData.detail || detail;
+            } catch (parseError) {
+                // ignore parse errors
+            }
+            throw new Error(detail);
+        }
+        
+        // Read SSE stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let resultData = null;
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const eventData = JSON.parse(line.slice(6));
+                        
+                        if (eventData.type === 'progress') {
+                            updateProgress(eventData.step, eventData.message);
+                        } else if (eventData.type === 'result') {
+                            resultData = eventData;
+                        } else if (eventData.type === 'error') {
+                            throw new Error(eventData.detail);
+                        }
+                    } catch (parseErr) {
+                        console.warn('Failed to parse SSE event:', line, parseErr);
+                    }
+                }
+            }
+        }
+        
+        if (resultData) {
+            renderRelatedMovies(movieId, resultData);
+            showStatus('Related movies found', 'success');
+        } else {
+            throw new Error('No result received');
+        }
+    } catch (error) {
+        console.error('Related Movies Error:', error);
+        showStatus(`Error: ${error.message}`, 'error');
+        relatedContainer.innerHTML = '';
+    } finally {
+        if (relatedBtn) {
+            relatedBtn.disabled = false;
+            relatedBtn.textContent = 'Related Movies';
+        }
+    }
+}
+
+// Render related movies
+function renderRelatedMovies(movieId, data) {
+    const container = document.getElementById(`related-movies-${movieId}`);
+    if (!container) return;
+    
+    const foundMovies = data.found_movies || [];
+    
+    if (foundMovies.length === 0) {
+        container.innerHTML = '<div class="related-movies-empty">No related movies found in your library.</div>';
+        return;
+    }
+    
+    const cardsHtml = foundMovies.map(movie => {
+        const relationship = movie.relationship || 'Related';
+        const cardHtml = createMovieCard(movie, {
+            showMenu: true,
+            showRating: true,
+            showMeta: true
+        });
+        // Badge below the card
+        return `<div class="related-movie-wrapper">
+            ${cardHtml}
+            <div class="related-movie-badge">${escapeHtml(relationship)}</div>
+        </div>`;
+    }).join('');
+    
+    container.innerHTML = `
+        <div class="related-movies-section">
+            <div class="related-movies-label">Related Movies (${foundMovies.length})</div>
+            <div class="related-movies-grid">${cardsHtml}</div>
+        </div>
+    `;
+    
+    // Initialize star ratings
+    if (typeof initAllStarRatings === 'function') {
+        initAllStarRatings();
+    }
+}
+
 // Parse resolution from filename (e.g., 1080p, 720p, 4K, 2160p)
 function parseResolution(path) {
     if (!path) return null;
@@ -539,6 +920,22 @@ async function loadMovieDetailsById(id) {
                         <a href="${externalLinks.douban}" target="_blank" class="external-link">Douban</a>
                         <a href="#" onclick="event.preventDefault(); openFolder('${escapeJsString(movie.path)}'); return false;" class="external-link">Open Folder</a>
                     </div>
+                    <div class="review-controls" style="margin-top: 20px; display: inline-flex; flex-direction: column; gap: 10px; width: auto;">
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <button id="related-movies-btn-${movie.id}" class="btn btn-small" onclick="generateRelatedMovies(${movie.id})">Related Movies</button>
+                            <button id="generate-review-btn-${movie.id}" class="btn btn-small" onclick="generateReview(${movie.id})">Get AI Review</button>
+                            <select id="review-provider-${movie.id}" style="padding: 4px 8px; background: #1a1a1a; border: 1px solid #333; color: #888; border-radius: 4px; font-size: 12px;">
+                                <option value="anthropic" selected>Claude Opus 4.5</option>
+                                <option value="openai">GPT-5.1</option>
+                            </select>
+                        </div>
+                        <details style="margin-top: 0;">
+                            <summary style="cursor: pointer; color: #888; font-size: 12px;">Further instructions (optional)</summary>
+                            <textarea id="review-instructions-${movie.id}" placeholder="Add any additional instructions for the review..." style="width: 100%; min-height: 60px; margin-top: 8px; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: white; border-radius: 4px; font-family: inherit; font-size: 13px;"></textarea>
+                        </details>
+                    </div>
+                    <div id="related-movies-${movie.id}" class="related-movies-container"></div>
+                    <div id="review-generation-${movie.id}"></div>
                     <div style="margin-top: 20px; color: #999; font-size: 12px;">
                         <div>Path: ${escapeHtml(movie.path)}</div>
                         ${subtitleIndicator}
@@ -546,6 +943,7 @@ async function loadMovieDetailsById(id) {
                     </div>
                 </div>
             </div>
+            <div id="movie-reviews-${movie.id}" class="movie-reviews-container"></div>
             <div id="movie-lists-${movie.id}" class="movie-lists-container"></div>
             ${mediaGallery}
             ${transcriptionPlaceholder}
@@ -558,6 +956,14 @@ async function loadMovieDetailsById(id) {
             const playlistsContainer = document.getElementById(`movie-playlists-${movie.id}`);
             if (playlistsContainer && html) {
                 playlistsContainer.innerHTML = html;
+            }
+        });
+
+        // Load AI reviews section asynchronously
+        loadMovieReviews(movie.id).then(html => {
+            const reviewsContainer = document.getElementById(`movie-reviews-${movie.id}`);
+            if (reviewsContainer && html) {
+                reviewsContainer.innerHTML = html;
             }
         });
 

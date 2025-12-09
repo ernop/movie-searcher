@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 # Import all models and Base from models module
 # Re-export them so they can be imported from database module
 from models import (
+    AiReview,
     CURRENT_SCHEMA_VERSION,
     Base,
     Config,
@@ -29,6 +30,7 @@ from models import (
     Rating,
     Screenshot,
     SearchHistory,
+    WatchSegment,
 )
 
 # Setup logging
@@ -825,8 +827,56 @@ def migrate_db_schema():
             set_schema_version(16, "Added transcripts and transcript_segments tables for Whisper transcription")
             current_version = 16
 
+        if current_version < 17:
+            logger.info("Migrating to schema version 17: Add watch_segments table for tracking watch intervals")
+            with engine.begin() as conn:
+                # Create watch_segments table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS watch_segments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        movie_id INTEGER NOT NULL,
+                        start_seconds REAL NOT NULL,
+                        end_seconds REAL NOT NULL,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY(movie_id) REFERENCES movies(id) ON DELETE CASCADE
+                    )
+                """))
+                # Create index on movie_id for efficient queries
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watch_segments_movie_id ON watch_segments (movie_id)"))
+            set_schema_version(17, "Added watch_segments table for tracking watch intervals/coverage")
+            logger.info("Migration to version 17 complete: watch_segments table created")
+            current_version = 17
+
+        # Migration to version 18: Add ai_reviews table
+        if current_version < 18:
+            logger.info("Migrating to schema version 18: Adding ai_reviews table")
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS ai_reviews (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        movie_id INTEGER NOT NULL,
+                        prompt_text TEXT NOT NULL,
+                        model_provider VARCHAR NOT NULL,
+                        model_name VARCHAR NOT NULL,
+                        response_text TEXT NOT NULL,
+                        prompt_type VARCHAR NOT NULL DEFAULT 'default',
+                        further_instructions TEXT,
+                        cost_usd FLOAT,
+                        user_id VARCHAR,
+                        created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(movie_id) REFERENCES movies(id) ON DELETE CASCADE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_reviews_movie_id ON ai_reviews(movie_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_reviews_created ON ai_reviews(created)"))
+            set_schema_version(18, "Added ai_reviews table for AI-generated movie reviews")
+            logger.info("Schema version 18 migration completed")
+            current_version = 18
+
         # If we get here without incrementing current_version, the migration wasn't implemented
-        if current_version < CURRENT_SCHEMA_VERSION:
+        if current_version is None or current_version < CURRENT_SCHEMA_VERSION:
             logger.error(f"Schema version {CURRENT_SCHEMA_VERSION} migration not implemented! "
                         f"Database is at version {current_version} but code expects {CURRENT_SCHEMA_VERSION}.")
             raise RuntimeError(f"Migration from version {current_version} to {CURRENT_SCHEMA_VERSION} not implemented")
@@ -1262,13 +1312,26 @@ def migrate_db_schema():
 
     # Handle version upgrades (future schema changes)
     # Add version-specific migrations here when CURRENT_SCHEMA_VERSION increases
-    # Example:
-    # if current_version < 2:
-    #     # Migration code for version 2
-    #     pass
-    # if current_version < 3:
-    #     # Migration code for version 3
-    #     pass
+    if current_version and current_version < 17:
+        logger.info("Migrating to schema version 17: Add watch_segments table for tracking watch intervals")
+        with engine.begin() as conn:
+            # Create watch_segments table
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS watch_segments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    movie_id INTEGER NOT NULL,
+                    start_seconds REAL NOT NULL,
+                    end_seconds REAL NOT NULL,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    FOREIGN KEY(movie_id) REFERENCES movies(id) ON DELETE CASCADE
+                )
+            """))
+            # Create index on movie_id for efficient queries
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watch_segments_movie_id ON watch_segments (movie_id)"))
+        set_schema_version(17, "Added watch_segments table for tracking watch intervals/coverage")
+        logger.info("Migration to version 17 complete: watch_segments table created")
+        current_version = 17
 
 def remove_sample_files():
     """Remove all movies with 'sample' in their name from the database"""

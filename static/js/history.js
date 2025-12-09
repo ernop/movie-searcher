@@ -49,17 +49,32 @@ async function loadHistory(page = null) {
     const historyPagination = document.getElementById('historyPagination');
     if (!historyList) return;
     
-    // Read page from URL if not provided
+    // Read params from URL if not provided
+    const urlParams = getRouteParams();
     if (page === null) {
-        const urlParams = getRouteParams();
         page = urlParams.page ? parseInt(urlParams.page) : 1;
     }
     currentHistoryPage = page;
     
+    const search = urlParams.search || '';
+    const dateFilter = urlParams.date_filter || 'all';
+    
+    // Update UI to reflect current filters
+    updateHistoryFiltersUI(search, dateFilter);
+    
     historyList.innerHTML = '<div class="loading">Loading history...</div>';
     
     try {
-        const response = await fetch(`/api/launch-history?page=${page}&per_page=${HISTORY_PER_PAGE}`);
+        // Build query string
+        let queryParams = `page=${page}&per_page=${HISTORY_PER_PAGE}`;
+        if (search && search.trim()) {
+            queryParams += `&search=${encodeURIComponent(search.trim())}`;
+        }
+        if (dateFilter && dateFilter !== 'all') {
+            queryParams += `&date_filter=${encodeURIComponent(dateFilter)}`;
+        }
+        
+        const response = await fetch(`/api/launch-history?${queryParams}`);
         const data = await response.json();
         
         if (!response.ok) {
@@ -70,11 +85,14 @@ async function loadHistory(page = null) {
         const launches = data.launches || [];
         const pagination = data.pagination || { page: 1, pages: 1, total: 0 };
         
-        // Update URL with page param
-        updateHistoryUrl(page);
+        // Update URL with all params
+        updateHistoryUrl(page, search, dateFilter);
         
         if (launches.length === 0) {
-            historyList.innerHTML = '<div class="empty-state">No launch history yet</div>';
+            const emptyMessage = search || dateFilter !== 'all' 
+                ? 'No launch history found matching your filters' 
+                : 'No launch history yet';
+            historyList.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
             if (historyPagination) historyPagination.innerHTML = '';
             return;
         }
@@ -151,10 +169,63 @@ async function loadHistory(page = null) {
     }
 }
 
-// Update URL to reflect current history page
-function updateHistoryUrl(page) {
-    const urlParams = { page: page > 1 ? page : null };
+// Update URL to reflect current history filters
+function updateHistoryUrl(page, search, dateFilter) {
+    const urlParams = {};
+    if (page > 1) urlParams.page = page;
+    if (search && search.trim()) urlParams.search = search.trim();
+    if (dateFilter && dateFilter !== 'all') urlParams.date_filter = dateFilter;
     updateRouteParams(urlParams);
+}
+
+// Update filter UI to reflect current state
+function updateHistoryFiltersUI(search, dateFilter) {
+    const searchInput = document.getElementById('historySearchInput');
+    if (searchInput) {
+        searchInput.value = search || '';
+    }
+    
+    // Update active state of date filter buttons
+    const filterMap = {
+        'today': 'historyFilterToday',
+        'yesterday': 'historyFilterYesterday',
+        'this_week': 'historyFilterThisWeek',
+        'this_month': 'historyFilterThisMonth',
+        'all': 'historyFilterAll'
+    };
+    
+    Object.keys(filterMap).forEach(filter => {
+        const button = document.getElementById(filterMap[filter]);
+        if (button) {
+            if (filter === dateFilter || (filter === 'all' && (!dateFilter || dateFilter === 'all'))) {
+                button.classList.add('active');
+            } else {
+                button.classList.remove('active');
+            }
+        }
+    });
+}
+
+// Handle search input
+function handleHistorySearch() {
+    const searchInput = document.getElementById('historySearchInput');
+    const search = searchInput ? searchInput.value : '';
+    const urlParams = getRouteParams();
+    const dateFilter = urlParams.date_filter || 'all';
+    
+    // Reset to page 1 when searching
+    updateHistoryUrl(1, search, dateFilter);
+    loadHistory(1);
+}
+
+// Handle date filter selection
+function setHistoryDateFilter(filter) {
+    const urlParams = getRouteParams();
+    const search = urlParams.search || '';
+    
+    // Reset to page 1 when changing date filter
+    updateHistoryUrl(1, search, filter);
+    loadHistory(1);
 }
 
 // Go to specific history page

@@ -79,3 +79,12 @@ class OpenUrlsRequest(BaseModel):
 
 class CheckMoviesRequest(BaseModel):
     movies: list[str]  # List of "Title Year" strings
+
+
+class ReviewRequest(BaseModel):
+    provider: Literal["openai", "anthropic"] = "anthropic"
+    further_instructions: str | None = None
+
+
+class RelatedMoviesRequest(BaseModel):
+    provider: Literal["openai", "anthropic"] = "anthropic"

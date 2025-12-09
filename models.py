@@ -68,6 +68,21 @@ class LaunchHistory(Base):
     created = Column(DateTime, default=func.now(), nullable=False)
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
+class WatchSegment(Base):
+    """Tracks watch intervals/segments for reconstructing coverage.
+    
+    Each segment represents a continuous viewing interval: [start_seconds, end_seconds]
+    Multiple segments can be merged to determine total coverage of a movie.
+    """
+    __tablename__ = "watch_segments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
+    start_seconds = Column(Float, nullable=False)  # Start position of this watch segment
+    end_seconds = Column(Float, nullable=False)  # End position of this watch segment
+    created = Column(DateTime, default=func.now(), nullable=False)  # When this segment was watched
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
 class IndexedPath(Base):
     __tablename__ = "indexed_paths"
 
@@ -317,5 +332,25 @@ class TranscriptSegment(Base):
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 
+# --- AI Reviews ---
+
+class AiReview(Base):
+    """AI-generated movie reviews"""
+    __tablename__ = "ai_reviews"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)
+    prompt_text = Column(Text, nullable=False)  # Full prompt sent to model
+    model_provider = Column(String, nullable=False)  # "openai" or "anthropic"
+    model_name = Column(String, nullable=False)  # Full model identifier (e.g., "gpt-5.1", "claude-opus-4-5-20251101")
+    response_text = Column(Text, nullable=False)  # Full response from model
+    prompt_type = Column(String, nullable=False, default="default")  # "default", "extended", etc.
+    further_instructions = Column(Text, nullable=True)  # User's custom instructions
+    cost_usd = Column(Float, nullable=True)  # Cost of the query
+    user_id = Column(String, nullable=True)  # For future user profiles (blank for now)
+    created = Column(DateTime, default=func.now(), nullable=False, index=True)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 18

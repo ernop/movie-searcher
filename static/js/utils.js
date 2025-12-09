@@ -159,7 +159,7 @@ function generateExternalLinks(movieName) {
     const doubanQuery = encodeURIComponent(cleanedName);
 
     return {
-        letterboxd: `https://letterboxd.com/search/${letterboxdSlug}/`,
+        letterboxd: `https://letterboxd.com/film/${letterboxdSlug}/`,
         google: `https://www.google.com/search?q=${googleQuery}`,
         douban: `https://www.douban.com/search?q=${doubanQuery}`
     };

@@ -172,11 +172,23 @@ function createMovieCard(movie, options = {}) {
     if (showMeta) {
         // Added pointer-events logic to allow clicks on text to fall through to the card link, 
         // but kept year-link and checkbox interactive.
+        const reviewCount = movie.review_count || 0;
+        const reviewIndicator = reviewCount > 0 ? `
+            <a href="#/movie/${movie.id}" class="review-indicator" style="pointer-events: auto; margin-left: auto;" 
+               data-movie-id="${movie.id}" 
+               data-review-count="${reviewCount}"
+               onmouseenter="showReviewPreview(this, ${movie.id})"
+               onmouseleave="hideReviewPreview(this)">
+                📝 Review${reviewCount > 1 ? 's' : ''}
+            </a>
+        ` : '';
+        
         metaHtml = `
-            <div class="movie-card-meta" style="position: relative; z-index: 2; pointer-events: none;">
+            <div class="movie-card-meta" style="position: relative; z-index: 2; pointer-events: none; display: flex; align-items: center; gap: 8px;">
                 ${year ? `<span class="year-link" onclick="event.stopPropagation(); navigateToExploreWithYear(${year}, ${movie.id || 'null'});" title="Filter by ${year}" style="pointer-events: auto;">${year}</span>` : ''}
                 ${length ? `<span>${length}</span>` : ''}
                 ${fileSize ? `<span class="movie-size">${fileSize}</span>` : ''}
+                ${reviewIndicator}
                 ${hasLaunched ? '<div class="launch-status-checkbox launched" onclick="event.stopPropagation();" style="pointer-events: auto;"></div>' : ''}
             </div>
         `;
@@ -257,4 +269,120 @@ function createMovieCard(movie, options = {}) {
             </div>
         </div>
     `;
+}
+
+// Review preview cache
+const reviewPreviewCache = {};
+
+async function showReviewPreview(element, movieId) {
+    // Check cache first
+    if (reviewPreviewCache[movieId]) {
+        displayReviewTooltip(element, reviewPreviewCache[movieId]);
+        return;
+    }
+    
+    // Fetch first review
+    try {
+        const response = await fetch(`/api/movie/${movieId}/reviews`);
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        const reviews = data.reviews || [];
+        
+        if (reviews.length > 0) {
+            const firstReview = reviews[0];
+            const preview = firstReview.response_text.substring(0, 300);
+            const fullText = firstReview.response_text;
+            const cacheEntry = {
+                preview: preview,
+                fullText: fullText,
+                model: firstReview.model_name,
+                date: firstReview.created
+            };
+            reviewPreviewCache[movieId] = cacheEntry;
+            displayReviewTooltip(element, cacheEntry);
+        }
+    } catch (error) {
+        console.error('Error fetching review preview:', error);
+    }
+}
+
+function displayReviewTooltip(element, reviewData) {
+    // Remove existing tooltip if any
+    const existing = element.querySelector('.review-indicator-tooltip');
+    if (existing) existing.remove();
+    
+    const tooltip = document.createElement('div');
+    tooltip.className = 'review-indicator-tooltip';
+    tooltip.innerHTML = `
+        <div style="font-weight: 500; margin-bottom: 6px; color: #e8d090;">${escapeHtml(reviewData.model || 'Review')}</div>
+        <div style="max-height: 200px; overflow-y: auto;">${escapeHtml(reviewData.preview)}${reviewData.fullText.length > 300 ? '...' : ''}</div>
+    `;
+    element.style.position = 'relative';
+    element.appendChild(tooltip);
+}
+
+function hideReviewPreview(element) {
+    const tooltip = element.querySelector('.review-indicator-tooltip');
+    if (tooltip) {
+        tooltip.remove();
+    }
+}
+
+// Render Markdown to HTML
+function renderMarkdown(text) {
+    if (!text) return '';
+    
+    let html = text;
+    
+    // Escape HTML first to prevent XSS
+    html = escapeHtml(html);
+    
+    // Code blocks first (before other processing): ```code```
+    const codeBlocks = [];
+    html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+        const id = `CODEBLOCK_${codeBlocks.length}`;
+        codeBlocks.push(`<pre><code>${code}</code></pre>`);
+        return id;
+    });
+    
+    // Inline code: `code` (but not inside code blocks)
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    
+    // Headers: # Header, ## Header, ### Header (must be at start of line)
+    html = html.replace(/^### (.*)$/gim, '<h3>$1</h3>');
+    html = html.replace(/^## (.*)$/gim, '<h2>$1</h2>');
+    html = html.replace(/^# (.*)$/gim, '<h1>$1</h1>');
+    
+    // Bold: **text** or __text__ (process before italic)
+    html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/__([^_]+?)__/g, '<strong>$1</strong>');
+    
+    // Italic: *text* or _text_ (but not if it's part of **text**)
+    // Simple approach: match single * or _ that aren't part of double
+    html = html.replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, '<em>$1</em>');
+    html = html.replace(/(?<!_)_([^_\n]+?)_(?!_)/g, '<em>$1</em>');
+    
+    // Restore code blocks
+    codeBlocks.forEach((block, i) => {
+        html = html.replace(`CODEBLOCK_${i}`, block);
+    });
+    
+    // Line breaks: convert \n to <br> (but not inside code blocks)
+    const parts = html.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/);
+    for (let i = 0; i < parts.length; i += 2) {
+        // Only process non-code parts
+        parts[i] = parts[i].replace(/\n/g, '<br>');
+    }
+    html = parts.join('');
+    
+    // Paragraphs: double line breaks create paragraphs
+    html = html.replace(/(<br>\s*){2,}/g, '</p><p>');
+    
+    // Wrap in paragraph tags if not already wrapped and doesn't start with block elements
+    if (!html.trim().match(/^<(h[1-6]|p|pre|ul|ol)/i)) {
+        html = '<p>' + html + '</p>';
+    }
+    
+    return html;
 }
