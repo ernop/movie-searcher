@@ -352,5 +352,22 @@ class AiReview(Base):
     updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class AiRelatedMovies(Base):
+    """AI-generated related movies query results"""
+    __tablename__ = "ai_related_movies"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), nullable=False, index=True)  # Source movie
+    prompt_text = Column(Text, nullable=False)  # Full prompt sent to model
+    model_provider = Column(String, nullable=False)  # "openai" or "anthropic"
+    model_name = Column(String, nullable=False)  # Full model identifier
+    response_json = Column(Text, nullable=False)  # Raw JSON response from model
+    related_movies_json = Column(Text, nullable=False)  # Processed list of related movies with relationships
+    cost_usd = Column(Float, nullable=True)  # Cost of the query
+    user_id = Column(String, nullable=True)  # For future user profiles
+    created = Column(DateTime, default=func.now(), nullable=False, index=True)
+    updated = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+
 # Current schema version - increment when schema changes
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 19

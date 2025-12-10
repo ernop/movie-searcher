@@ -397,17 +397,115 @@ async function generateRelatedMovies(movieId) {
     }
 }
 
-// Render related movies
+// Load saved related movies from database
+async function loadSavedRelatedMovies(movieId) {
+    try {
+        const response = await fetch(`/api/movie/${movieId}/related-movies`);
+        if (!response.ok) return '';
+        
+        const records = await response.json();
+        if (!records || records.length === 0) return '';
+        
+        // Display all saved records
+        const recordsHtml = records.map(record => {
+            const foundMovies = record.found_movies || [];
+            if (foundMovies.length === 0) return '';
+            
+            const modelDisplay = record.model_provider === 'openai' 
+                ? (record.model_name === 'gpt-5.1' ? 'GPT-5.1' : record.model_name)
+                : (record.model_name.includes('opus') ? 'Claude Opus 4.5' : record.model_name);
+            const createdDate = record.created ? formatDate(new Date(record.created)) : '';
+            const costText = record.cost_usd ? `$${record.cost_usd.toFixed(6)}` : '';
+            
+            const cardsHtml = foundMovies.map(movie => {
+                const relationship = movie.relationship || 'Related';
+                const cardHtml = createMovieCard(movie, {
+                    showMenu: true,
+                    showRating: true,
+                    showMeta: true
+                });
+                return `<div class="related-movie-wrapper">
+                    ${cardHtml}
+                    <div class="related-movie-badge">${escapeHtml(relationship)}</div>
+                </div>`;
+            }).join('');
+            
+            return `
+                <div class="related-movies-record" data-record-id="${record.id}">
+                    <div class="related-movies-header">
+                        <div class="related-movies-meta">
+                            <span class="related-movies-model">${escapeHtml(modelDisplay)}</span>
+                            <span class="related-movies-date">${createdDate}</span>
+                            ${costText ? `<span class="related-movies-cost">${costText}</span>` : ''}
+                        </div>
+                        <button class="btn btn-small btn-danger" onclick="deleteRelatedMovies(${movieId}, ${record.id})" title="Delete">Delete</button>
+                    </div>
+                    <div class="related-movies-grid">${cardsHtml}</div>
+                </div>
+            `;
+        }).join('');
+        
+        return `
+            <div class="related-movies-section">
+                <span class="related-movies-label">Related Movies</span>
+                ${recordsHtml}
+            </div>
+        `;
+    } catch (error) {
+        console.error('Error loading saved related movies:', error);
+        return '';
+    }
+}
+
+// Delete a related movies record
+async function deleteRelatedMovies(movieId, recordId) {
+    if (!confirm('Delete this related movies record?')) return;
+    
+    try {
+        const response = await fetch(`/api/movie/${movieId}/related-movies/${recordId}`, {
+            method: 'DELETE'
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to delete');
+        }
+        
+        // Reload related movies
+        const container = document.getElementById(`related-movies-${movieId}`);
+        if (container) {
+            const html = await loadSavedRelatedMovies(movieId);
+            container.innerHTML = html;
+            // Re-initialize star ratings
+            if (typeof initAllStarRatings === 'function') {
+                initAllStarRatings();
+            }
+        }
+        
+        showStatus('Related movies deleted', 'success');
+    } catch (error) {
+        console.error('Error deleting related movies:', error);
+        showStatus('Error deleting: ' + error.message, 'error');
+    }
+}
+
+// Render related movies (from new generation - saves and displays immediately)
 function renderRelatedMovies(movieId, data) {
     const container = document.getElementById(`related-movies-${movieId}`);
     if (!container) return;
     
     const foundMovies = data.found_movies || [];
+    const recordId = data.id;
     
     if (foundMovies.length === 0) {
         container.innerHTML = '<div class="related-movies-empty">No related movies found in your library.</div>';
         return;
     }
+    
+    const modelDisplay = data.model_provider === 'openai' 
+        ? (data.model_name === 'gpt-5.1' ? 'GPT-5.1' : data.model_name)
+        : (data.model_name && data.model_name.includes('opus') ? 'Claude Opus 4.5' : data.model_name || 'Unknown');
+    const costText = data.cost_usd ? `$${data.cost_usd.toFixed(6)}` : '';
     
     const cardsHtml = foundMovies.map(movie => {
         const relationship = movie.relationship || 'Related';
@@ -426,7 +524,17 @@ function renderRelatedMovies(movieId, data) {
     container.innerHTML = `
         <div class="related-movies-section">
             <div class="related-movies-label">Related Movies (${foundMovies.length})</div>
-            <div class="related-movies-grid">${cardsHtml}</div>
+            <div class="related-movies-record" data-record-id="${recordId}">
+                <div class="related-movies-header">
+                    <div class="related-movies-meta">
+                        <span class="related-movies-model">${escapeHtml(modelDisplay)}</span>
+                        <span class="related-movies-date">Just now</span>
+                        ${costText ? `<span class="related-movies-cost">${costText}</span>` : ''}
+                    </div>
+                    <button class="btn btn-small btn-danger" onclick="deleteRelatedMovies(${movieId}, ${recordId})" title="Delete">Delete</button>
+                </div>
+                <div class="related-movies-grid">${cardsHtml}</div>
+            </div>
         </div>
     `;
     
@@ -934,7 +1042,6 @@ async function loadMovieDetailsById(id) {
                             <textarea id="review-instructions-${movie.id}" placeholder="Add any additional instructions for the review..." style="width: 100%; min-height: 60px; margin-top: 8px; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: white; border-radius: 4px; font-family: inherit; font-size: 13px;"></textarea>
                         </details>
                     </div>
-                    <div id="related-movies-${movie.id}" class="related-movies-container"></div>
                     <div id="review-generation-${movie.id}"></div>
                     <div style="margin-top: 20px; color: #999; font-size: 12px;">
                         <div>Path: ${escapeHtml(movie.path)}</div>
@@ -943,6 +1050,7 @@ async function loadMovieDetailsById(id) {
                     </div>
                 </div>
             </div>
+            <div id="related-movies-${movie.id}" class="related-movies-container"></div>
             <div id="movie-reviews-${movie.id}" class="movie-reviews-container"></div>
             <div id="movie-lists-${movie.id}" class="movie-lists-container"></div>
             ${mediaGallery}
@@ -956,6 +1064,18 @@ async function loadMovieDetailsById(id) {
             const playlistsContainer = document.getElementById(`movie-playlists-${movie.id}`);
             if (playlistsContainer && html) {
                 playlistsContainer.innerHTML = html;
+            }
+        });
+
+        // Load saved related movies asynchronously
+        loadSavedRelatedMovies(movie.id).then(html => {
+            const relatedContainer = document.getElementById(`related-movies-${movie.id}`);
+            if (relatedContainer && html) {
+                relatedContainer.innerHTML = html;
+                // Initialize star ratings for related movie cards
+                if (typeof initAllStarRatings === 'function') {
+                    initAllStarRatings();
+                }
             }
         });
 

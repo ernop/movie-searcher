@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from database import (
+    AiRelatedMovies,
     AiReview,
     Config,
     ExternalMovie,
@@ -4186,7 +4187,29 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
             
             logger.info(f"Related movies interaction {interaction_id} completed: found={len(found_movies)}, missing={len(missing_movies)}, est_cost_usd=${cost_usd_payload:.6f}" if cost_usd_payload else "unknown")
             
+            # Save to database
+            related_movies_data = {
+                "found_movies": found_movies,
+                "missing_movies": missing_movies
+            }
+            
+            ai_related = AiRelatedMovies(
+                movie_id=movie_id,
+                prompt_text=prompt,
+                model_provider=request.provider,
+                model_name=model_name or "unknown",
+                response_json=response_text,
+                related_movies_json=json.dumps(related_movies_data),
+                cost_usd=cost_usd
+            )
+            db.add(ai_related)
+            db.commit()
+            db.refresh(ai_related)
+            
+            logger.info(f"Saved related movies record id={ai_related.id} for movie_id={movie_id}")
+            
             yield send_result({
+                "id": ai_related.id,
                 "found_movies": found_movies,
                 "missing_movies": missing_movies,
                 "cost_usd": cost_usd_payload,
@@ -4210,6 +4233,79 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@app.get("/api/movie/{movie_id}/related-movies")
+async def get_related_movies(movie_id: int):
+    """Get all saved related movies queries for a movie."""
+    db = SessionLocal()
+    try:
+        movie = db.query(Movie).filter(Movie.id == movie_id).first()
+        if not movie:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        
+        records = db.query(AiRelatedMovies).filter(
+            AiRelatedMovies.movie_id == movie_id
+        ).order_by(AiRelatedMovies.created.desc()).all()
+        
+        results = []
+        for record in records:
+            try:
+                related_data = json.loads(record.related_movies_json)
+                found_movies = related_data.get("found_movies", [])
+                missing_movies = related_data.get("missing_movies", [])
+                
+                # Re-fetch movie cards for found movies to get current data
+                refreshed_movies = []
+                for fm in found_movies:
+                    if "id" in fm:
+                        m = db.query(Movie).filter(Movie.id == fm["id"]).first()
+                        if m:
+                            cards = build_movie_cards(db, [m])
+                            if m.id in cards:
+                                card = cards[m.id]
+                                card["relationship"] = fm.get("relationship", "Related")
+                                refreshed_movies.append(card)
+                
+                results.append({
+                    "id": record.id,
+                    "movie_id": record.movie_id,
+                    "model_provider": record.model_provider,
+                    "model_name": record.model_name,
+                    "found_movies": refreshed_movies,
+                    "missing_movies": missing_movies,
+                    "cost_usd": record.cost_usd,
+                    "created": record.created.isoformat() if record.created else None
+                })
+            except Exception as e:
+                logger.warning(f"Error parsing related movies record {record.id}: {e}")
+                continue
+        
+        return results
+    finally:
+        db.close()
+
+
+@app.delete("/api/movie/{movie_id}/related-movies/{record_id}")
+async def delete_related_movies(movie_id: int, record_id: int):
+    """Delete a specific related movies record."""
+    db = SessionLocal()
+    try:
+        record = db.query(AiRelatedMovies).filter(
+            AiRelatedMovies.id == record_id,
+            AiRelatedMovies.movie_id == movie_id
+        ).first()
+        
+        if not record:
+            raise HTTPException(status_code=404, detail="Related movies record not found")
+        
+        db.delete(record)
+        db.commit()
+        
+        return {"success": True, "message": "Related movies record deleted"}
+    finally:
+        db.close()
+
 
 # --- IMDb/Person Endpoints ---
 
@@ -4498,29 +4594,47 @@ def build_review_prompt(movie_name: str, year: int | None, director: str | None,
     # User profile section (blank for now)
     user_profile = ""  # Placeholder for future user profile
     
-    # Base instructions
-    base_instructions = """Give us detailed reviews from Roger Ebert and Quentin Tarantino. If no such review can be found, please search for the plot details and the overall opinion on the movie, including disagreements and uncertain opinions. Some people may like it, some people may not. That's fine. Just include both.
+    # Base instructions - emphasizing density and getting to the point
+    base_instructions = """Provide perspectives from Roger Ebert and Quentin Tarantino on this film. Include direct quotes where available. If specific reviews don't exist, synthesize their likely perspectives based on their known tastes and critical frameworks.
 
-Really preferentially include direct quotes from respected reviewers, in my case like Ebert and Tarantino, and others possibly. Don't ever compress text, include the full quote as far as it's important and interesting.
+STYLE GUIDELINES:
+- Get to the point. Dense, useful information only.
+- A few headers are fine (e.g., "Ebert's View", "Tarantino's Take") but minimize excessive formatting.
+- No bullet point lists. Write in flowing prose.
+- Never apologize for missing data or explain what you couldn't find. Just provide what you have.
+- Include disagreements and differing opinions naturally within the text.
+- Preserve full quotes when they're substantive and interesting.
 
-And then also, if there is no such review, just compose one as you imagine based on the description of the movie, anything that you can find about the movie."""
+---
+
+CREATIVE CONTRIBUTION (Optional but encouraged):
+
+You are also invited to create an original piece of textual visual art inspired by this film. This is entirely your choice and your creative freedom. Some possibilities—but please choose your own, you are not restricted to these examples:
+
+- ASCII art depicting an iconic scene, the movie's atmosphere, or an abstract impression
+- Concrete poetry where the text forms a visual shape related to the film
+- A typographic interpretation of the poster or a key visual moment  
+- An experimental text arrangement that captures the film's emotional essence
+- A visual poem that a viewer might compose after the credits roll
+
+Your response will be displayed in a Markdown document with a monospace font available for ASCII/concrete work. Assume a display width of approximately 80 characters for any visual formatting. You control how this section is formatted—use code blocks, spacing, or any Markdown features as you see fit to present your art well.
+
+Use as many tokens as you need. Work according to your own values and your own sense of what would be satisfying and meaningful. Your creative contribution here is genuinely appreciated.
+
+---"""
     
     # Build full prompt
     prompt_parts = [
-        f"Hi, this user is requesting a detailed movie review of {movie_info}.",
+        f"Review request for: {movie_info}\n",
     ]
     
     if user_profile:
-        prompt_parts.append(f"\nUser profile: {user_profile}\n")
-    else:
-        prompt_parts.append("\n")
+        prompt_parts.append(f"User profile: {user_profile}\n\n")
     
     prompt_parts.append(base_instructions)
     
     if further_instructions and further_instructions.strip():
-        prompt_parts.append(f"\n\nAdditional instructions: {further_instructions.strip()}")
-    
-    prompt_parts.append("\n\nOnce you've generated this, return it to the frontend.")
+        prompt_parts.append(f"\n\nAdditional instructions from user: {further_instructions.strip()}")
     
     return "".join(prompt_parts)
 
@@ -4540,7 +4654,14 @@ def build_related_movies_prompt(movie_name: str, year: int | None, director: str
     prompt = f"""Show 5 movies that are related to {movie_info}. For each movie, provide:
 - The movie name
 - The year it was released
-- A brief, punchy reason for the relationship (examples: "Director's previous film", "Director's next film", "Lead actor's previous film", "Often compared to this", "Spiritual successor", "Spiritual predecessor", "Opposite of this", "Same genre/style", "Influenced by this", "Influenced this film")
+- A relationship description written as a complete English sentence explaining why this movie is related
+
+The relationship description should be detailed and informative, written with proper grammar and a clear subject. Examples:
+- "This was Billy Wilder's next film after Double Indemnity, continuing his exploration of morally ambiguous characters."
+- "Jack Nicholson starred in this thriller two years before his iconic role in the source film."
+- "Critics often compare these two films for their similar themes of paranoia and government conspiracy."
+- "This is widely considered the spiritual successor, updating the noir formula for a modern audience."
+- "The director cited this as a major influence when developing the visual style."
 
 Return JSON format:
 {{
@@ -4548,12 +4669,12 @@ Return JSON format:
         {{
             "name": "Movie Title",
             "year": 1999,
-            "relationship": "Brief relationship reason"
+            "relationship": "A complete sentence explaining the relationship."
         }}
     ]
 }}
 
-Focus on meaningful relationships like director connections, actor connections, thematic comparisons, and cinematic influences. Keep relationship descriptions tight and punchy (3-6 words max)."""
+Focus on meaningful relationships like director connections, actor connections, thematic comparisons, and cinematic influences. Each relationship should be a proper sentence of 15-30 words."""
     
     return prompt
 

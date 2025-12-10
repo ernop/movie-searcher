@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 # Import all models and Base from models module
 # Re-export them so they can be imported from database module
 from models import (
+    AiRelatedMovies,
     AiReview,
     CURRENT_SCHEMA_VERSION,
     Base,
@@ -874,6 +875,31 @@ def migrate_db_schema():
             set_schema_version(18, "Added ai_reviews table for AI-generated movie reviews")
             logger.info("Schema version 18 migration completed")
             current_version = 18
+
+        # Migration to version 19: Add ai_related_movies table
+        if current_version < 19:
+            logger.info("Migrating to schema version 19: Adding ai_related_movies table")
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS ai_related_movies (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        movie_id INTEGER NOT NULL,
+                        prompt_text TEXT NOT NULL,
+                        model_provider VARCHAR NOT NULL,
+                        model_name VARCHAR NOT NULL,
+                        response_json TEXT NOT NULL,
+                        related_movies_json TEXT NOT NULL,
+                        cost_usd FLOAT,
+                        user_id VARCHAR,
+                        created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(movie_id) REFERENCES movies(id) ON DELETE CASCADE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_related_movies_movie_id ON ai_related_movies(movie_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_related_movies_created ON ai_related_movies(created)"))
+            logger.info("Schema version 19 migration completed")
+            current_version = 19
 
         # If we get here without incrementing current_version, the migration wasn't implemented
         if current_version is None or current_version < CURRENT_SCHEMA_VERSION:
