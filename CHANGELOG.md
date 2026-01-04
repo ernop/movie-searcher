@@ -111,3 +111,4 @@ All notable changes to Movie Searcher are documented here.
 
 Prior changes were not tracked in this changelog format.
 
+
