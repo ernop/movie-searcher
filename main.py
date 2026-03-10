@@ -3819,7 +3819,7 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
                 elif request.provider == "anthropic":
                     provider_key = "anthropic"
                     model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
-                    model_name = model_config["model_id"] if model_config else "claude-opus-4-5-20251101"
+                    model_name = model_config["model_id"] if model_config else "claude-opus-4.5"
                     client = anthropic.Anthropic(api_key=anthropic_key)
                     logger.info(f"Review interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                     
@@ -4066,7 +4066,7 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
                 elif request.provider == "anthropic":
                     provider_key = "anthropic"
                     model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
-                    model_name = model_config["model_id"] if model_config else "claude-opus-4-5-20251101"
+                    model_name = model_config["model_id"] if model_config else "claude-opus-4.5"
                     client = anthropic.Anthropic(api_key=anthropic_key)
                     logger.info(f"Related movies interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                     
@@ -4490,7 +4490,7 @@ def load_api_keys():
 # Centralized AI model configuration (shared across AI search and review features)
 AI_MODELS = [
     {"provider": "openai", "model_id": "gpt-5.1", "display_name": "GPT-5.1"},
-    {"provider": "anthropic", "model_id": "claude-opus-4-5-20251101", "display_name": "Claude Opus 4.5"}
+    {"provider": "anthropic", "model_id": "claude-opus-4.5", "display_name": "Claude Opus 4.5"}
 ]
 
 AI_PRICING = {
@@ -4901,7 +4901,7 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
                 provider_key = "anthropic"
                 # Find model from centralized list
                 model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
-                model_name = model_config["model_id"] if model_config else "claude-opus-4-5-20251101"
+                model_name = model_config["model_id"] if model_config else "claude-opus-4.5"
                 client = anthropic.Anthropic(api_key=anthropic_key)
                 logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                 message = client.messages.create(
