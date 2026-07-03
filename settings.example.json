@@ -1,0 +1,5 @@
+{
+  "movies_folder": "/path/to/your/movies",
+  "local_target_folder": "",
+  "AnthropicApiKey": "YOUR_API_KEY_HERE"
+}

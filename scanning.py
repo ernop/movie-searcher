@@ -1367,23 +1367,45 @@ def scan_directory(root_path, state=None, progress_callback=None):
     patterns = load_cleaning_patterns()
 
     try:
-        # First pass: count total files
+        # First pass: count total files.
+        # Single recursive walk of the tree. This used to be 11 root.rglob()
+        # calls (one per video extension) here, plus another 11 in the scan pass
+        # below -- 22 full traversals. Over a network mount every traversal is
+        # thousands of round trips, so walk once, filter by extension in memory,
+        # and reuse the collected list for the scan pass. os.scandir lets
+        # entry.stat() reuse the size from readdir instead of a second stat.
         global scan_progress
         scan_progress["status"] = "counting"
         scan_progress["current_file"] = "Counting files..."
         add_scan_log("info", "Counting video files...")
 
-        total_files = 0
-        for ext in VIDEO_EXTENSIONS:
-            files = [
-                f for f in root.rglob(f"*{ext}")
-                if not is_sample_file(f) and os.path.getsize(f) >= MIN_FILE_SIZE_BYTES
-            ]
-            count = len(files)
-            total_files += count
-            if count > 0:
-                add_scan_log("info", f"Found {count} {ext} files")
+        all_files = []
+        dir_stack = [str(root)]
+        while dir_stack:
+            current_dir = dir_stack.pop()
+            try:
+                scan_iter = os.scandir(current_dir)
+            except OSError as e:
+                add_scan_log("warning", f"Could not read directory {current_dir}: {e}")
+                continue
+            with scan_iter:
+                for entry in scan_iter:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            dir_stack.append(entry.path)
+                            continue
+                        if os.path.splitext(entry.name)[1].lower() not in VIDEO_EXTENSIONS:
+                            continue
+                        if is_sample_file(entry.path):
+                            continue
+                        if entry.stat(follow_symlinks=False).st_size < MIN_FILE_SIZE_BYTES:
+                            continue
+                    except OSError as e:
+                        add_scan_log("warning", f"Could not stat {entry.path}: {e}")
+                        continue
+                    all_files.append(Path(entry.path))
 
+        total_files = len(all_files)
         scan_progress["total"] = total_files
         scan_progress["current"] = 0
         scan_progress["status"] = "scanning"
@@ -1398,54 +1420,46 @@ def scan_directory(root_path, state=None, progress_callback=None):
         # Track newly added movies for movie list reconciliation
         new_movies_for_reconciliation = []
 
-        # Second pass: actually scan
-        # Each movie commits individually - no transaction wrapping the scan
-        # If any movie fails, the entire scan stops immediately
+        # Second pass: actually scan the files collected above (one traversal,
+        # no re-globbing). Sample/size filtering already happened during the
+        # walk. Each movie commits individually - no transaction wraps the scan;
+        # if any movie fails, the scan stops immediately.
         add_scan_log("info", "Starting file processing...")
-        for ext in VIDEO_EXTENSIONS:
+        for file_path in all_files:
             if shutdown_flag.is_set():
                 add_scan_log("warning", "Scan interrupted by shutdown")
                 break
-            for file_path in root.rglob(f"*{ext}"):
-                if shutdown_flag.is_set():
-                    add_scan_log("warning", "Scan interrupted by shutdown")
-                    break
 
-                # Skip sample files
-                if is_sample_file(file_path):
-                    add_scan_log("info", f"Skipping sample file: {file_path.name}")
-                    continue
+            # Process each movie - if it fails, stop the entire scan immediately
+            # Each movie commits individually, no transaction wrapping the whole scan
+            scan_progress["current"] = indexed + 1
+            scan_progress["current_file"] = file_path.name
 
-                # Process each movie - if it fails, stop the entire scan immediately
-                # Each movie commits individually, no transaction wrapping the whole scan
-                scan_progress["current"] = indexed + 1
-                scan_progress["current_file"] = file_path.name
+            add_scan_log("info", f"[{indexed + 1}/{total_files}] Processing: {file_path.name}")
 
-                add_scan_log("info", f"[{indexed + 1}/{total_files}] Processing: {file_path.name}")
+            # Check if movie already exists to track add vs update
+            normalized_path = str(file_path.resolve() if hasattr(file_path, 'resolve') else Path(file_path).resolve())
+            movie_existed = db.query(Movie).filter(Movie.path == normalized_path).first() is not None
 
-                # Check if movie already exists to track add vs update
-                normalized_path = str(file_path.resolve() if hasattr(file_path, 'resolve') else Path(file_path).resolve())
-                movie_existed = db.query(Movie).filter(Movie.path == normalized_path).first() is not None
+            was_updated = index_movie(file_path, db, patterns)
+            if was_updated:
+                if movie_existed:
+                    scan_progress["movies_updated"] += 1
+                else:
+                    scan_progress["movies_added"] += 1
+                    # Track newly added movie for reconciliation
+                    new_movie = db.query(Movie).filter(Movie.path == normalized_path).first()
+                    if new_movie:
+                        new_movies_for_reconciliation.append({
+                            'id': new_movie.id,
+                            'name': new_movie.name,
+                            'year': new_movie.year
+                        })
+                updated += 1
+            indexed += 1
 
-                was_updated = index_movie(file_path, db, patterns)
-                if was_updated:
-                    if movie_existed:
-                        scan_progress["movies_updated"] += 1
-                    else:
-                        scan_progress["movies_added"] += 1
-                        # Track newly added movie for reconciliation
-                        new_movie = db.query(Movie).filter(Movie.path == normalized_path).first()
-                        if new_movie:
-                            new_movies_for_reconciliation.append({
-                                'id': new_movie.id,
-                                'name': new_movie.name,
-                                'year': new_movie.year
-                            })
-                    updated += 1
-                indexed += 1
-
-                if progress_callback:
-                    progress_callback(indexed, total_files, file_path.name)
+            if progress_callback:
+                progress_callback(indexed, total_files, file_path.name)
 
         # Mark path as indexed
         stmt = sqlite_insert(IndexedPath).values(path=str(root_path))
@@ -1465,18 +1479,44 @@ def scan_directory(root_path, state=None, progress_callback=None):
             summary_parts.append(f"{scan_progress['movies_updated']} updated")
         add_scan_log("success", f"Scan complete: {', '.join(summary_parts)}")
 
-        # Clean up orphaned database entries (movies whose files no longer exist)
+        # Clean up orphaned database entries (movies whose files no longer exist).
+        # Guard against a network-mount drop: over sshfs a disconnect makes every
+        # file look missing, and os.path.exists() masks the I/O error as False, so
+        # deleting on that signal would wipe the library's metadata. Protections:
+        #  - bail if the root itself is not accessible (mount gone / empty),
+        #  - only treat a definite FileNotFoundError as an orphan; abort on any
+        #    other OSError (ENOTCONN/EIO/ESTALE = mount trouble, not a deletion),
+        #  - skip if an implausible fraction of the library suddenly looks missing.
         add_scan_log("info", "Checking for orphaned database entries...")
         root_path_str = str(root_path)
-        # Find all movies in database that start with this root path
         orphaned_movies = []
         all_movies_in_path = db.query(Movie).filter(
             Movie.path.like(f"{root_path_str}%")
         ).all()
 
-        for movie in all_movies_in_path:
-            if not os.path.exists(movie.path):
-                orphaned_movies.append(movie)
+        try:
+            mount_ok = os.path.isdir(root_path) and bool(os.listdir(root_path))
+        except OSError:
+            mount_ok = False
+
+        if not mount_ok:
+            add_scan_log("warning", "Movies folder is not accessible; skipping orphan cleanup to protect the database")
+        else:
+            for movie in all_movies_in_path:
+                try:
+                    os.stat(movie.path)
+                except FileNotFoundError:
+                    orphaned_movies.append(movie)
+                except OSError as e:
+                    add_scan_log("warning", f"I/O error accessing {movie.path} ({e}); aborting orphan cleanup")
+                    orphaned_movies = []
+                    break
+
+            # A healthy library loses files incrementally. If a large fraction is
+            # suddenly "missing", treat it as a mount failure rather than delete.
+            if all_movies_in_path and len(orphaned_movies) > 0.20 * len(all_movies_in_path):
+                add_scan_log("warning", f"{len(orphaned_movies)}/{len(all_movies_in_path)} movies look missing (>20%); skipping orphan cleanup as a likely mount failure")
+                orphaned_movies = []
 
         add_scan_log("info", f"Scanned {len(all_movies_in_path)} movies, found {len(orphaned_movies)} with missing files")
 

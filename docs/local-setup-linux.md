@@ -116,4 +116,27 @@ sshfs uses the SSH key already set up. If heavier IO / a permanent share is
 wanted later (or the Windows fleet needs the same store), graduate to NFS or
 Samba on tvnik without changing the app — only the mount + `movies_folder`.
 
-Status: SSH working; disk inventoried. Mount + repoint + scan still to do.
+### Current state (2026-07-03)
+
+- Mounted: `tvnik:/mnt/seagate16/movies` → **`/mnt/tvnik-movies`** (read-only,
+  sshfs, `reconnect`). Mountpoint owned by `ef`.
+- `settings.json` `movies_folder` → `/mnt/tvnik-movies` (server picks this up
+  live, no restart needed).
+- **Not yet scanned** — trigger the first scan from the web UI. It's ~2,000
+  titles, so the initial scan/metadata pass will take a while.
+- **Persistent across reboots** via a systemd service:
+  `/etc/systemd/system/tvnik-movies.service` (runs `sshfs -f` as `ef`,
+  `Restart=on-failure`, `WantedBy=multi-user.target`, cleans stale mounts on
+  restart). Manage with `systemctl {status,restart,stop} tvnik-movies`.
+  Manual remount, if ever needed:
+  ```bash
+  sshfs -o ro,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,idmap=user \
+      tvnik:/mnt/seagate16/movies /mnt/tvnik-movies
+  ```
+
+> tvnik disks: the movies are on the **16TB Seagate** (`/mnt/seagate16`). tvnik is
+> also configured for a **6TB WD** (`/mnt/wd6`, `nofail`) but that disk is not
+> currently attached — reconnect it there if any movies are expected on it.
+
+Also live: the Caddy port manager (`caddy-proxy.service`) — reach the app at
+**http://movie-searcher.localhost**.

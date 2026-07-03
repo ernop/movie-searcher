@@ -1,11 +1,13 @@
-# Tooling safety notes (PowerShell, Windows)
-- Prefer full venv paths to avoid module resolution issues:
-  - `.\venv\Scripts\python.exe -m pip install <pkg> --disable-pip-version-check --no-cache-dir --timeout 120`
-  - `.\venv\Scripts\python.exe -m ruff --version`
-  - `.\venv\Scripts\python.exe -m ruff check .`
-- Avoid piping long installs through filters (`| Select-Object ...`); it can swallow prompts and make interrupts look like failures. Run install commands directly.
-- If installs were interrupted, rerun the full command (above) to ensure wheels are written.
-- HTML lint install: from `static/js`, run `npm install` (installs htmlhint). Then `npm run lint:html` in that directory.
-- JS lint: from `static/js`, `npm run lint`.
-- Python lint: from repo root, `.\venv\Scripts\python.exe -m ruff check .`.
+# Tooling notes (Linux / PC — this is the box this repo runs on)
 
+- Use the venv's Python directly (no activation needed):
+  - `./venv/bin/python -m pip install <pkg>`
+  - `./venv/bin/python start.py`   # server on http://localhost:8002
+  - `./venv/bin/python stop.py`
+  - `./venv/bin/ruff check .`       # Python lint
+- System deps **ffmpeg + VLC** are installed via apt on this box. `start.py` only
+  auto-installs them on Windows; on Linux install them yourself.
+- HTML lint: from `static/js`, run `npm install` (installs htmlhint), then `npm run lint:html`.
+- JS lint: from `static/js`, `npm run lint`.
+- Run/config/store details are in `AGENTS.md`; full setup + verification in
+  `docs/local-setup-linux.md`.
