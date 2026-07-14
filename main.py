@@ -3698,10 +3698,11 @@ async def get_movie_reviews(movie_id: int):
 async def generate_movie_review(movie_id: int, request: ReviewRequest):
     """Generate an AI review for a movie using SSE streaming"""
     openai_key, anthropic_key = load_api_keys()
+    provider = resolve_ai_model(request.provider)["provider"]
     
-    if request.provider == "openai" and not openai_key:
+    if provider == "openai" and not openai_key:
         raise HTTPException(status_code=400, detail="OpenAI API key not found in settings.json")
-    if request.provider == "anthropic" and not anthropic_key:
+    if provider == "anthropic" and not anthropic_key:
         raise HTTPException(status_code=400, detail="Anthropic API key not found in settings.json")
     
     interaction_id = str(uuid.uuid4())
@@ -3780,7 +3781,7 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
             logger.info(f"Review interaction {interaction_id} prompt payload:\n{prompt.strip()}")
             
             # Step 2: Call AI
-            provider_display = "OpenAI" if request.provider == "openai" else "Anthropic"
+            provider_display = "OpenAI" if provider == "openai" else "Anthropic"
             yield send_progress(2, 3, f"Waiting for {provider_display} response...")
             
             response_text = ""
@@ -3790,9 +3791,9 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
             model_name = None
             
             try:
-                if request.provider == "openai":
+                if provider == "openai":
                     provider_key = "openai"
-                    model_config = next((m for m in AI_MODELS if m["provider"] == "openai"), None)
+                    model_config = resolve_ai_model(request.provider)
                     model_name = model_config["model_id"] if model_config else "gpt-5.1"
                     client = openai.OpenAI(api_key=openai_key)
                     logger.info(f"Review interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
@@ -3811,14 +3812,14 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
                     if completion.usage:
                         in_tokens = completion.usage.prompt_tokens or 0
                         out_tokens = completion.usage.completion_tokens or 0
-                        cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                        cost_cents, cost_usd, cost_details = estimate_ai_cost(model_name, in_tokens, out_tokens)
                     else:
-                        model_label = AI_PRICING[provider_key]["model"]
+                        model_label = AI_PRICING.get(model_name, {}).get("model", model_name)
                         cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
                 
-                elif request.provider == "anthropic":
+                elif provider == "anthropic":
                     provider_key = "anthropic"
-                    model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
+                    model_config = resolve_ai_model(request.provider)
                     model_name = model_config["model_id"] if model_config else "claude-opus-4-8"
                     client = anthropic.Anthropic(api_key=anthropic_key)
                     logger.info(f"Review interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
@@ -3832,15 +3833,15 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
                         ]
                     )
                     
-                    response_text = message.content[0].text
+                    response_text = anthropic_response_text(message)
                     logger.info(f"Review interaction {interaction_id} <- response from {provider_key} ({model_name}): {response_text[:200]}...")
                     
                     if message.usage:
                         in_tokens = message.usage.input_tokens or 0
                         out_tokens = message.usage.output_tokens or 0
-                        cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                        cost_cents, cost_usd, cost_details = estimate_ai_cost(model_name, in_tokens, out_tokens)
                     else:
-                        model_label = AI_PRICING[provider_key]["model"]
+                        model_label = AI_PRICING.get(model_name, {}).get("model", model_name)
                         cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
             
             except Exception as e:
@@ -3856,7 +3857,7 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
             review = AiReview(
                 movie_id=movie_id,
                 prompt_text=prompt,
-                model_provider=request.provider,
+                model_provider=provider,
                 model_name=model_name or "unknown",
                 response_text=response_text,
                 prompt_type="default",
@@ -3875,7 +3876,7 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
                 "response_text": response_text,
                 "cost_usd": cost_usd_payload,
                 "cost_details": cost_details,
-                "model_provider": request.provider,
+                "model_provider": provider,
                 "model_name": model_name
             })
         
@@ -3947,10 +3948,11 @@ async def get_reviews_count(movie_ids: str = Query(..., description="Comma-separ
 async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
     """Generate related movies for a movie using SSE streaming"""
     openai_key, anthropic_key = load_api_keys()
+    provider = resolve_ai_model(request.provider)["provider"]
     
-    if request.provider == "openai" and not openai_key:
+    if provider == "openai" and not openai_key:
         raise HTTPException(status_code=400, detail="OpenAI API key not found in settings.json")
-    if request.provider == "anthropic" and not anthropic_key:
+    if provider == "anthropic" and not anthropic_key:
         raise HTTPException(status_code=400, detail="Anthropic API key not found in settings.json")
     
     interaction_id = str(uuid.uuid4())
@@ -4026,7 +4028,7 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
             logger.info(f"Related movies interaction {interaction_id} prompt payload:\n{prompt.strip()}")
             
             # Step 2: Call AI
-            provider_display = "OpenAI" if request.provider == "openai" else "Anthropic"
+            provider_display = "OpenAI" if provider == "openai" else "Anthropic"
             yield send_progress(2, 3, f"Waiting for {provider_display} response...")
             
             response_text = ""
@@ -4036,9 +4038,9 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
             model_name = None
             
             try:
-                if request.provider == "openai":
+                if provider == "openai":
                     provider_key = "openai"
-                    model_config = next((m for m in AI_MODELS if m["provider"] == "openai"), None)
+                    model_config = resolve_ai_model(request.provider)
                     model_name = model_config["model_id"] if model_config else "gpt-5.1"
                     client = openai.OpenAI(api_key=openai_key)
                     logger.info(f"Related movies interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
@@ -4058,14 +4060,14 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
                     if completion.usage:
                         in_tokens = completion.usage.prompt_tokens or 0
                         out_tokens = completion.usage.completion_tokens or 0
-                        cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                        cost_cents, cost_usd, cost_details = estimate_ai_cost(model_name, in_tokens, out_tokens)
                     else:
-                        model_label = AI_PRICING[provider_key]["model"]
+                        model_label = AI_PRICING.get(model_name, {}).get("model", model_name)
                         cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
                 
-                elif request.provider == "anthropic":
+                elif provider == "anthropic":
                     provider_key = "anthropic"
-                    model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
+                    model_config = resolve_ai_model(request.provider)
                     model_name = model_config["model_id"] if model_config else "claude-opus-4-8"
                     client = anthropic.Anthropic(api_key=anthropic_key)
                     logger.info(f"Related movies interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
@@ -4079,15 +4081,15 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
                         ]
                     )
                     
-                    response_text = message.content[0].text
+                    response_text = anthropic_response_text(message)
                     logger.info(f"Related movies interaction {interaction_id} <- response from {provider_key} ({model_name}): {response_text[:200]}...")
                     
                     if message.usage:
                         in_tokens = message.usage.input_tokens or 0
                         out_tokens = message.usage.output_tokens or 0
-                        cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                        cost_cents, cost_usd, cost_details = estimate_ai_cost(model_name, in_tokens, out_tokens)
                     else:
-                        model_label = AI_PRICING[provider_key]["model"]
+                        model_label = AI_PRICING.get(model_name, {}).get("model", model_name)
                         cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
             
             except Exception as e:
@@ -4196,7 +4198,7 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
             ai_related = AiRelatedMovies(
                 movie_id=movie_id,
                 prompt_text=prompt,
-                model_provider=request.provider,
+                model_provider=provider,
                 model_name=model_name or "unknown",
                 response_json=response_text,
                 related_movies_json=json.dumps(related_movies_data),
@@ -4214,7 +4216,7 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
                 "missing_movies": missing_movies,
                 "cost_usd": cost_usd_payload,
                 "cost_details": cost_details,
-                "model_provider": request.provider,
+                "model_provider": provider,
                 "model_name": model_name
             })
         
@@ -4487,23 +4489,43 @@ def load_api_keys():
         logger.error(f"Error loading settings.json: {e}")
         return None, None
 
-# Centralized AI model configuration (shared across AI search and review features)
+# Centralized AI model configuration (shared across AI search and review features).
+# The UI sends the chosen model_id as `provider` (back-compat: "anthropic"/"openai"
+# still resolve to that provider's default, the first entry below).
 AI_MODELS = [
+    {"provider": "anthropic", "model_id": "claude-opus-4-8", "display_name": "Claude Opus 4.8"},
+    {"provider": "anthropic", "model_id": "claude-fable-5", "display_name": "Claude Fable 5"},
+    {"provider": "anthropic", "model_id": "claude-sonnet-5", "display_name": "Claude Sonnet 5"},
     {"provider": "openai", "model_id": "gpt-5.1", "display_name": "GPT-5.1"},
-    {"provider": "anthropic", "model_id": "claude-opus-4-8", "display_name": "Claude Opus 4.8"}
 ]
 
+
+def resolve_ai_model(selector: str):
+    """Map a selector to its AI_MODELS entry. `selector` is a model_id
+    (e.g. 'claude-opus-4-8') or a legacy provider name ('anthropic'/'openai').
+    Falls back to the first model of a named provider, then to the default."""
+    mc = next((m for m in AI_MODELS if m["model_id"] == selector), None)
+    if mc is None:
+        mc = next((m for m in AI_MODELS if m["provider"] == selector), None)
+    return mc or AI_MODELS[0]
+
+
+def anthropic_response_text(message):
+    """Concatenate the text from an Anthropic message's content blocks, skipping
+    thinking/other non-text blocks. Sonnet 5 and Fable 5 run adaptive thinking by
+    default, so content[0] can be a ThinkingBlock rather than the answer text."""
+    return "".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    )
+
+
+# Pricing per model_id (USD per 1M tokens). Sonnet 5 uses sticker $3/$15
+# (intro $2/$10 runs through 2026-08-31); these figures drive the cost estimate.
 AI_PRICING = {
-    "openai": {
-        "model": "GPT-5.1",
-        "input_per_million": Decimal("1.25"),
-        "output_per_million": Decimal("10.00")
-    },
-    "anthropic": {
-        "model": "Claude Opus 4.8",
-        "input_per_million": Decimal("15.00"),
-        "output_per_million": Decimal("75.00")
-    }
+    "claude-opus-4-8": {"model": "Claude Opus 4.8", "input_per_million": Decimal("5.00"), "output_per_million": Decimal("25.00")},
+    "claude-fable-5": {"model": "Claude Fable 5", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
+    "claude-sonnet-5": {"model": "Claude Sonnet 5", "input_per_million": Decimal("3.00"), "output_per_million": Decimal("15.00")},
+    "gpt-5.1": {"model": "GPT-5.1", "input_per_million": Decimal("1.25"), "output_per_million": Decimal("10.00")},
 }
 
 JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
@@ -4796,10 +4818,11 @@ def save_movie_list(
 async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks):
     """AI search endpoint that streams progress updates via SSE."""
     openai_key, anthropic_key = load_api_keys()
+    provider = resolve_ai_model(request.provider)["provider"]
 
-    if request.provider == "openai" and not openai_key:
+    if provider == "openai" and not openai_key:
         raise HTTPException(status_code=400, detail="OpenAI API key not found in settings.json")
-    if request.provider == "anthropic" and not anthropic_key:
+    if provider == "anthropic" and not anthropic_key:
         raise HTTPException(status_code=400, detail="Anthropic API key not found in settings.json")
 
     interaction_id = str(uuid.uuid4())
@@ -4859,14 +4882,14 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         model_name = None  # Will be set to full model name for saving
 
         # Step 2: Calling AI
-        provider_display = "OpenAI" if request.provider == "openai" else "Anthropic"
+        provider_display = "OpenAI" if provider == "openai" else "Anthropic"
         yield send_progress(2, 4, f"Waiting for {provider_display} response...")
 
         try:
-            if request.provider == "openai":
+            if provider == "openai":
                 provider_key = "openai"
                 # Find model from centralized list
-                model_config = next((m for m in AI_MODELS if m["provider"] == "openai"), None)
+                model_config = resolve_ai_model(request.provider)
                 model_name = model_config["model_id"] if model_config else "gpt-5.1"
                 client = openai.OpenAI(api_key=openai_key)
                 logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
@@ -4886,21 +4909,21 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
                 if completion.usage:
                     in_tokens = completion.usage.prompt_tokens or 0
                     out_tokens = completion.usage.completion_tokens or 0
-                    cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                    cost_cents, cost_usd, cost_details = estimate_ai_cost(model_name, in_tokens, out_tokens)
                     usd_display = f"${cost_usd:.6f}" if cost_usd is not None else "unknown"
                     logger.info(
                         f"AI interaction {interaction_id} usage: provider={provider_key}, "
                         f"input_tokens={in_tokens}, output_tokens={out_tokens}, est_cost_usd={usd_display}"
                     )
                 else:
-                    model_label = AI_PRICING[provider_key]["model"]
+                    model_label = AI_PRICING.get(model_name, {}).get("model", model_name)
                     cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
                     logger.warning(f"AI interaction {interaction_id} missing usage data from {provider_key}")
 
-            elif request.provider == "anthropic":
+            elif provider == "anthropic":
                 provider_key = "anthropic"
                 # Find model from centralized list
-                model_config = next((m for m in AI_MODELS if m["provider"] == "anthropic"), None)
+                model_config = resolve_ai_model(request.provider)
                 model_name = model_config["model_id"] if model_config else "claude-opus-4-8"
                 client = anthropic.Anthropic(api_key=anthropic_key)
                 logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
@@ -4913,21 +4936,21 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
                     ]
                 )
 
-                content = message.content[0].text
+                content = anthropic_response_text(message)
                 logger.info(f"AI interaction {interaction_id} <- response from {provider_key} ({model_name}): {content}")
                 response_data = parse_ai_response_json(content, interaction_id, f"{provider_key} ({model_name})")
 
                 if message.usage:
                     in_tokens = message.usage.input_tokens or 0
                     out_tokens = message.usage.output_tokens or 0
-                    cost_cents, cost_usd, cost_details = estimate_ai_cost(provider_key, in_tokens, out_tokens)
+                    cost_cents, cost_usd, cost_details = estimate_ai_cost(model_name, in_tokens, out_tokens)
                     usd_display = f"${cost_usd:.6f}" if cost_usd is not None else "unknown"
                     logger.info(
                         f"AI interaction {interaction_id} usage: provider={provider_key}, "
                         f"input_tokens={in_tokens}, output_tokens={out_tokens}, est_cost_usd={usd_display}"
                     )
                 else:
-                    model_label = AI_PRICING[provider_key]["model"]
+                    model_label = AI_PRICING.get(model_name, {}).get("model", model_name)
                     cost_details = f"{model_label} pricing unavailable because the provider did not return token usage."
                     logger.warning(f"AI interaction {interaction_id} missing usage data from {provider_key}")
 

@@ -1,5 +1,21 @@
 // Movie Navigation
 
+// Display names for AI model ids (mirrors AI_MODELS in main.py). Saved reviews
+// store the raw model_id; map it to a friendly label, falling back to the raw
+// id (and to "Claude Opus 4.8" for legacy opus ids).
+const AI_MODEL_DISPLAY_NAMES = {
+    'claude-opus-4-8': 'Claude Opus 4.8',
+    'claude-fable-5': 'Claude Fable 5',
+    'claude-sonnet-5': 'Claude Sonnet 5',
+    'gpt-5.1': 'GPT-5.1',
+};
+function aiModelDisplayName(modelName) {
+    if (!modelName) return 'Unknown';
+    if (AI_MODEL_DISPLAY_NAMES[modelName]) return AI_MODEL_DISPLAY_NAMES[modelName];
+    if (modelName.includes('opus')) return 'Claude Opus 4.8';
+    return modelName;
+}
+
 // Load and render playlists that contain a movie
 async function loadMoviePlaylists(movieId) {
     try {
@@ -67,9 +83,7 @@ async function loadMovieReviews(movieId) {
         if (reviews.length === 0) return '';
 
         const reviewsHtml = reviews.map(review => {
-            const modelDisplay = review.model_provider === 'openai' 
-                ? (review.model_name === 'gpt-5.1' ? 'GPT-5.1' : review.model_name)
-                : (review.model_name.includes('opus') ? 'Claude Opus 4.8' : review.model_name);
+            const modelDisplay = aiModelDisplayName(review.model_name);
             const createdDate = review.created ? formatDate(new Date(review.created)) : '';
             const costText = review.cost_usd ? `$${review.cost_usd.toFixed(6)}` : '';
             
@@ -411,9 +425,7 @@ async function loadSavedRelatedMovies(movieId) {
             const foundMovies = record.found_movies || [];
             if (foundMovies.length === 0) return '';
             
-            const modelDisplay = record.model_provider === 'openai' 
-                ? (record.model_name === 'gpt-5.1' ? 'GPT-5.1' : record.model_name)
-                : (record.model_name.includes('opus') ? 'Claude Opus 4.8' : record.model_name);
+            const modelDisplay = aiModelDisplayName(record.model_name);
             const createdDate = record.created ? formatDate(new Date(record.created)) : '';
             const costText = record.cost_usd ? `$${record.cost_usd.toFixed(6)}` : '';
             
@@ -502,9 +514,7 @@ function renderRelatedMovies(movieId, data) {
         return;
     }
     
-    const modelDisplay = data.model_provider === 'openai' 
-        ? (data.model_name === 'gpt-5.1' ? 'GPT-5.1' : data.model_name)
-        : (data.model_name && data.model_name.includes('opus') ? 'Claude Opus 4.8' : data.model_name || 'Unknown');
+    const modelDisplay = aiModelDisplayName(data.model_name);
     const costText = data.cost_usd ? `$${data.cost_usd.toFixed(6)}` : '';
     
     const cardsHtml = foundMovies.map(movie => {
@@ -1033,8 +1043,10 @@ async function loadMovieDetailsById(id) {
                             <button id="related-movies-btn-${movie.id}" class="btn btn-small" onclick="generateRelatedMovies(${movie.id})">Related Movies</button>
                             <button id="generate-review-btn-${movie.id}" class="btn btn-small" onclick="generateReview(${movie.id})">Get AI Review</button>
                             <select id="review-provider-${movie.id}" style="padding: 4px 8px; background: #1a1a1a; border: 1px solid #333; color: #888; border-radius: 4px; font-size: 12px;">
-                                <option value="anthropic" selected>Claude Opus 4.8</option>
-                                <option value="openai">GPT-5.1</option>
+                                <option value="claude-opus-4-8" selected>Claude Opus 4.8</option>
+                                <option value="claude-fable-5">Claude Fable 5</option>
+                                <option value="claude-sonnet-5">Claude Sonnet 5</option>
+                                <option value="gpt-5.1">GPT-5.1</option>
                             </select>
                         </div>
                         <details style="margin-top: 0;">

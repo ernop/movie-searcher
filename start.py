@@ -14,7 +14,13 @@ from pathlib import Path
 
 # Server configuration
 SERVER_PORT = 8002
-SERVER_URL = f"http://localhost:{SERVER_PORT}"
+# Browser-open target: the Caddy alias (http://movie-searcher.localhost ->
+# 127.0.0.1:SERVER_PORT), so the launcher opens the same address the local
+# sites are reached by through the Caddy proxy. Requires the caddy-proxy
+# service running; the app still binds SERVER_PORT directly and is reachable
+# at SERVER_URL_DIRECT if Caddy is down.
+SERVER_URL = "http://movie-searcher.localhost"
+SERVER_URL_DIRECT = f"http://localhost:{SERVER_PORT}"
 
 def check_port_in_use(port: int) -> bool:
     """Check if a port is already in use"""
@@ -190,7 +196,7 @@ def run_setup_vlc() -> bool:
 def start_server(open_browser_url: str | None = None, dev: bool = False):
     """Start the server by importing and running it"""
     print("Starting Movie Searcher server...")
-    print(f"Server will be available at {SERVER_URL}")
+    print(f"Server will be available at {SERVER_URL} (direct: {SERVER_URL_DIRECT})")
     if dev:
         print("DEV MODE: Auto-reload enabled for *.py files")
     print("Press Ctrl+C to stop the server")
@@ -222,7 +228,7 @@ def main():
         print("Server is already running!")
         print(f"Opening browser to {SERVER_URL}...")
         webbrowser.open(SERVER_URL)
-        print(f"\nServer URL: {SERVER_URL}")
+        print(f"\nServer URL: {SERVER_URL} (direct: {SERVER_URL_DIRECT})")
         return 0
 
     # Check for ffmpeg

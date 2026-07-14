@@ -142,8 +142,10 @@
                         onkeypress="if(event.key === 'Enter') performAiSearch()">
                     <select id="aiProviderSelect"
                         style="padding: 0 15px; background: #1a1a1a; border: 1px solid #333; color: white; border-radius: 4px;">
-                        <option value="anthropic" selected>Claude Opus 4.8</option>
-                        <option value="openai">GPT-5.1</option>
+                        <option value="claude-opus-4-8" selected>Claude Opus 4.8</option>
+                        <option value="claude-fable-5">Claude Fable 5</option>
+                        <option value="claude-sonnet-5">Claude Sonnet 5</option>
+                        <option value="gpt-5.1">GPT-5.1</option>
                     </select>
                     <button class="btn" id="aiSearchButton" onclick="performAiSearch()">Ask AI</button>
                 </div>
@@ -721,7 +723,7 @@
         <script src="/js/search.js?v=3"></script>
         <script src="/js/explore.js?v=3"></script>
         <script src="/js/all-movies.js?v=3"></script>
-        <script src="/js/movie-details.js?v=13"></script>
+        <script src="/js/movie-details.js?v=14"></script>
         <script src="/js/transcription.js?v=1"></script>
         <script src="/js/playlists.js?v=3"></script>
         <script src="/js/media.js?v=3"></script>

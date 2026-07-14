@@ -57,7 +57,9 @@ class ScreenshotsIntervalRequest(BaseModel):
 
 class AiSearchRequest(BaseModel):
     query: str
-    provider: Literal["openai", "anthropic"] = "anthropic"
+    # A model_id (e.g. "claude-opus-4-8") or a legacy provider name
+    # ("anthropic"/"openai"); resolved server-side via resolve_ai_model.
+    provider: str = "claude-opus-4-8"
 
 
 class PlaylistCreateRequest(BaseModel):
@@ -82,9 +84,9 @@ class CheckMoviesRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
-    provider: Literal["openai", "anthropic"] = "anthropic"
+    provider: str = "claude-opus-4-8"  # model_id or legacy provider name
     further_instructions: str | None = None
 
 
 class RelatedMoviesRequest(BaseModel):
-    provider: Literal["openai", "anthropic"] = "anthropic"
+    provider: str = "claude-opus-4-8"  # model_id or legacy provider name
