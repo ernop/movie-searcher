@@ -1,33 +1,29 @@
-# movie-searcher — agent notes
+# Movie Searcher - Agent Entry Point
 
-Local FastAPI video-library browser: point it at a folder of videos; it indexes
-metadata, generates screenshots, and launches VLC. Sibling of `mybrowser`
-(fleet orientation: `~/proj/mybrowser/AGENTS.md`).
+Start here. Read the files linked below before doing anything.
 
-## Run (Linux / PC)
+## What This Is
 
-- `./venv/bin/python start.py` → serves http://localhost:8002 (also
-  http://movie-searcher.localhost via the Caddy port manager). Stop: `stop.py` or Ctrl+C.
-- venv is Python 3.14. System deps: **ffmpeg + VLC** (install via apt; `start.py`
-  only auto-installs them on Windows). Lint: `./venv/bin/ruff check .`
-- Full Linux setup and verification: `docs/local-setup-linux.md`.
+Local server to view, search, and manage movies/videos on disk. Python/Flask, Django-style. AI movie identification, IMDB import, transcription support.
 
-## Config
+## Key Documents
 
-`settings.json` (gitignored) — copy from `settings.example.json`. The
-ffmpeg/vlc/ffprobe paths auto-fill on first start. `movies_folder` is the library
-root. A blank `local_target_folder` disables the per-movie "Copy to Local" feature
-(that feature copies one film at a time to a local disk — it never bulk-copies,
-and scanning never copies).
+- [Developer notes](docs/agents.md) — communication style, coding conventions
+- [Agent command guide](AGENT_COMMAND_GUIDE.md) — common commands and workflows
+- [System requirements](docs/SYSTEM_REQUIREMENTS.md)
+- [Tech notes](docs/TECH_NOTES.md)
+- [Database schema](docs/database_schema.md)
+- [Product notes](docs/PRODUCT_NOTES.md)
+- [Ideas](docs/IDEAS.md)
+- [Testing](docs/TESTING.md)
+- [Transcription](docs/TRANSCRIPTION.md)
+- [Linux install notes](docs/linux-install-notes.md) — run/config/store specifics for the Linux box (formerly the AGENTS.md content there)
 
-## This install's store
+## Also Read
 
-`movies_folder` = `/mnt/tvnik-movies` — a **read-only** sshfs mount of the tvnik
-box (`silver@192.168.1.219:/mnt/seagate16/movies`, ~5.3 TB, systemd
-`tvnik-movies.service`). Scanning reads only; it never writes to the source tree.
-Details: `mybrowser/config/tvnik-htpc-setup.md`.
+- [.cursorrules](.cursorrules) — tooling safety notes (PowerShell, venv paths, linting)
 
-## Note
+## Related Projects
 
-`.cursorrules` is Cursor-only and Windows/PowerShell-oriented (`.\venv\Scripts\...`).
-On this Linux box use `./venv/bin/python` and `./venv/bin/ruff check .` instead.
+- **movica** (GitHub, archived) — predecessor Django movie site (2015)
+- **myBrowser** (`/proj/myBrowser/`) — meta-project index; see `capabilities.md` for cross-project skill inventory
