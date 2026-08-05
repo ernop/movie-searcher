@@ -118,7 +118,12 @@ def classify_existence(movies):
 
 
 def dedup_winner(group):
-    """Mirror the server's search dedup: largest size wins, ties -> newest id."""
+    """Static dedup rule (largest size, ties -> newest id), ignoring existence.
+
+    The server additionally prefers rows whose file exists at request time, so
+    titles flagged here are auto-resolved for display/playback - but the dead
+    rows are still cleanup targets (--remove-missing / --remove-stale-roots).
+    """
     return max(group, key=lambda m: (m.size or 0, m.id or 0))
 
 
@@ -315,8 +320,10 @@ def main():
                 if len(alive) > 1:
                     true_dupes_on_disk.append(alive)
 
-            print("Titles where the search result points at a MISSING file but a working")
+            print("Titles whose best-by-size row points at a MISSING file while a working")
             print(f"copy exists under another path: {len(broken_recoverable)}")
+            print("(the server now auto-prefers the working copy at request time;")
+            print(" these dead rows should still be cleaned up)")
             for winner, alive in broken_recoverable[:args.examples]:
                 print(f"  '{winner.name}'")
                 print(f"     dead row : [{winner.id}] {winner.path}")
