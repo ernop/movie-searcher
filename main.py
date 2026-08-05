@@ -181,12 +181,43 @@ def ensure_movie_has_screenshot(movie_id: int, movie_path: str, has_image: bool,
         logger.debug(f"Movie movie_id={movie_id} already has image={has_image} or screenshots={has_screenshots}, skipping auto-queue")
 
 
+# Short-lived cache for movie-file existence checks. The movies folder is
+# typically a network (sshfs) mount, so each os.path.exists() is a network
+# round trip; the cache keeps dedup cheap for repeated searches. Entries
+# expire so deletions/remounts are picked up within a minute.
+_EXISTENCE_CACHE: dict = {}
+_EXISTENCE_CACHE_TTL_SECONDS = 60.0
+
+
+def movie_file_exists(path: str) -> bool:
+    """os.path.exists() with a short TTL cache (movie files live on a network mount)."""
+    if not path:
+        return False
+    now = time.monotonic()
+    cached = _EXISTENCE_CACHE.get(path)
+    if cached is not None and (now - cached[1]) < _EXISTENCE_CACHE_TTL_SECONDS:
+        return cached[0]
+    exists = os.path.exists(path)
+    _EXISTENCE_CACHE[path] = (exists, now)
+    return exists
+
+
 def deduplicate_movies_by_size(movies: list[Movie]) -> list[Movie]:
     """
-    Deduplicate movies by name, keeping only the largest file (by size) for each unique name.
-    Movies with the same name (case-insensitive) are considered duplicates.
-    Returns a filtered list with only the largest file for each movie name.
-    
+    Deduplicate movies by name, keeping one row per unique name (case-insensitive).
+
+    Preference order within a duplicate group:
+      1. rows whose file actually exists on disk (a stale row whose file was
+         moved/renamed must lose, otherwise the movie shows in search but
+         fails to play),
+      2. largest size,
+      3. newest id (the row the latest scan actually saw).
+
+    Existence is only checked for names with multiple rows (the rare case), via
+    a short-lived cache, so a typical search does zero or a handful of stats.
+    If every copy is missing (e.g. the mount is down), the size/newest rule
+    still applies and nothing is dropped.
+
     Use this for small result sets (e.g., search results). For large datasets with
     SQL pagination, use get_largest_movie_ids_subquery() instead.
     """
@@ -201,16 +232,72 @@ def deduplicate_movies_by_size(movies: list[Movie]) -> list[Movie]:
             name_groups[key] = []
         name_groups[key].append(movie)
 
-    # For each group, keep only the movie with the largest size
     result = []
     for group in name_groups.values():
         if len(group) == 1:
             result.append(group[0])
         else:
-            # Sort by size descending (treating None as 0)
-            largest = max(group, key=lambda m: m.size or 0)
-            result.append(largest)
+            best = max(group, key=lambda m: (
+                1 if movie_file_exists(m.path) else 0,
+                m.size or 0,
+                m.id or 0
+            ))
+            result.append(best)
 
+    return result
+
+
+def prefer_existing_duplicates(db, movies: list[Movie]) -> list[Movie]:
+    """
+    For a page-sized list of movies (SQL-deduplicated results), replace any
+    movie whose file is missing with a same-named, non-hidden duplicate whose
+    file exists (preferring an identical-size copy, then the largest).
+
+    The SQL dedup subquery picks winners by size alone and cannot see the
+    filesystem; this post-pass makes browse/explore/random results point at
+    playable copies. Costs are bounded: one query to find which page names
+    even have duplicates, then existence checks (cached) only for those.
+    """
+    if not movies:
+        return movies
+
+    page_names = {m.name.lower() for m in movies}
+    dup_name_rows = db.query(func.lower(Movie.name)).filter(
+        func.lower(Movie.name).in_(page_names),
+        Movie.hidden == False  # noqa: E712
+    ).group_by(func.lower(Movie.name)).having(func.count() > 1).all()
+    dup_names = {row[0] for row in dup_name_rows}
+    if not dup_names:
+        return movies
+
+    alternates = db.query(Movie).filter(
+        func.lower(Movie.name).in_(dup_names),
+        Movie.hidden == False  # noqa: E712
+    ).all()
+    by_name: dict = {}
+    for alt in alternates:
+        by_name.setdefault(alt.name.lower(), []).append(alt)
+
+    result = []
+    swapped = 0
+    for movie in movies:
+        key = movie.name.lower()
+        if key in dup_names and not movie_file_exists(movie.path):
+            candidates = [c for c in by_name.get(key, []) if c.id != movie.id]
+            candidates.sort(key=lambda c: (0 if c.size == movie.size else 1, -(c.size or 0)))
+            for candidate in candidates:
+                if movie_file_exists(candidate.path):
+                    logger.info(
+                        f"[DEDUP] Swapping missing-file row {movie.id} ('{movie.path}') "
+                        f"for existing duplicate {candidate.id} ('{candidate.path}')"
+                    )
+                    movie = candidate
+                    swapped += 1
+                    break
+        result.append(movie)
+
+    if swapped:
+        logger.info(f"[DEDUP] prefer_existing_duplicates swapped {swapped} row(s)")
     return result
 
 
@@ -235,7 +322,9 @@ def get_largest_movie_ids_subquery(db, base_filters: list = None):
         Movie.id.label('movie_id'),
         sql_func.row_number().over(
             partition_by=sql_func.lower(Movie.name),
-            order_by=sql_func.coalesce(Movie.size, 0).desc()
+            # Tie-break equal sizes on id DESC so the newest row (the one the
+            # latest scan actually saw on disk) wins over a stale duplicate.
+            order_by=[sql_func.coalesce(Movie.size, 0).desc(), Movie.id.desc()]
         ).label('size_rank')
     ).filter(*filters).subquery()
 
@@ -1460,6 +1549,36 @@ async def launch_movie(request: LaunchRequest):
 
         # Check if file exists before launching
         import os
+        if not os.path.exists(movie_path):
+            # The row may be stale: the same movie is often also indexed under a
+            # newer path (file moved/renamed on the source disk, or the library
+            # root changed). If another non-hidden row with the same name has a
+            # file that exists, launch that copy instead of failing.
+            from sqlalchemy.sql import func as sql_func
+            fallback = None
+            duplicates = db.query(Movie).filter(
+                sql_func.lower(Movie.name) == movie.name.lower(),
+                Movie.id != movie.id,
+                Movie.hidden == False  # noqa: E712
+            ).all()
+            # Prefer an identical copy (same size = almost surely the same file),
+            # then the largest existing file.
+            duplicates.sort(key=lambda m: (0 if m.size == movie.size else 1, -(m.size or 0)))
+            for candidate in duplicates:
+                try:
+                    if candidate.path and os.path.exists(candidate.path):
+                        fallback = candidate
+                        break
+                except OSError:
+                    continue
+            if fallback:
+                logger.warning(
+                    f"Launch: Stale path for movie_id={movie.id} ('{movie_path}' missing); "
+                    f"falling back to duplicate movie_id={fallback.id} at '{fallback.path}'"
+                )
+                movie_path = fallback.path
+                request.movie_id = fallback.id
+
         if not os.path.exists(movie_path):
             error_msg = f"File not found: {movie_path}"
             logger.error(f"Launch: File does not exist at path: {movie_path}")
@@ -2901,6 +3020,10 @@ async def explore_movies(
         query_ms = (time.perf_counter() - t_query) * 1000
         logger.info(f"[EXPLORE] DB query returned {len(rows)} movies (total={total}) in {query_ms:.2f}ms")
 
+        # If a winner's file is missing but a duplicate exists on disk, show the
+        # playable copy instead (SQL dedup can't see the filesystem)
+        rows = prefer_existing_duplicates(db, rows)
+
         # Build movie cards
         t_cards = time.perf_counter()
         movie_cards = build_movie_cards(db, rows)
@@ -3052,6 +3175,10 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
 
         if not random_movies:
             return {"results": []}
+
+        # If a winner's file is missing but a duplicate exists on disk, show the
+        # playable copy instead (SQL dedup can't see the filesystem)
+        random_movies = prefer_existing_duplicates(db, random_movies)
 
         # Build standardized movie cards
         t_cards = time.perf_counter()
