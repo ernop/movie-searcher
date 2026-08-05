@@ -207,8 +207,13 @@ def deduplicate_movies_by_size(movies: list[Movie]) -> list[Movie]:
         if len(group) == 1:
             result.append(group[0])
         else:
-            # Sort by size descending (treating None as 0)
-            largest = max(group, key=lambda m: m.size or 0)
+            # Keep the largest size (treating None as 0). Tie-break on id
+            # descending: when the same file is indexed under two paths (e.g.
+            # after the movies root moved, or a rename on the source disk), the
+            # sizes are equal and only the NEWER row points at a path the most
+            # recent scan actually saw. Without the tie-break the stale row wins
+            # and the movie shows in search but fails to play.
+            largest = max(group, key=lambda m: (m.size or 0, m.id or 0))
             result.append(largest)
 
     return result
@@ -235,7 +240,9 @@ def get_largest_movie_ids_subquery(db, base_filters: list = None):
         Movie.id.label('movie_id'),
         sql_func.row_number().over(
             partition_by=sql_func.lower(Movie.name),
-            order_by=sql_func.coalesce(Movie.size, 0).desc()
+            # Tie-break equal sizes on id DESC so the newest row (the one the
+            # latest scan actually saw on disk) wins over a stale duplicate.
+            order_by=[sql_func.coalesce(Movie.size, 0).desc(), Movie.id.desc()]
         ).label('size_rank')
     ).filter(*filters).subquery()
 
@@ -1460,6 +1467,36 @@ async def launch_movie(request: LaunchRequest):
 
         # Check if file exists before launching
         import os
+        if not os.path.exists(movie_path):
+            # The row may be stale: the same movie is often also indexed under a
+            # newer path (file moved/renamed on the source disk, or the library
+            # root changed). If another non-hidden row with the same name has a
+            # file that exists, launch that copy instead of failing.
+            from sqlalchemy.sql import func as sql_func
+            fallback = None
+            duplicates = db.query(Movie).filter(
+                sql_func.lower(Movie.name) == movie.name.lower(),
+                Movie.id != movie.id,
+                Movie.hidden == False  # noqa: E712
+            ).all()
+            # Prefer an identical copy (same size = almost surely the same file),
+            # then the largest existing file.
+            duplicates.sort(key=lambda m: (0 if m.size == movie.size else 1, -(m.size or 0)))
+            for candidate in duplicates:
+                try:
+                    if candidate.path and os.path.exists(candidate.path):
+                        fallback = candidate
+                        break
+                except OSError:
+                    continue
+            if fallback:
+                logger.warning(
+                    f"Launch: Stale path for movie_id={movie.id} ('{movie_path}' missing); "
+                    f"falling back to duplicate movie_id={fallback.id} at '{fallback.path}'"
+                )
+                movie_path = fallback.path
+                request.movie_id = fallback.id
+
         if not os.path.exists(movie_path):
             error_msg = f"File not found: {movie_path}"
             logger.error(f"Launch: File does not exist at path: {movie_path}")
