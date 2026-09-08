@@ -3838,3 +3838,16 @@
             outline: 2px solid #4a9eff !important;
             outline-offset: 2px;
         }
+
+#pageSeries { padding: 24px; max-width: 1200px; margin: auto; }
+.tv-card { padding: 16px; margin: 12px 0; border: 1px solid #383838; border-radius: 8px; background: #202020; }
+.tv-card h3 { margin: 0 0 8px; }
+.tv-season { margin: 24px 0; }
+.tv-episode { display: grid; grid-template-columns: 80px minmax(140px, 1fr) minmax(150px, auto) auto; gap: 12px; align-items: center; min-height: 64px; border-bottom: 1px solid #333; padding: 8px; }
+.tv-episode small { display: block; color: #999; }
+#tvEpisodeNavigation { padding: 16px; background: #222; }
+@media (max-width: 650px) { .tv-episode { grid-template-columns: 70px 1fr; } }
+#pageSeries a, #tvEpisodeNavigation a, .tv-card a { color: #8bbdff; }
+#tvSeriesActions, .tv-season-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tv-episode { grid-template-columns: 72px minmax(120px, 1fr) 130px 180px; }
+@media (max-width: 650px) { .tv-episode { grid-template-columns: 70px minmax(0, 1fr); } }

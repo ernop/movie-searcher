@@ -1462,6 +1462,12 @@ def index_movie(file_path, db: Session = None, patterns=None):
 
         # Check if already indexed and unchanged
         existing = db.query(Movie).filter(Movie.path == normalized_path).first()
+        if existing:
+            from television import register_file
+            register_file(db, existing)
+            from television import episode_numbers
+            if episode_numbers(Path(normalized_path).stem):
+                cleaned_name, year = existing.name, existing.year
         file_unchanged = existing and existing.hash == file_hash
 
         # Check if screenshot exists for this movie
@@ -1501,8 +1507,8 @@ def index_movie(file_path, db: Session = None, patterns=None):
         size = stat.st_size
 
         # Exclude files smaller than minimum threshold
-        if size < MIN_FILE_SIZE_BYTES:
-            add_scan_log("warning", f"  Skipping (too small: {size / (1024*1024):.1f}MB; requires >= 50MB)")
+        if size < minimum_video_size(normalized_path):
+            add_scan_log("warning", f"  Skipping (too small: {size / (1024*1024):.1f}MB; requires >= {minimum_video_size(normalized_path) / (1024*1024):g}MB)")
             # If it exists in DB already, remove it to enforce exclusion
             if existing:
                 try:
@@ -1596,6 +1602,9 @@ def index_movie(file_path, db: Session = None, patterns=None):
             db.add(movie)
             db.flush()  # Flush to get movie.id
             add_scan_log("success", f"New Movie Discovered: {cleaned_name}")
+
+        from television import register_file
+        register_file(db, movie)
 
         # Determine movie.image_path: find largest image, or generate fallback screenshot
         selected_image_path = None
@@ -1766,7 +1775,7 @@ def scan_directory(root_path, state=None, progress_callback=None):
                             continue
                         if is_sample_file(entry.path) or is_incomplete_download(entry.path):
                             continue
-                        if entry.stat(follow_symlinks=False).st_size < MIN_FILE_SIZE_BYTES:
+                        if entry.stat(follow_symlinks=False).st_size < minimum_video_size(entry.name):
                             continue
                     except OSError as e:
                         add_scan_log("warning", f"Could not stat {entry.path}: {e}")
@@ -1969,6 +1978,8 @@ def reconcile_movie_lists(db: Session, new_movies: list) -> dict:
     Returns:
         dict with 'matched_count' and 'lists_updated'
     """
+    from television import reconcile_series_lists
+    reconcile_series_lists(db)
     if not new_movies:
         return {"matched_count": 0, "lists_updated": 0}
 
@@ -1995,6 +2006,8 @@ def reconcile_movie_lists(db: Session, new_movies: list) -> dict:
     matched_count = 0
 
     for item in missing_items:
+        if item.media_type != 'movie':
+            continue
         # Normalize the list item's title
         norm_title = re.sub(r'[^\w\s]', '', item.title).lower().strip()
 
@@ -2173,3 +2186,8 @@ def run_scan_async(root_path: str):
         logger.error(f"Scan failed: {e}", exc_info=True)
         # Don't re-raise in background thread - just stop and report error
 
+
+
+def minimum_video_size(path):
+    from television import episode_numbers
+    return 1024 * 1024 if episode_numbers(Path(path).stem) else MIN_FILE_SIZE_BYTES

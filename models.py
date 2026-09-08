@@ -226,6 +226,10 @@ class MovieListItem(Base):
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='SET NULL'), nullable=True, index=True)  # NULL if not in library
     title = Column(String, nullable=False)  # Movie title (stored for display, esp. for missing movies)
     year = Column(Integer, nullable=True)  # Movie year
+    media_type = Column(String, nullable=False, default='movie', server_default='movie')
+    tv_series_id = Column(Integer, nullable=True)
+    season_number = Column(Integer, nullable=True)
+    episode_number = Column(Integer, nullable=True)
     ai_comment = Column(Text, nullable=True)  # AI's comment about this specific movie
     is_in_library = Column(Boolean, default=False, nullable=False)  # True if found in library
     sort_order = Column(Integer, default=0, nullable=False)  # Preserve AI's ordering

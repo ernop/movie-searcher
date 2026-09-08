@@ -141,6 +141,12 @@ function handleRoute() {
     const pageBatchSearch = document.getElementById('pageBatchSearch');
     const pageDialogueSearch = document.getElementById('pageDialogueSearch');
 
+    if (route === '/series' || route.startsWith('/series/')) {
+        document.getElementById('navSeries')?.classList.add('active');
+        loadSeriesPage(route.split('/')[2]);
+        return;
+    }
+
     // Detail routes (hash-based)
     if (route.startsWith('/movie/')) {
         const parts = route.split('/').filter(Boolean); // ["movie", "{id}", "{slug?}"]

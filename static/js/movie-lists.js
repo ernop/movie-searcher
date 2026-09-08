@@ -287,7 +287,7 @@ function renderMovieListDetail(data) {
             const commentHtml = movie.ai_comment
                 ? `<div class="ai-movie-comment">${escapeHtml(movie.ai_comment)}</div>`
                 : `<div class="ai-movie-comment muted">No specific comment.</div>`;
-            html += `<div class="ai-card-suggestion">${createMovieCard(movie)}${commentHtml}</div>`;
+            html += `<div class="ai-card-suggestion">${movie.media_type === "series" ? seriesCard(movie) : createMovieCard(movie)}${commentHtml}</div>`;
         });
         html += `</div>`;
     } else {
@@ -314,7 +314,7 @@ function renderMovieListDetail(data) {
             html += `
                 <div class="ai-missing-item">
                     <div class="ai-missing-card">
-                        <div class="ai-missing-title"><strong>${title}</strong>${year}</div>
+                        <div class="ai-missing-title"><strong>${title}</strong>${year}${movie.media_type === "series" ? seriesSummary(movie) : ""}</div>
                     </div>
                     ${comment}
                 </div>

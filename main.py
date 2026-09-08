@@ -388,6 +388,14 @@ def build_movie_cards(db, movies: list[Movie]) -> dict:
             ]
         }
 
+    from television import TVEpisode, TVEpisodeFile, TVSeries
+    links = db.query(TVEpisodeFile.movie_id, TVEpisode, TVSeries).join(TVEpisode, TVEpisode.id == TVEpisodeFile.episode_id).join(TVSeries, TVSeries.id == TVEpisode.series_id).filter(TVEpisodeFile.movie_id.in_(movie_ids)).all()
+    for movie_id, episode, series in links:
+        if movie_id in results:
+            card = results[movie_id]
+            card.update(media_type='episode', series_id=series.id, series_title=series.title, season=episode.season)
+            card.setdefault('episode_numbers', []).append(episode.number)
+            card['name'] = f"{series.title} · S{episode.season:02d}E{min(card['episode_numbers']):02d}" + (f" — {episode.title}" if episode.title else '')
     return results
 
 
@@ -515,6 +523,8 @@ async def lifespan(app):
 
 # Create FastAPI app with lifespan
 app = FastAPI(title="Movie Searcher", lifespan=lifespan)
+from television import router as series_router
+app.include_router(series_router)
 
 
 # Import Pydantic models from core module
@@ -4015,7 +4025,8 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
             missing_movies = []
             
             try:
-                all_movies = db.query(Movie).filter(Movie.hidden == False).all()
+                from television import TVEpisodeFile
+                all_movies = db.query(Movie).filter(Movie.hidden == False, ~Movie.id.in_(db.query(TVEpisodeFile.movie_id))).all()
                 
                 # Pre-process DB movies for faster matching
                 db_movie_map = {}
@@ -4688,7 +4699,9 @@ def save_movie_list(
     for fm in found_movies:
         item = MovieListItem(
             movie_list_id=movie_list.id,
-            movie_id=fm.get("id"),
+            movie_id=fm.get("id") if fm.get("media_type") != "series" else None,
+            media_type=fm.get("media_type", "movie"),
+            tv_series_id=fm.get("id") if fm.get("media_type") == "series" else None,
             title=fm.get("name", "Unknown"),
             year=fm.get("year"),
             ai_comment=fm.get("ai_comment"),
@@ -4706,12 +4719,16 @@ def save_movie_list(
             title=mm.get("name", "Unknown"),
             year=mm.get("year"),
             ai_comment=mm.get("ai_comment"),
+            media_type=mm.get("media_type", "movie"),
             is_in_library=False,
             sort_order=sort_order
         )
         db.add(item)
         sort_order += 1
 
+    from television import reconcile_series_lists
+    db.flush()
+    reconcile_series_lists(db)
     db.commit()
     logger.info(f"Saved movie list: id={movie_list.id}, slug={slug}, title={unique_title}")
     return movie_list
@@ -4751,7 +4768,7 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         yield send_progress(1, 4, "Preparing query for AI...")
 
         prompt = f"""
-        The user is asking about movies. Your goal is to return a structured JSON list of movies matching their query.
+        The user is asking about movies. Your goal is to return a structured JSON list of films and TV series matching their query. Distinguish films from series explicitly. For a series, return its premiere year, not the year a person joined it. When all work is requested, do not restrict the answer to famous highlights. Do not claim completeness if uncertain.
         
         User Query: "{request.query}"
         
@@ -4767,7 +4784,8 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
             "comment": "Optional overall comment.",
             "movies": [
                 {{
-                    "name": "Movie Title",
+                    "name": "Movie or Series Title",
+                    "media_type": "movie or series",
                     "year": 1999,
                     "comment": "Optional relevant comment."
                 }}
@@ -4875,7 +4893,7 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
                 continue
             year = movie.get("year")
             norm_title = re.sub(r'[^\w\s]', '', title).lower()
-            key = (norm_title, year)
+            key = (norm_title, year, movie.get("media_type", "movie"))
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -4888,7 +4906,8 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         missing_movies = []
 
         try:
-            all_movies = db.query(Movie).filter(Movie.hidden == False).all()
+            from television import TVEpisodeFile
+            all_movies = db.query(Movie).filter(Movie.hidden == False, ~Movie.id.in_(db.query(TVEpisodeFile.movie_id))).all()
 
             # Pre-process DB movies for faster matching
             db_movie_map = {}
@@ -4904,6 +4923,12 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
                 comment = ai_movie.get("comment", "")
 
                 if not title:
+                    continue
+
+                if ai_movie.get("media_type") == "series":
+                    from television import list_series
+                    view = list_series(db, MovieListItem(title=title, year=year, ai_comment=comment, media_type="series"))
+                    (found_movies if view["complete"] else missing_movies).append(view)
                     continue
 
                 # 1. Try exact normalized match
@@ -5192,6 +5217,11 @@ async def get_movie_list_by_id(list_id: int):
         missing_movies = []
 
         for item in items:
+            if item.media_type == 'series':
+                from television import list_series
+                view = list_series(db, item)
+                (found_movies if view['complete'] else missing_movies).append(view)
+                continue
             if item.is_in_library and item.movie_id and item.movie_id in movie_cards:
                 card = movie_cards[item.movie_id].copy()
                 card["ai_comment"] = item.ai_comment
@@ -5318,6 +5348,11 @@ async def get_movie_list(slug: str):
         missing_movies = []
 
         for item in items:
+            if item.media_type == 'series':
+                from television import list_series
+                view = list_series(db, item)
+                (found_movies if view['complete'] else missing_movies).append(view)
+                continue
             if item.is_in_library and item.movie_id and item.movie_id in movie_cards:
                 card = movie_cards[item.movie_id].copy()
                 card["ai_comment"] = item.ai_comment

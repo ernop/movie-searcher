@@ -92,6 +92,8 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
     # Set initial schema version if database is new
+    from television import initialize_schema
+    initialize_schema(engine)
     version = get_schema_version()
     if version is None:
         set_schema_version(CURRENT_SCHEMA_VERSION, "Initial schema version")

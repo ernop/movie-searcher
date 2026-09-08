@@ -208,7 +208,7 @@ function renderAiResults(data) {
             const commentText = movie.ai_comment
                 ? `<div class="ai-movie-comment">${escapeHtml(movie.ai_comment)}</div>`
                 : `<div class="ai-movie-comment muted">No specific comment.</div>`;
-            return `<div class="ai-card-suggestion">${createMovieCard(movie)}${commentText}</div>`;
+            return `<div class="ai-card-suggestion">${movie.media_type === "series" ? seriesCard(movie) : createMovieCard(movie)}${commentText}</div>`;
         }).join('');
         foundHtml = `
             <div class="section-title" style="margin-top: 5px;">In Your Library</div>
@@ -232,7 +232,7 @@ function renderAiResults(data) {
                 : '';
             return `<div class="ai-missing-item">
                         <div class="ai-missing-card">
-                            <div class="ai-missing-title"><strong>${title}</strong>${year}</div>
+                            <div class="ai-missing-title"><strong>${title}</strong>${year}${movie.media_type === "series" ? seriesSummary(movie) : ""}</div>
                         </div>
                         ${comment}
                     </div>`;
