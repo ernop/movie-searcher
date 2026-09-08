@@ -186,3 +186,27 @@ def test_tv_is_opt_in_including_short_episodes_and_counts(api):
     assert 'TV Example' in {m['name'] for m in inclusive['movies']}
     assert inclusive['pagination']['total'] == explore(api)['pagination']['total'] + 1
     assert api[0].get('/api/language-counts', params={'include_tv': True}).json()['counts']['en'] == api[0].get('/api/language-counts').json()['counts']['en'] + 1
+
+
+def test_artwork_discovery_accepts_uppercase_and_prefers_named_poster(tmp_path):
+    from scanning import find_images_in_folder
+    movie = tmp_path / 'Film.mkv'
+    movie.touch()
+    (tmp_path / 'screenshot.png').write_bytes(b'x' * 200)
+    (tmp_path / 'POSTER.JPG').write_bytes(b'x' * 10)
+    (tmp_path / 'cover.JFIF').write_bytes(b'x' * 5)
+    (tmp_path / 'www.YTS.jpg').write_bytes(b'x' * 1000)
+    images = find_images_in_folder(movie)
+    assert [Path(p).name for p in images] == ['POSTER.JPG', 'cover.JFIF', 'screenshot.png']
+
+
+def test_artwork_thumbnail_is_bounded_raster(tmp_path):
+    from artwork import thumbnail_response
+    from PIL import Image
+    from io import BytesIO
+    path = tmp_path / 'poster.png'
+    Image.new('RGB', (600, 900)).save(path)
+    response = thumbnail_response(path, 120)
+    with Image.open(BytesIO(response.body)) as image:
+        assert image.size == (120, 180)
+        assert image.format == 'JPEG'

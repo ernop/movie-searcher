@@ -1369,7 +1369,7 @@ async def get_screenshot_by_id(screenshot_id: int):
         db.close()
 
 @app.get("/api/movie/{movie_id}/image")
-async def get_movie_image(movie_id: int):
+async def get_movie_image(movie_id: int, width: int | None = Query(None, ge=32, le=1024)):
     """
     Serve a movie's poster/cover image by movie ID.
     
@@ -1397,7 +1397,12 @@ async def get_movie_image(movie_id: int):
                     '.png': 'image/png',
                     '.gif': 'image/gif',
                     '.webp': 'image/webp',
+                    '.avif': 'image/avif',
+                    '.bmp': 'image/bmp',
                 }.get(suffix, 'image/jpeg')
+                if width:
+                    from artwork import thumbnail_response
+                    return thumbnail_response(path_obj, width)
                 return FileResponse(str(path_obj), media_type=media_type)
 
         # Fallback to first screenshot
@@ -1405,6 +1410,9 @@ async def get_movie_image(movie_id: int):
         if shot:
             path_obj = Path(shot.shot_path)
             if path_obj.exists():
+                if width:
+                    from artwork import thumbnail_response
+                    return thumbnail_response(path_obj, width)
                 return FileResponse(str(path_obj), media_type='image/jpeg')
 
         raise HTTPException(status_code=404, detail="No image available for this movie")

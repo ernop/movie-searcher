@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # File extensions
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
-IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.gif', '.bmp', '.webp', '.avif'}
 
 # Minimum file size threshold (bytes) for inclusion in index
 # Requirement: Skip including files smaller than 50 MB entirely
@@ -565,16 +565,19 @@ def find_images_in_folder(video_path):
     video_path_obj = Path(video_path)
     video_dir = video_path_obj.parent
 
-    images = []
-    for ext in IMAGE_EXTENSIONS:
-        # Find all files with this extension in the folder
-        for img_file in video_dir.glob(f"*{ext}"):
-            img_path_str = str(img_file)
-            # Filter out YTS images
-            if "www.yts" not in img_file.name.lower():
-                images.append(img_path_str)
+    # Case-insensitive discovery on Linux, including conventional artwork folders.
+    folders = [video_dir] + [folder for folder in video_dir.iterdir()
+                             if folder.is_dir() and not folder.is_symlink() and folder.name.casefold() in {'artwork', 'posters', 'images', 'covers'}]
+    images = [str(image) for folder in folders for image in folder.iterdir()
+              if image.is_file() and not image.is_symlink() and image.suffix.lower() in IMAGE_EXTENSIONS]
+    return sorted(filter_yts_images(images), key=image_priority)
 
-    return images
+
+def image_priority(path):
+    image = Path(path)
+    named = bool(re.search(r'(^|[ ._-])(poster|cover|folder|front)([ ._-]|$)', image.stem, re.I))
+    return (not named, -image.stat().st_size, image.name.casefold())
+
 
 def filter_yts_images(image_paths):
     """Filter out images with 'www.YTS.AM' in filename"""
@@ -1606,27 +1609,13 @@ def index_movie(file_path, db: Session = None, patterns=None):
         from television import register_file
         register_file(db, movie)
 
-        # Determine movie.image_path: find largest image, or generate fallback screenshot
+        # Prefer named artwork, then the largest other image, or generate a screenshot
         selected_image_path = None
         is_fallback_screenshot = False
 
         if images:
-            # Find largest image by file size
-            largest_image = None
-            largest_size = 0
-            for img_path in images:
-                try:
-                    if os.path.exists(img_path):
-                        size = os.path.getsize(img_path)
-                        if size > largest_size:
-                            largest_size = size
-                            largest_image = img_path
-                except Exception:
-                    continue
-
-            if largest_image:
-                selected_image_path = str(Path(largest_image).resolve())
-                add_scan_log("info", f"  Selected largest image: {Path(largest_image).name}")
+            selected_image_path = str(Path(images[0]).resolve())
+            add_scan_log("info", f"  Selected artwork: {Path(selected_image_path).name}")
 
         # If no image found, check for or generate fallback screenshot at 300s
         if not selected_image_path:
