@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from models import Base, Movie, MovieAudio, MovieStatus, MovieStatusEnum
+from television import TVEpisode, TVEpisodeFile, TVSeries
 from scanning import clean_movie_name
 
 
@@ -166,3 +167,22 @@ def test_recently_acquired_is_paginated_by_added_date_without_100_item_cutoff(ap
     assert second['movies'][-1]['name'] == 'Film 000'
     filtered = explore(api, filter_type='newest', year=1942)
     assert filtered['pagination']['total'] == 125
+
+
+def test_tv_is_opt_in_including_short_episodes_and_counts(api):
+    with api[1]['SessionLocal']() as db:
+        series = TVSeries(title='Example')
+        movie = Movie(name='TV Example', path='/movies/tv.mkv', length=22, hidden=False, size=100)
+        db.add_all([series, movie])
+        db.flush()
+        episode = TVEpisode(series_id=series.id, season=1, number=1)
+        db.add(episode)
+        db.flush()
+        db.add(TVEpisodeFile(episode_id=episode.id, movie_id=movie.id))
+        db.add(MovieAudio(movie_id=movie.id, audio_type='eng'))
+        db.commit()
+    assert 'TV Example' not in {m['name'] for m in explore(api)['movies']}
+    inclusive = explore(api, include_tv=True)
+    assert 'TV Example' in {m['name'] for m in inclusive['movies']}
+    assert inclusive['pagination']['total'] == explore(api)['pagination']['total'] + 1
+    assert api[0].get('/api/language-counts', params={'include_tv': True}).json()['counts']['en'] == api[0].get('/api/language-counts').json()['counts']['en'] + 1

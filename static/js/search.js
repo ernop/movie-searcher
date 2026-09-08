@@ -56,6 +56,7 @@ async function performSearch(query, showResultsImmediately = false) {
         const watchFilter = getWatchFilter();
         const params = new URLSearchParams({
             q: query,
+            include_tv: String(document.getElementById('includeTvSearch')?.checked || false),
             filter_type: watchFilter,
             language: 'all',
             offset: '0',

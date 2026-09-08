@@ -80,6 +80,7 @@ async function performAiSearch() {
             },
             body: JSON.stringify({
                 query,
+                include_tv: document.getElementById('includeTvSearch')?.checked || false,
                 provider: providerSelect.value
             })
         });

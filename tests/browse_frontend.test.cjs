@@ -93,3 +93,17 @@ test('pending decade navigation preserves the rendered year when returning to it
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(s.renders, ['1980']);
 });
+
+test('TV requires opt-in and persists through subsequent page requests', async () => {
+    const s = setup();
+    const first = s.load('A');
+    assert.match(s.requests[0].url, /include_tv=false/);
+    s.finish(0, 'Movies'); await first;
+    s.context.setExploreTvFilter(true);
+    assert.match(s.requests[1].url, /include_tv=true/);
+    s.finish(1, 'Movies and TV');
+    await new Promise(resolve => setImmediate(resolve));
+    const next = s.context.fetchExploreMovies(2, 'all', 'A', null, null, 'all');
+    assert.match(s.requests[2].url, /include_tv=true/);
+    s.finish(2, 'Next'); await next;
+});

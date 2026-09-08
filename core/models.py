@@ -56,6 +56,7 @@ class ScreenshotsIntervalRequest(BaseModel):
 
 
 class AiSearchRequest(BaseModel):
+    include_tv: bool = False
     query: str
     # A model_id (e.g. "claude-opus-4-8") or a legacy provider name
     # ("anthropic"/"openai"); resolved server-side via resolve_ai_model.

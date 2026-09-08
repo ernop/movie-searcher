@@ -850,6 +850,7 @@ def update_search_history_bg(q: str, results_count: int):
 async def search_movies(
     q: str,
     background_tasks: BackgroundTasks,
+    include_tv: bool = False,
     filter_type: str = Query("all", pattern="^(all|watched|unwatched)$"),
     language: str | None = Query("all"),
     offset: int = Query(0, ge=0),
@@ -869,12 +870,17 @@ async def search_movies(
         from sqlalchemy import func, or_
 
         t_query = time.perf_counter()
+        from television import TVEpisodeFile
         # Build base query
         movie_query = db.query(Movie).filter(
             func.lower(Movie.name).contains(query_lower),
-            or_(Movie.length == None, Movie.length >= 60),
+            or_(Movie.length == None, Movie.length >= 60, Movie.id.in_(db.query(TVEpisodeFile.movie_id)) if include_tv else False),
             Movie.hidden == False
         )
+
+        if not include_tv:
+            from television import TVEpisodeFile
+            movie_query = movie_query.filter(~Movie.id.in_(db.query(TVEpisodeFile.movie_id)))
 
         # Get watched movie IDs efficiently
         watched_movie_ids = set()
@@ -2666,10 +2672,15 @@ def count_movie_languages(db, movie_query, language_rows):
 
 
 @app.get("/api/language-counts")
-async def get_language_counts():
+async def get_language_counts(include_tv: bool = False):
     from sqlalchemy import or_
     with SessionLocal() as db:
-        base = [or_(Movie.length.is_(None), Movie.length >= 60), Movie.hidden.is_(False)]
+        from television import TVEpisodeFile
+        base = [or_(Movie.length.is_(None), Movie.length >= 60,
+                    Movie.id.in_(db.query(TVEpisodeFile.movie_id)) if include_tv else False), Movie.hidden.is_(False)]
+        if not include_tv:
+            from television import TVEpisodeFile
+            base.append(~Movie.id.in_(db.query(TVEpisodeFile.movie_id)))
         movies = db.query(Movie).filter(*base, Movie.id.in_(get_largest_movie_ids_subquery(db, base).select()))
         return {"counts": count_movie_languages(db, movies, movie_language_rows(db))}
 
@@ -2816,13 +2827,19 @@ async def explore_movies(
     year: int | None = Query(None, ge=1900, le=2035),
     decade: int | None = Query(None, ge=1900, le=2030),
     language: str | None = Query("all"),
-    no_year: bool | None = Query(None)
+    no_year: bool | None = Query(None),
+    include_tv: bool = False
 ):
     """Get all movies for exploration view with pagination and filters"""
     from sqlalchemy import Integer, cast, or_
 
     with SessionLocal() as db:
-        base = [or_(Movie.length.is_(None), Movie.length >= 60), Movie.hidden.is_(False)]
+        from television import TVEpisodeFile
+        base = [or_(Movie.length.is_(None), Movie.length >= 60,
+                    Movie.id.in_(db.query(TVEpisodeFile.movie_id)) if include_tv else False), Movie.hidden.is_(False)]
+        if not include_tv:
+            from television import TVEpisodeFile
+            base.append(~Movie.id.in_(db.query(TVEpisodeFile.movie_id)))
         movies = db.query(Movie).filter(*base, Movie.id.in_(get_largest_movie_ids_subquery(db, base).select()))
         if filter_type in ('watched', 'unwatched'):
             watched = db.query(MovieStatus.id).filter(
@@ -4782,7 +4799,7 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         yield send_progress(1, 4, "Preparing query for AI...")
 
         prompt = f"""
-        The user is asking about movies. Your goal is to return a structured JSON list of films and TV series matching their query. Distinguish films from series explicitly. For a series, return its premiere year, not the year a person joined it. When all work is requested, do not restrict the answer to famous highlights. Do not claim completeness if uncertain.
+        Return a structured JSON list matching the query. {'Include films and TV series.' if request.include_tv else 'Include films only. Exclude TV series and TV episodes.'} Distinguish films from series explicitly. For a series, return its premiere year, not the year a person joined it. When all work is requested, do not restrict the answer to famous highlights. Do not claim completeness if uncertain.
         
         User Query: "{request.query}"
         
@@ -4901,6 +4918,8 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         deduped_movies = []
         seen_keys = set()
         for movie in response_data.get("movies", []):
+            if not request.include_tv and movie.get("media_type") in ("series", "episode"):
+                continue
             title = (movie.get("name") or "").strip()
             if not title:
                 continue

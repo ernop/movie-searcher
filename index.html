@@ -127,7 +127,7 @@
                     <button type="button" class="btn" data-filter="unwatched"
                         onclick="setWatchFilter('unwatched', this)">Unwatched only</button>
                 </div>
-                <!-- Language filter moved to Explore -->
+                <label><input id="includeTvSearch" type="checkbox" onchange="performSearch(searchInput.value, true)"> Include TV shows (library and AI search)</label>
             </div>
 
             <div id="aiSearchInline"
@@ -180,6 +180,7 @@
             </div>
 
             <div class="explore-filters">
+                <label><input id="includeTvExplore" type="checkbox" onchange="setExploreTvFilter(this.checked)"> Include TV shows</label>
                 <div class="btn-group btn-group-toggle" role="group">
                     <button type="button" class="btn active" data-filter="all"
                         onclick="setExploreWatchFilter('all', this)">All</button>

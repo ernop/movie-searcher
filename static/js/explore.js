@@ -40,7 +40,7 @@ function getCurrentExploreFilters() {
     // The URL changes immediately; rendered controls may still belong to an older response.
     const params = getRouteParams();
     return {
-        filterType: params.filter_type || 'all', language: params.language || 'all',
+        includeTv: params.include_tv === 'true', filterType: params.filter_type || 'all', language: params.language || 'all',
         letter: params.letter || null, decade: params.decade ? Number(params.decade) : null,
         year: params.year ? Number(params.year) : null, noYear: params.no_year === 'true'
     };
@@ -53,7 +53,7 @@ let exploreRequestId = 0;
 let exploreLanguageCountsReady = false;
 
 // Update URL to reflect current explore state (for shareable links)
-function updateExploreUrl(page, filterType, letter, decade, year, language, noYear) {
+function updateExploreUrl(page, filterType, letter, decade, year, language, noYear, includeTv) {
     // Explicitly set all explore params (null clears them from URL)
     const urlParams = {
         filter_type: (filterType && filterType !== 'all') ? filterType : null,
@@ -62,13 +62,14 @@ function updateExploreUrl(page, filterType, letter, decade, year, language, noYe
         decade: decade || null,
         year: year || null,
         no_year: noYear ? 'true' : null,
+        include_tv: includeTv ? 'true' : null,
         page: (page && page > 1) ? page : null
     };
     
     updateRouteParams(urlParams);
 }
 
-async function fetchExploreMovies(page, filterType, letter, decade, year, language = null, noYear = false) {
+async function fetchExploreMovies(page, filterType, letter, decade, year, language = null, noYear = false, includeTv = getCurrentExploreFilters().includeTv) {
     let requestId;
     try {
         // Use passed language or fall back to UI state
@@ -77,7 +78,8 @@ async function fetchExploreMovies(page, filterType, letter, decade, year, langua
         const params = new URLSearchParams({
             page: page.toString(),
             per_page: EXPLORE_PER_PAGE.toString(),
-            filter_type: filterType
+            filter_type: filterType,
+            include_tv: String(Boolean(includeTv))
         });
         
         if (letter) {
@@ -101,7 +103,9 @@ async function fetchExploreMovies(page, filterType, letter, decade, year, langua
         const url = `/api/explore?${params}`;
         
         // Update browser URL to match current state
-        updateExploreUrl(page, filterType, letter, decade, year, effectiveLanguage, noYear);
+        updateExploreUrl(page, filterType, letter, decade, year, effectiveLanguage, noYear, includeTv);
+        const tvToggle = document.getElementById('includeTvExplore');
+        if (tvToggle) tvToggle.checked = Boolean(includeTv);
         
         if (url === pendingExploreUrl) return;
         requestId = ++exploreRequestId;
@@ -606,3 +610,8 @@ function renderPagination(pagination, filterType, letter, decade, year) {
     paginationEl.innerHTML = html;
 }
 
+
+function setExploreTvFilter(includeTv) {
+    const f = getCurrentExploreFilters();
+    fetchExploreMovies(1, f.filterType, f.letter, f.decade, f.year, f.language, f.noYear, includeTv);
+}
