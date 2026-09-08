@@ -61,6 +61,15 @@ async function loadSeriesPage(identifier) {
             } catch (error) { notice.textContent = error.message; }
         };
         document.dispatchEvent(new CustomEvent('series-rendered', {detail: {series: data, page}}));
+        const params = new URLSearchParams(location.hash.split('?')[1] || '');
+        const season = params.get('season');
+        const episode = params.get('episode');
+        if (season && /^\d{1,3}$/.test(season)) {
+            const section = page.querySelector(`.tv-season[data-season="${Number(season)}"]`);
+            const row = episode && /^\d{1,4}$/.test(episode) ? section?.querySelector(`.tv-episode[data-episode="${Number(episode)}"]`) : null;
+            (row || section)?.scrollIntoView({block: 'start'});
+        }
+
     } catch (error) { page.innerHTML = `<p role="alert">${escapeHtml(error.message)}</p>`; }
 }
 
