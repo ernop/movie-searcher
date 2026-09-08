@@ -3,9 +3,12 @@ Scanning and indexing logic for Movie Searcher.
 Handles directory scanning, movie indexing, and progress tracking.
 """
 import hashlib
+import json
 import logging
 import os
 import re
+import subprocess
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +24,7 @@ from cleaning_patterns import (
     EDITION_PATTERNS,
     QUALITY_SOURCE_PATTERNS,
     get_forbidden_union_pattern,
+    remove_quality_tags,
 )
 
 # Database imports
@@ -53,6 +57,23 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
 # Minimum file size threshold (bytes) for inclusion in index
 # Requirement: Skip including files smaller than 50 MB entirely
 MIN_FILE_SIZE_BYTES = 50 * 1024 * 1024
+
+# Incomplete-download markers. These files are not finished and must not be indexed.
+INCOMPLETE_SUFFIXES = {
+    '.part', '.!qb', '.!ut', '.crdownload', '.aria2', '.tmp', '.parts',
+    '.filepart', '.download', '.bc!',
+}
+INCOMPLETE_DIR_NAMES = {'incomplete', 'incompletes', '.incomplete'}
+
+# ffprobe stderr for files that look like videos but cannot be played
+# (truncated torrent, missing MP4 moov, broken container).
+UNPLAYABLE_FFPROBE_MARKERS = (
+    'moov atom not found',
+    'invalid data found when processing input',
+    'ebml header parsing failed',
+    'truncated',
+    'end of file',
+)
 
 # Scan progress tracking (in-memory)
 scan_progress = {
@@ -102,6 +123,334 @@ def is_sample_file(file_path):
     else:
         name = Path(file_path).stem.lower()
     return 'sample' in name
+
+
+def is_incomplete_download(file_path) -> bool:
+    """True if this path is an in-progress download, not a finished video.
+
+    Matches qBittorrent/aria2/browser leftovers: extra suffixes, an `incomplete`
+    parent folder, or an active sidecar next to the video.
+    """
+    path = Path(file_path)
+    name_lower = path.name.lower()
+    for suffix in INCOMPLETE_SUFFIXES:
+        if name_lower.endswith(suffix):
+            return True
+    if '.!qb' in name_lower or '.!ut' in name_lower:
+        return True
+    for part in path.parts:
+        if part.lower() in INCOMPLETE_DIR_NAMES:
+            return True
+    # Active sidecar means the video itself is still being written
+    if Path(str(path) + '.aria2').exists() or Path(str(path) + '.!qB').exists():
+        return True
+    return False
+
+
+def ffprobe_error_is_unplayable(stderr: str) -> bool:
+    """True when ffprobe's error text means a broken or unfinished container."""
+    text = (stderr or '').lower()
+    return any(marker in text for marker in UNPLAYABLE_FFPROBE_MARKERS)
+
+
+def media_kind_from_probe(stdout: str, stderr: str, returncode: int) -> str:
+    """Classify ffprobe JSON output: video, audio_only, unreadable, or unknown."""
+    if ffprobe_error_is_unplayable(stderr):
+        return 'unreadable'
+    if returncode != 0:
+        raise RuntimeError(f'ffprobe failed: {stderr.strip() or returncode}')
+    try:
+        data = json.loads(stdout or '{}')
+    except json.JSONDecodeError:
+        if returncode != 0:
+            return 'unreadable'
+        return 'unknown'
+    types = {stream.get('codec_type') for stream in (data.get('streams') or [])}
+    if 'video' in types:
+        return 'video'
+    if 'audio' in types:
+        return 'audio_only'
+    if returncode != 0:
+        return 'unreadable'
+    return 'unreadable'
+
+
+def classify_media_file(file_path) -> str:
+    """Return video, audio_only, unreadable, missing, or unknown."""
+    path = Path(file_path)
+    if not path.exists():
+        return 'missing'
+    ffprobe = _get_ffprobe_path_from_config()
+    if not ffprobe:
+        return 'unknown'
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                '-v', 'error',
+                '-show_entries', 'stream=codec_type',
+                '-of', 'json',
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffprobe timed out classifying {path}")
+        return 'unknown'
+    except Exception as e:
+        logger.warning(f"ffprobe failed classifying {path}: {e}")
+        return 'unknown'
+    return media_kind_from_probe(result.stdout or '', result.stderr or '', result.returncode)
+
+
+def is_unplayable_media(file_path) -> bool:
+    """True for audio-only tracks and broken/incomplete containers."""
+    return classify_media_file(file_path) in {'audio_only', 'unreadable'}
+
+
+GENERIC_RELEASE_STEMS = {
+    'deleted scenes', 'outtakes', 'featurettes', 'featurette', 'extras',
+    'bonus', 'bonus scenes', 'trailer', 'trailers', 'interview', 'interviews',
+    'behind the scenes', 'commentary', 'sample',
+}
+
+
+def release_identity(file_path) -> str:
+    """Fingerprint of a release so two encodes of the same title collapse.
+
+    Strips quality/source/codec/group tokens. Episode numbers, years, and
+    leftover title text stay, so different episodes are not treated as copies.
+    """
+    stem = Path(file_path).stem
+    text = re.sub(r'[._]+', ' ', stem)
+    text = re.sub(r'[\[\](){}]', ' ', text)
+    text = remove_quality_tags(text)
+    text = re.sub(
+        r'\b(?:proper|repack|rerip|remastered|internal|readnfo|limited)\b',
+        ' ',
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Trailing release group like "- RARBG" or leftover "-rbg". Keep numeric
+    # suffixes (episode numbers such as "- 110").
+    text = re.sub(r'\s+-\s*[A-Za-z][A-Za-z0-9]*$', '', text)
+    text = re.sub(r'[\s\-]+$', '', text)
+    text = re.sub(r'\s+', ' ', text).strip().lower()
+    if not text or text in GENERIC_RELEASE_STEMS or len(text) < 8:
+        parent = re.sub(r'[._]+', ' ', Path(file_path).parent.name)
+        parent = remove_quality_tags(parent)
+        parent = re.sub(r'\s+', ' ', parent).strip().lower()
+        if parent:
+            text = f"{parent} {text}".strip()
+    return text
+
+
+def delete_movie_from_index(db: Session, movie: Movie, *, delete_screenshot_files: bool = True) -> None:
+    """Remove a movie and its related rows from the index. Does not touch the video file."""
+    screenshots = db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all()
+    for screenshot in screenshots:
+        if delete_screenshot_files and screenshot.shot_path and os.path.exists(screenshot.shot_path):
+            try:
+                os.remove(screenshot.shot_path)
+            except Exception as e:
+                logger.debug(f"Could not delete screenshot file {screenshot.shot_path}: {e}")
+        db.delete(screenshot)
+
+    db.query(Rating).filter(Rating.movie_id == movie.id).delete()
+    db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).delete()
+    db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).delete()
+    db.query(PlaylistItem).filter(PlaylistItem.movie_id == movie.id).delete()
+    db.query(MovieAudio).filter(MovieAudio.movie_id == movie.id).delete()
+    unlink_movie_from_lists(db, movie.id)
+    db.delete(movie)
+
+
+def purge_incomplete_movies(db: Session) -> int:
+    """Drop indexed files that are incomplete downloads. Returns how many were removed."""
+    removed = 0
+    movies = db.query(Movie).all()
+    for movie in movies:
+        if not is_incomplete_download(movie.path):
+            continue
+        try:
+            add_scan_log("warning", f"Removing incomplete download from index: {movie.path}")
+            delete_movie_from_index(db, movie, delete_screenshot_files=True)
+            db.commit()
+            removed += 1
+            scan_progress["movies_removed"] += 1
+        except Exception as e:
+            logger.error(f"Error removing incomplete movie {movie.path}: {e}")
+            db.rollback()
+    return removed
+
+
+def purge_unplayable_movies(db: Session) -> int:
+    """Drop audio-only and unreadable/incomplete files from the index.
+
+    Only probes movies that have no screenshot on disk, so a full library
+    is not re-ffprobed on every startup.
+    """
+    shots_on_disk = set()
+    for shot in db.query(Screenshot).all():
+        if shot.movie_id and shot.shot_path and os.path.exists(shot.shot_path):
+            shots_on_disk.add(shot.movie_id)
+
+    removed = 0
+    for movie in db.query(Movie).all():
+        if movie.id in shots_on_disk:
+            continue
+        try:
+            kind = classify_media_file(movie.path)
+        except Exception as e:
+            logger.warning(f"Could not classify {movie.path}: {e}")
+            continue
+        if kind not in {'audio_only', 'unreadable'}:
+            continue
+        reason = 'audio-only file' if kind == 'audio_only' else 'unplayable or incomplete video'
+        try:
+            add_scan_log("warning", f"Removing {reason} from index: {movie.path}")
+            delete_movie_from_index(db, movie, delete_screenshot_files=True)
+            db.commit()
+            removed += 1
+            scan_progress["movies_removed"] += 1
+        except Exception as e:
+            logger.error(f"Error removing unplayable movie {movie.path}: {e}")
+            db.rollback()
+    return removed
+
+
+def purge_duplicate_movies(db: Session) -> int:
+    """Keep the largest file for each release identity; remove extra copies from the index."""
+    groups = defaultdict(list)
+    for movie in db.query(Movie).all():
+        identity = release_identity(movie.path)
+        if len(identity) < 4:
+            continue
+        groups[identity].append(movie)
+
+    removed = 0
+    movies_with_shots = {
+        row[0] for row in db.query(Screenshot.movie_id).distinct().all()
+    }
+    for _identity, movies in groups.items():
+        if len(movies) < 2:
+            continue
+        keeper = max(
+            movies,
+            key=lambda m: (m.size or 0, 1 if m.id in movies_with_shots else 0, -m.id),
+        )
+        for movie in movies:
+            if movie.id == keeper.id:
+                continue
+            try:
+                add_scan_log(
+                    "warning",
+                    f"Removing duplicate copy from index (keeping {Path(keeper.path).name}): {movie.path}",
+                )
+                delete_movie_from_index(db, movie, delete_screenshot_files=False)
+                db.commit()
+                removed += 1
+                scan_progress["movies_removed"] += 1
+            except Exception as e:
+                logger.error(f"Error removing duplicate movie {movie.path}: {e}")
+                db.rollback()
+    return removed
+
+
+def screenshot_timestamp_for_movie(movie: Movie) -> float:
+    """Pick a timestamp that exists inside the file when duration is known."""
+    if movie.length and movie.length < 300:
+        return max(10.0, movie.length * 0.1)
+    return 300.0
+
+
+def relink_and_enqueue_screenshots(db: Session) -> tuple[int, int]:
+    """Attach existing screenshot files to movies, then queue ffmpeg for the rest."""
+    from video.screenshot import find_existing_screenshot_file
+
+    movies = db.query(Movie).all()
+    shots_by_movie: dict[int, list] = defaultdict(list)
+    for shot in db.query(Screenshot).all():
+        shots_by_movie[shot.movie_id].append(shot)
+
+    linked = 0
+    queued = 0
+    for movie in movies:
+        if shutdown_flag.is_set():
+            add_scan_log("warning", "Screenshot restore interrupted by shutdown")
+            break
+
+        existing_shots = shots_by_movie.get(movie.id, [])
+        valid = [s for s in existing_shots if s.shot_path and os.path.exists(s.shot_path)]
+        if valid:
+            if not movie.image_path or not os.path.exists(movie.image_path):
+                movie.image_path = valid[0].shot_path
+            continue
+
+        timestamp = screenshot_timestamp_for_movie(movie)
+        found = find_existing_screenshot_file(movie.path, timestamp, movie_id=movie.id)
+        if found is None:
+            # Try the common 300s/180s filenames even if duration says otherwise
+            for ts in (300, 180, 60):
+                found = find_existing_screenshot_file(movie.path, ts, movie_id=movie.id)
+                if found is not None:
+                    timestamp = ts
+                    break
+
+        try:
+            result = extract_movie_screenshot(
+                movie.path,
+                timestamp_seconds=timestamp,
+                priority="low",
+                movie_id=movie.id,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to restore screenshot for movie_id={movie.id}: {e}", exc_info=True)
+            continue
+
+        if isinstance(result, str):
+            linked += 1
+            if not movie.image_path or not os.path.exists(movie.image_path):
+                movie.image_path = result
+        elif result is None:
+            queued += 1
+
+    db.commit()
+    return linked, queued
+
+
+def repair_library_index(db: Session | None = None) -> dict:
+    """Remove incomplete/duplicate index rows and restore missing screenshots."""
+    should_close = False
+    if db is None:
+        db = SessionLocal()
+        should_close = True
+    try:
+        add_scan_log("info", "Repairing library index (incomplete downloads, unplayable files, duplicates, screenshots)...")
+        incomplete_removed = purge_incomplete_movies(db)
+        unplayable_removed = purge_unplayable_movies(db)
+        duplicate_removed = purge_duplicate_movies(db)
+        linked, queued = relink_and_enqueue_screenshots(db)
+        add_scan_log(
+            "success",
+            f"Index repair: {incomplete_removed} incomplete removed, {unplayable_removed} unplayable removed, "
+            f"{duplicate_removed} duplicates removed, {linked} screenshots relinked, {queued} queued for generation",
+        )
+        if queued > 0:
+            process_frame_queue(max_workers=3)
+            add_scan_log("info", f"Screenshot worker started (queue: {frame_extraction_queue.qsize()})")
+        return {
+            "incomplete_removed": incomplete_removed,
+            "unplayable_removed": unplayable_removed,
+            "duplicate_removed": duplicate_removed,
+            "screenshots_relinked": linked,
+            "screenshots_queued": queued,
+        }
+    finally:
+        if should_close:
+            db.close()
 
 def get_file_hash(file_path):
     """Generate hash for file to detect changes"""
@@ -1091,6 +1440,10 @@ def index_movie(file_path, db: Session = None, patterns=None):
     # Convert to string - Path objects on Windows already use backslashes
     normalized_path = str(normalized_path_obj)
 
+    if is_incomplete_download(normalized_path):
+        add_scan_log("warning", f"  Skipping incomplete download: {Path(normalized_path).name}")
+        return False
+
     file_hash = get_file_hash(normalized_path)
 
     # Use provided session or create new one
@@ -1158,6 +1511,19 @@ def index_movie(file_path, db: Session = None, patterns=None):
                     db.delete(existing)
                     db.commit()
                     add_scan_log("info", "  Removed existing DB entry for small file")
+                except Exception:
+                    db.rollback()
+            return False
+
+        kind = classify_media_file(normalized_path)
+        if kind in {'audio_only', 'unreadable'}:
+            reason = 'audio-only file' if kind == 'audio_only' else 'unplayable or incomplete video'
+            add_scan_log("warning", f"  Skipping {reason}: {Path(normalized_path).name}")
+            if existing:
+                try:
+                    delete_movie_from_index(db, existing, delete_screenshot_files=True)
+                    db.commit()
+                    add_scan_log("info", "  Removed existing DB entry for unplayable file")
                 except Exception:
                     db.rollback()
             return False
@@ -1392,11 +1758,13 @@ def scan_directory(root_path, state=None, progress_callback=None):
                 for entry in scan_iter:
                     try:
                         if entry.is_dir(follow_symlinks=False):
+                            if entry.name.lower() in INCOMPLETE_DIR_NAMES:
+                                continue
                             dir_stack.append(entry.path)
                             continue
                         if os.path.splitext(entry.name)[1].lower() not in VIDEO_EXTENSIONS:
                             continue
-                        if is_sample_file(entry.path):
+                        if is_sample_file(entry.path) or is_incomplete_download(entry.path):
                             continue
                         if entry.stat(follow_symlinks=False).st_size < MIN_FILE_SIZE_BYTES:
                             continue
@@ -1579,54 +1947,8 @@ def scan_directory(root_path, state=None, progress_callback=None):
                 logger.error(f"Error reconciling movie lists: {e}")
                 add_scan_log("warning", f"Movie list reconciliation failed: {e}")
 
-        # After scan completes, enqueue screenshot jobs for movies without screenshots
-        add_scan_log("info", "Checking for movies without screenshots...")
-        movies_without_screenshots = db.query(Movie).outerjoin(
-            Screenshot, Movie.id == Screenshot.movie_id
-        ).filter(
-            Screenshot.id == None
-        ).all()
-
-        if movies_without_screenshots:
-            add_scan_log("info", f"Found {len(movies_without_screenshots)} movies without screenshots, enqueueing initial screenshot at 5-minute mark...")
-            enqueued_count = 0
-            skipped_count = 0
-
-            for movie in movies_without_screenshots:
-                if shutdown_flag.is_set():
-                    add_scan_log("warning", "Screenshot enqueueing interrupted by shutdown")
-                    break
-
-                # Skip if movie length is too short (less than 5 minutes)
-                if movie.length and movie.length < 300:
-                    skipped_count += 1
-                    continue
-
-                # Enqueue screenshot at 5-minute mark (300 seconds)
-                try:
-                    result = extract_movie_screenshot(
-                        movie.path,
-                        timestamp_seconds=300,
-                        priority="low",  # Low priority for background work
-                        movie_id=movie.id
-                    )
-                    if result is None:
-                        # None means it was queued successfully
-                        enqueued_count += 1
-                        if enqueued_count <= 10 or enqueued_count % 50 == 0:
-                            add_scan_log("info", f"Enqueued screenshot for {movie.name} (total: {enqueued_count})")
-                    elif isinstance(result, str):
-                        # String means screenshot already exists (shouldn't happen, but handle it)
-                        skipped_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to enqueue screenshot for movie_id={movie.id}, path={movie.path}: {e}", exc_info=True)
-                    skipped_count += 1
-
-            add_scan_log("success", f"Screenshot enqueueing complete: {enqueued_count} enqueued, {skipped_count} skipped")
-            if enqueued_count > 0:
-                add_scan_log("info", f"Screenshots will be generated in background. Queue size: {frame_extraction_queue.qsize()}")
-        else:
-            add_scan_log("info", "All movies already have screenshots")
+        # Drop incomplete downloads and extra copies, then restore screenshots
+        repair_library_index(db)
 
         return {"indexed": indexed, "updated": updated}
     finally:

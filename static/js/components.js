@@ -4,7 +4,7 @@ function createStarRating(movieId, currentRating, containerClass = '') {
     let html = `<div class="star-rating ${containerClass}" data-movie-id="${movieId}" data-rating="${rating}" onclick="event.stopPropagation();">`;
     for (let i = 1; i <= 5; i++) {
         const filled = i <= rating ? 'filled' : '';
-        html += `<span class="star ${filled}" data-value="${i}">★</span>`;
+        html += `<span class="star ${filled}" data-value="${i}" role="button" tabindex="0" aria-label="Rate ${i} out of 5 stars" aria-pressed="${i === rating}">★</span>`;
     }
     html += '</div>';
     return html;
@@ -12,6 +12,8 @@ function createStarRating(movieId, currentRating, containerClass = '') {
 
 // Initialize star rating interactions
 function initStarRating(element) {
+    if (element.dataset.ratingInitialized) return;
+    element.dataset.ratingInitialized = 'true';
     const movieId = parseInt(element.getAttribute('data-movie-id'), 10);
     const stars = element.querySelectorAll('.star');
     let currentRating = parseInt(element.getAttribute('data-rating') || '0', 10);
@@ -45,6 +47,7 @@ function initStarRating(element) {
                 currentRating = rating;
                 element.setAttribute('data-rating', rating);
                 updateDisplay(rating);
+                stars.forEach(star => star.setAttribute('aria-pressed', String(Number(star.dataset.value) === rating)));
             }
         })
         .catch(error => {
@@ -59,6 +62,13 @@ function initStarRating(element) {
             updateDisplay(value);
         });
         
+        star.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                setRating(value);
+            }
+        });
         star.addEventListener('click', (e) => {
             e.stopPropagation();
             setRating(value);
@@ -185,7 +195,7 @@ function createMovieCard(movie, options = {}) {
         
         metaHtml = `
             <div class="movie-card-meta" style="position: relative; z-index: 2; pointer-events: none; display: flex; align-items: center; gap: 8px;">
-                ${year ? `<span class="year-link" onclick="event.stopPropagation(); navigateToExploreWithYear(${year}, ${movie.id || 'null'});" title="Filter by ${year}" style="pointer-events: auto;">${year}</span>` : ''}
+                ${year ? `<span class="year-link" role="link" tabindex="0" onkeydown="if(event.key === 'Enter') this.click()" onclick="event.stopPropagation(); navigateToExploreWithYear(${year}, ${movie.id || 'null'});" title="Filter by ${year}" style="pointer-events: auto;">${year}</span>` : ''}
                 ${length ? `<span>${length}</span>` : ''}
                 ${fileSize ? `<span class="movie-size">${fileSize}</span>` : ''}
                 ${reviewIndicator}
@@ -196,7 +206,7 @@ function createMovieCard(movie, options = {}) {
         // Minimal meta showing path (e.g. for duplicates)
         metaHtml = `
             <div class="movie-card-meta" style="position: relative; z-index: 2; pointer-events: none;">
-                ${year ? `<span class="year-link" onclick="event.stopPropagation();" style="pointer-events: auto;">${year}</span>` : ''}
+                ${year ? `<span class="year-link" role="link" tabindex="0" onkeydown="if(event.key === 'Enter') this.click()" onclick="event.stopPropagation();" style="pointer-events: auto;">${year}</span>` : ''}
                 ${showSizes && movie.size ? `<span class="movie-size" style="margin-left: auto; font-size: 11px; color: #666;">${formatSize(movie.size)}</span>` : ''}
             </div>
             <div class="result-path" style="margin-bottom: 10px; font-size: 10px; color: #666; word-break: break-all; line-height: 1.2; position: relative; z-index: 2; pointer-events: auto; user-select: text;">
@@ -237,7 +247,7 @@ function createMovieCard(movie, options = {}) {
         ` : '';
         
         const launchBtn = primaryAction === 'launch' ? `
-            <button class="movie-card-launch" onclick="event.stopPropagation(); launchMovie(${movie.id})">▶</button>
+            <button class="movie-card-launch" aria-label="Play movie" onclick="event.stopPropagation(); launchMovie(${movie.id})">▶</button>
         ` : '';
         
         buttonsHtml = watchBtn + launchBtn;
@@ -245,7 +255,7 @@ function createMovieCard(movie, options = {}) {
 
     return `
         <div class="movie-card ${watchedClass}" data-movie-id="${movie.id || ''}" style="position: relative;">
-            <a href="#/movie/${movie.id}/${slug}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; text-decoration: none; outline: none;" aria-label="${escapeHtml(movie.name)}"></a>
+            <a href="#/movie/${movie.id}/${slug}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; text-decoration: none;" aria-label="${escapeHtml(movie.name)}"></a>
             
             <div class="movie-card-image">
                 ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(movie.name)}" loading="lazy" onerror="this.parentElement.innerHTML='No Image'" onload="const img = this; const container = img.parentElement; if (img.naturalWidth && img.naturalHeight) { const ar = img.naturalWidth / img.naturalHeight; container.style.aspectRatio = ar + ' / 1'; }">` : 'No Image'}

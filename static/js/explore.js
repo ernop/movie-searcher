@@ -37,34 +37,20 @@ async function navigateToExploreWithYear(year, movieId) {
 
 // Standard AJAX pattern: read UI state, build request, fetch, update UI
 function getCurrentExploreFilters() {
-    // Read filter type from watch filter button group (first group)
-    const activeBtn = document.querySelector('.explore-filters .btn-group-toggle:first-child .btn.active[data-filter]');
-    const filterType = activeBtn ? activeBtn.dataset.filter || 'all' : 'all';
-    
-    // Read letter from active letter button
-    const activeLetterBtn = document.querySelector('.letter-btn.active[data-letter]');
-    const letter = activeLetterBtn ? activeLetterBtn.dataset.letter : null;
-    
-    // Read decade from active decade button
-    const activeDecadeBtn = document.querySelector('.decade-btn.active[data-decade]');
-    const decade = activeDecadeBtn ? parseInt(activeDecadeBtn.dataset.decade) : null;
-    
-    // Read year from active year chip
-    const yearChip = document.querySelector('.year-chip[data-year]');
-    const year = yearChip ? parseInt(yearChip.dataset.year) : null;
-    
-    // Read language from explore language filter group
-    const langBtn = document.querySelector('#exploreLanguageFilterGroup .btn.active[data-language]');
-    const language = langBtn ? (langBtn.getAttribute('data-language') || 'all') : 'all';
-    
-    // Read no year filter state from decade nav
-    const noYearBtn = document.querySelector('.decade-btn[data-action="no_year"]');
-    const noYear = noYearBtn && noYearBtn.classList.contains('active');
-    
-    return { filterType, letter, decade, year, language, noYear };
+    // The URL changes immediately; rendered controls may still belong to an older response.
+    const params = getRouteParams();
+    return {
+        filterType: params.filter_type || 'all', language: params.language || 'all',
+        letter: params.letter || null, decade: params.decade ? Number(params.decade) : null,
+        year: params.year ? Number(params.year) : null, noYear: params.no_year === 'true'
+    };
 }
 
 let lastFetchedUrl = '';
+let pendingExploreUrl = '';
+let exploreAbortController = null;
+let exploreRequestId = 0;
+let exploreLanguageCountsReady = false;
 
 // Update URL to reflect current explore state (for shareable links)
 function updateExploreUrl(page, filterType, letter, decade, year, language, noYear) {
@@ -83,6 +69,7 @@ function updateExploreUrl(page, filterType, letter, decade, year, language, noYe
 }
 
 async function fetchExploreMovies(page, filterType, letter, decade, year, language = null, noYear = false) {
+    let requestId;
     try {
         // Use passed language or fall back to UI state
         const effectiveLanguage = language !== null ? language : getCurrentExploreFilters().language;
@@ -116,6 +103,11 @@ async function fetchExploreMovies(page, filterType, letter, decade, year, langua
         // Update browser URL to match current state
         updateExploreUrl(page, filterType, letter, decade, year, effectiveLanguage, noYear);
         
+        if (url === pendingExploreUrl) return;
+        requestId = ++exploreRequestId;
+        if (exploreAbortController) exploreAbortController.abort();
+        pendingExploreUrl = '';
+
         // Optimization: If URL is same as last fetched, and grid has content, skip fetch and just restore scroll
         // This preserves scroll position perfectly when navigating back
         const movieGrid = document.getElementById('movieGrid');
@@ -126,9 +118,10 @@ async function fetchExploreMovies(page, filterType, letter, decade, year, langua
             return;
         }
         
-        lastFetchedUrl = url;
-        
-        const response = await fetch(url);
+        pendingExploreUrl = url;
+        exploreAbortController = new AbortController();
+        const response = await fetch(url, { signal: exploreAbortController.signal });
+        if (requestId !== exploreRequestId) return;
         
         if (!response.ok) {
             let errorMessage = 'Unknown error';
@@ -138,16 +131,23 @@ async function fetchExploreMovies(page, filterType, letter, decade, year, langua
             } catch (e) {
                 errorMessage = `HTTP ${response.status}: ${response.statusText}`;
             }
+            if (requestId !== exploreRequestId) return;
             showStatus('Failed to load movies: ' + errorMessage, 'error');
             return;
         }
         
         const data = await response.json();
+        if (requestId !== exploreRequestId) return;
+        lastFetchedUrl = url;
         
         // Update current page
         currentExplorePage = page;
         
         // Render navigation with current filter state
+        if (data.language_counts) {
+            exploreLanguageCountsReady = true;
+            renderLanguageFilters(data.language_counts, effectiveLanguage);
+        }
         renderLetterNav(data.letter_counts || {}, letter);
         renderDecadeNav(data.decade_counts || {}, decade, data.no_year_count || 0, noYear);
         renderYearFilter(data.year_counts || {}, year);
@@ -164,8 +164,11 @@ async function fetchExploreMovies(page, filterType, letter, decade, year, langua
         }
         
     } catch (error) {
+        if (error.name === 'AbortError' || requestId !== exploreRequestId) return;
         showStatus('Error loading movies: ' + error.message, 'error');
         console.error('Explore error:', error);
+    } finally {
+        if (requestId === exploreRequestId) pendingExploreUrl = '';
     }
 }
 
@@ -187,17 +190,13 @@ function clearLetterFilter() {
 
 function jumpToDecade(decade) {
     const { filterType, letter, language } = getCurrentExploreFilters();
-    // Clear year and no_year UI (mutually exclusive with decade), but preserve letter and language
-    clearYearFilterUI();
-    clearDecadeFilter();
+    // Replace the year selection with a decade, preserving letter and language.
     fetchExploreMovies(1, filterType, letter, decade, null, language, false);
 }
 
 function jumpToNoYear() {
     const { filterType, letter, language } = getCurrentExploreFilters();
-    // Clear year and decade UI (mutually exclusive with no_year), but preserve letter and language
-    clearYearFilterUI();
-    clearDecadeFilter();
+    // Select films without a year, preserving letter and language.
     fetchExploreMovies(1, filterType, letter, null, null, language, true);
 }
 
@@ -207,8 +206,7 @@ function clearDecadeFilter() {
 
 function jumpToYear(year) {
     const { filterType, letter, language } = getCurrentExploreFilters();
-    // Clear decade and no_year UI (mutually exclusive with year), but preserve letter and language
-    clearDecadeFilter();
+    // Select a year, preserving letter and language.
     fetchExploreMovies(1, filterType, letter, null, year, language, false);
 }
 
@@ -229,16 +227,14 @@ function clearYearFilterUI() {
 }
 
 function clearYearFilter() {
-    clearYearFilterUI();
     // Preserve all other filters when clearing year
     const { filterType, letter, decade, language, noYear } = getCurrentExploreFilters();
     fetchExploreMovies(1, filterType, letter, decade, null, language, noYear);
 }
 
 function clearAllZoneFilters() {
-    clearLetterFilter();
-    clearDecadeFilter();
-    clearYearFilter();
+    const { filterType, language } = getCurrentExploreFilters();
+    fetchExploreMovies(1, filterType, null, null, null, language, false);
 }
 
 function goToExplorePage(page) {
@@ -269,20 +265,13 @@ function loadExploreMovies() {
         }
     }
     
-    // Set language filter (need to wait for language buttons to load)
-    if (language && language !== 'all') {
-        setTimeout(() => {
-            const langBtn = document.querySelector(`#exploreLanguageFilterGroup .btn[data-language="${language}"]`);
-            if (langBtn) {
-                const languageGroup = document.getElementById('exploreLanguageFilterGroup');
-                if (languageGroup) {
-                    languageGroup.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
-                }
-                langBtn.classList.add('active');
-            }
-        }, 100);
+    const languageGroup = document.getElementById('exploreLanguageFilterGroup');
+    if (languageGroup) {
+        languageGroup.querySelectorAll('.btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.language === language);
+        });
     }
-    
+
     // Fetch with URL params - UI state will be set by render functions
     currentExplorePage = page;
     fetchExploreMovies(page, filterType, letter, decade, year, language, noYear);
@@ -324,7 +313,6 @@ function renderLetterNav(letterCounts, activeLetter) {
             
             if (btn.dataset.action === 'clear') {
                 // Only clear letter filter, preserve decade, year, and noYear
-                clearLetterFilter();
                 const { filterType, decade, year, language, noYear } = getCurrentExploreFilters();
                 fetchExploreMovies(1, filterType, null, decade, year, language, noYear);
             } else if (btn.dataset.letter) {
@@ -374,7 +362,6 @@ function renderDecadeNav(decadeCounts, activeDecade, noYearCount, activeNoYear) 
             
             if (btn.dataset.action === 'clear') {
                 // Only clear decade/noYear filters, preserve letter and year
-                clearDecadeFilter();
                 const { filterType, letter, year, language } = getCurrentExploreFilters();
                 fetchExploreMovies(1, filterType, letter, null, year, language, false);
             } else if (btn.dataset.action === 'no_year') {

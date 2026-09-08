@@ -2,7 +2,7 @@
 
 // Display names for AI model ids (mirrors AI_MODELS in main.py). Saved reviews
 // store the raw model_id; map it to a friendly label, falling back to the raw
-// id (and to "Claude Opus 4.8" for legacy opus ids).
+// id for unrecognized saved models.
 const AI_MODEL_DISPLAY_NAMES = {
     'claude-opus-4-8': 'Claude Opus 4.8',
     'claude-fable-5': 'Claude Fable 5',
@@ -12,7 +12,6 @@ const AI_MODEL_DISPLAY_NAMES = {
 function aiModelDisplayName(modelName) {
     if (!modelName) return 'Unknown';
     if (AI_MODEL_DISPLAY_NAMES[modelName]) return AI_MODEL_DISPLAY_NAMES[modelName];
-    if (modelName.includes('opus')) return 'Claude Opus 4.8';
     return modelName;
 }
 
@@ -951,7 +950,11 @@ async function loadMovieDetailsById(id) {
             subtitleSelect = `
                 <select class="subtitle-select" id="subtitle-${movie.id}" onchange="updateSubtitle(${movie.id}, this.value)">
                     <option value="">No subtitle</option>
-                    ${subtitles.map(sub => `<option value="${escapeJsString(sub.path)}">${escapeHtml(sub.name)}</option>`).join('')}
+                    ${[true, false].map(matches => {
+                        const group = subtitles.filter(sub => (sub.matches_movie !== false) === matches);
+                        if (!group.length) return '';
+                        return `<optgroup label="${matches ? 'Matching subtitles' : 'Other subtitles in folder'}">${group.map(sub => `<option value="${escapeHtml(sub.path).replace(/"/g, '&quot;')}">${escapeHtml(sub.name)}</option>`).join('')}</optgroup>`;
+                    }).join('')}
                 </select>
             `;
         }
@@ -959,7 +962,7 @@ async function loadMovieDetailsById(id) {
         // Build subtitle indicator - show actual filenames
         let subtitleIndicator = '';
         if (subtitles.length > 0) {
-            const subtitleNames = subtitles.map(sub => escapeHtml(sub.name)).join(', ');
+            const subtitleNames = subtitles.filter(sub => sub.matches_movie !== false).map(sub => escapeHtml(sub.name)).join(', ') || 'No matching subtitles';
             const locations = Array.from(new Set(subtitles.map(sub => sub.location).filter(Boolean))).map(loc => loc === 'subs' ? 'subs folder' : 'current folder').join(', ');
             subtitleIndicator = `<div style="font-size: 11px; color: #888; margin-top: 4px;">Subtitles: ${subtitleNames}${locations ? ` (${locations})` : ''}</div>`;
         }
@@ -1009,7 +1012,7 @@ async function loadMovieDetailsById(id) {
                         ${sameTitleIndicator}
                     </div>
                     <div class="movie-details-meta">
-                        ${movie.year ? `<span class="year-link" onclick="navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
+                        ${movie.year ? `<span class="year-link" role="link" tabindex="0" onkeydown="if(event.key === 'Enter') this.click()" onclick="navigateToExploreWithYear(${movie.year}, ${movie.id || 'null'});" title="Filter by ${movie.year}">${movie.year}</span>` : ''}
                         ${movie.length ? `<span>${formatTime(movie.length)}</span>` : ''}
                         ${showSizes && movie.size ? `<span class="movie-size">${formatSize(movie.size)}</span>` : ''}
                         ${movie.watched_date ? `<span>Watched: ${formatDate(movie.watched_date)}</span>` : ''}

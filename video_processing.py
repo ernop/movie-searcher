@@ -51,7 +51,7 @@ def _ffmpeg_job(video_path_local, ts, ffmpeg, out_path, subtitle_path=None):
 
         logger.debug(f"ffmpeg command: {' '.join(cmd)}")
         start = time.time()
-        proc = subprocess.run(cmd, capture_output=True, timeout=30)
+        proc = subprocess.run(cmd, capture_output=True, timeout=120)
         elapsed = time.time() - start
 
         if proc.returncode == 0 and Path(out_path).exists():
@@ -371,7 +371,7 @@ def has_video_stream(file_path):
             "-of", "default=nw=1:nk=1",
             str(file_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         if result.returncode != 0:
             # Check if it's a "no such file" error or other error
             stderr_msg = result.stderr.strip()
@@ -382,6 +382,9 @@ def has_video_stream(file_path):
             # Return False for any ffprobe failure (file not found, no video stream, etc.)
             return False
         return result.stdout.strip() == "video"
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffprobe timed out checking video stream for {file_path}; assuming it has video")
+        return True
     except Exception as e:
         logger.error(f"Error checking video stream for {file_path}: {e}")
         return False
@@ -683,22 +686,16 @@ def process_frame_queue(max_workers, scan_progress_dict, add_scan_log_func):
 
         # Shutdown executor with timeout (interruptible)
         if frame_executor:
-            frame_executor.shutdown(wait=False)  # Don't wait, allow interruption
-            # Give a short time for tasks to finish
-            time.sleep(0.5)
-
-            # Only kill subprocesses on forced shutdown
+            wait_for_jobs = not shutdown_flag.is_set()
+            frame_executor.shutdown(wait=wait_for_jobs)
             if shutdown_flag.is_set():
                 kill_all_active_subprocesses()
-
-            # Allow clean recreation on next start
             frame_executor = None
         if process_executor:
             try:
-                process_executor.shutdown(wait=False, cancel_futures=False)
+                process_executor.shutdown(wait=not shutdown_flag.is_set(), cancel_futures=shutdown_flag.is_set())
             except Exception:
                 pass
-            # Allow clean recreation on next start
             process_executor = None
 
         global frame_processing_active

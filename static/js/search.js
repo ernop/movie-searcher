@@ -72,6 +72,8 @@ async function performSearch(query, showResultsImmediately = false) {
         // But mainly, the requestId check below is the ultimate guard.
         
         if (!response.ok) {
+            if (requestId !== currentSearchRequestId) return;
+            showStatus('Search failed. Please try again.', 'error');
             console.error('Search failed:', response.status);
             return;
         }
@@ -115,6 +117,8 @@ async function performSearch(query, showResultsImmediately = false) {
         if (error.name === 'AbortError') {
             return;
         }
+        if (requestId !== currentSearchRequestId) return;
+        showStatus('Search failed. Please try again.', 'error');
         console.error('Search error:', error);
     }
 }
@@ -131,6 +135,8 @@ function updateClearButtonVisibility() {
 }
 
 function clearSearch() {
+    scheduleSearch('');
+    selectedIndex = -1;
     if (searchInput) {
         searchInput.value = '';
         updateClearButtonVisibility();
@@ -206,68 +212,49 @@ function setExploreLanguageFilter(languageValue, clickedBtn) {
     }
     clickedBtn.classList.add('active');
     
-    // Apply filters when language changes (URL updated by fetchExploreMovies)
-    applyExploreFilters();
+    const { filterType, letter, decade, year, noYear } = getCurrentExploreFilters();
+    fetchExploreMovies(1, filterType, letter, decade, year, languageValue, noYear);
 }
 
 async function loadLanguageFilters() {
     try {
         const response = await fetch('/api/language-counts');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        const counts = data.counts || {};
-        
-        const languageGroup = document.getElementById('exploreLanguageFilterGroup');
-        if (!languageGroup) return;
-        
-        // Canonicalize codes and map to display names
-        const codeToCanonical = {
-            'eng': 'en', 'spa': 'es', 'fra': 'fr', 'fre': 'fr', 'ger': 'de', 'deu': 'de',
-            'ita': 'it', 'por': 'pt', 'rus': 'ru', 'jpn': 'ja', 'jap': 'ja', 'kor': 'ko',
-            'zho': 'zh', 'chi': 'zh', 'hin': 'hi', 'swe': 'sv', 'dan': 'da', 'ara': 'ar',
-            'pol': 'pl', 'ice': 'is', 'cze': 'cs', 'fin': 'fi', 'unknown': 'unknown'
-        };
-        const languageNames = {
-            'all': 'All', 'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
-            'it': 'Italian', 'pt': 'Portuguese', 'ru': 'Russian', 'ja': 'Japanese',
-            'ko': 'Korean', 'zh': 'Chinese', 'hi': 'Hindi', 'sv': 'Swedish', 'da': 'Danish',
-            'ar': 'Arabic', 'pl': 'Polish', 'is': 'Icelandic', 'cs': 'Czech', 'fi': 'Finnish',
-            'und': 'Unknown', 'unknown': 'Unknown', 'zxx': 'No language'
-        };
-
-        // Merge counts by canonical code
-        const mergedCounts = {};
-        for (const k of Object.keys(counts)) {
-            const raw = (k || '').toString().trim().toLowerCase();
-            const val = counts[k] || 0;
-            if (raw === 'all') {
-                mergedCounts['all'] = (mergedCounts['all'] || 0) + val;
-                continue;
-            }
-            const canonical = codeToCanonical[raw] || raw;
-            mergedCounts[canonical] = (mergedCounts[canonical] || 0) + val;
+        if (!exploreLanguageCountsReady) {
+            renderLanguageFilters(data.counts || {}, getCurrentExploreFilters().language);
         }
-        
-        const sortedLanguages = Object.keys(mergedCounts).sort((a, b) => {
-            if (a === 'all') return -1;
-            if (b === 'all') return 1;
-            const countDiff = (mergedCounts[b] - mergedCounts[a]);
-            if (countDiff !== 0) return countDiff;
-            const nameA = (languageNames[a] || (a ? a : 'unknown')).toLowerCase();
-            const nameB = (languageNames[b] || (b ? b : 'unknown')).toLowerCase();
-            return nameA.localeCompare(nameB);
-        });
-        
-        let html = '<span class="language-label">Audio language:</span>';
-        for (const code of sortedLanguages) {
-            const count = mergedCounts[code];
-            const displayName = languageNames[code] || (code ? code : 'unknown');
-            const isActive = code === 'all' ? 'active' : '';
-            html += `<button type="button" class="btn ${isActive}" data-language="${code}" onclick="setExploreLanguageFilter('${code}', this)">${displayName} (${count})</button>`;
-        }
-        
-        languageGroup.innerHTML = html;
     } catch (error) {
         console.error('Error loading language filters:', error);
+    }
+}
+
+function renderLanguageFilters(counts, activeLanguage = 'all') {
+    const group = document.getElementById('exploreLanguageFilterGroup');
+    if (!group) return;
+    const names = {
+        all: 'All', en: 'English', es: 'Spanish', fr: 'French', de: 'German',
+        it: 'Italian', pt: 'Portuguese', ru: 'Russian', ja: 'Japanese', ko: 'Korean',
+        zh: 'Chinese', hi: 'Hindi', sv: 'Swedish', da: 'Danish', ar: 'Arabic',
+        pl: 'Polish', is: 'Icelandic', cs: 'Czech', fi: 'Finnish', no: 'Norwegian',
+        nl: 'Dutch', uk: 'Ukrainian', new: 'Newari', unknown: 'Unknown', zxx: 'No language'
+    };
+    const codes = Object.keys(counts).sort((a, b) => {
+        if (a === 'all') return -1;
+        if (b === 'all') return 1;
+        return counts[b] - counts[a] || (names[a] || a).localeCompare(names[b] || b);
+    });
+    group.innerHTML = '<span class="language-label">Audio language:</span>';
+    for (const code of codes) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn' + (code === activeLanguage ? ' active' : '');
+        button.dataset.language = code;
+        button.textContent = `${names[code] || code} (${counts[code]})`;
+        button.setAttribute('aria-pressed', String(code === activeLanguage));
+        button.disabled = counts[code] === 0 && code !== activeLanguage && code !== 'all';
+        button.onclick = () => setExploreLanguageFilter(code, button);
+        group.appendChild(button);
     }
 }
 
@@ -279,8 +266,8 @@ function setExploreWatchFilter(filterValue, clickedBtn) {
     // Add active class to clicked button
     clickedBtn.classList.add('active');
     
-    // Apply explore filters (URL updated by fetchExploreMovies)
-    applyExploreFilters();
+    const { letter, decade, year, language, noYear } = getCurrentExploreFilters();
+    fetchExploreMovies(1, filterValue, letter, decade, year, language, noYear);
 }
 
 let progressInterval = null;
@@ -567,11 +554,7 @@ searchInput.addEventListener('keydown', (e) => {
     } else if (e.key === 'Enter') {
         e.preventDefault();
         if (selectedIndex >= 0 && items[selectedIndex]) {
-            const item = currentResults[selectedIndex];
-            autocomplete.style.display = 'none';
-            updateClearButtonVisibility();
-            const slug = (item.name || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-            openMovieHash(item.id, encodeURIComponent(slug));
+            selectSearchSuggestion(selectedIndex);
         } else {
             // Force a search with the current input and show results
             if (searchDebounceTimer) {
@@ -595,15 +578,23 @@ function updateSelection(items) {
     });
 }
 
+function selectSearchSuggestion(index) {
+    const movie = currentResults[index];
+    if (!movie) return;
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    if (searchAbortController) searchAbortController.abort();
+    currentSearchRequestId++;
+    searchInput.value = movie.name;
+    autocomplete.style.display = 'none';
+    updateClearButtonVisibility();
+    openMovieHash(movie.id, getMovieSlug(movie));
+}
+
 autocomplete.addEventListener('click', (e) => {
     const item = e.target.closest('.autocomplete-item');
     if (item) {
         const index = parseInt(item.dataset.index);
-        const movie = currentResults[index];
-        searchInput.value = movie.name;
-        autocomplete.style.display = 'none';
-        displayResults([movie]);
-        updateClearButtonVisibility();
+        selectSearchSuggestion(index);
     }
 });
 

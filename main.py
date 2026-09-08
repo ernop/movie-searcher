@@ -248,6 +248,16 @@ def get_largest_movie_ids_subquery(db, base_filters: list = None):
     return result
 
 
+def movie_display_name(name):
+    # Older index rows occasionally stored a full path as the title.
+    # Use the existing filename cleaner without modifying the file or its identity.
+    from pathlib import PureWindowsPath
+
+    if name and (Path(name).is_absolute() or PureWindowsPath(name).is_absolute()):
+        return clean_movie_name(name.replace('\\', '/'))[0]
+    return name
+
+
 def build_movie_cards(db, movies: list[Movie]) -> dict:
     """
     Build standardized movie card dictionaries for a list of movies.
@@ -358,7 +368,7 @@ def build_movie_cards(db, movies: list[Movie]) -> dict:
         results[m.id] = {
             "id": m.id,
             "path": m.path,
-            "name": m.name,
+            "name": movie_display_name(m.name),
             "length": m.length,
             "created": m.created.isoformat() if m.created else None,
             "size": m.size,
@@ -472,6 +482,17 @@ async def lifespan(app):
         removed_count = remove_sample_files()
         if removed_count > 0:
             print(f"Removed {removed_count} sample file(s) from database")
+
+        def _repair_index_background():
+            try:
+                from scanning import repair_library_index
+                logger.info("Startup: repairing library index in background...")
+                result = repair_library_index()
+                logger.info(f"Startup: index repair finished: {result}")
+            except Exception:
+                logger.exception("Library index repair failed")
+
+        threading.Thread(target=_repair_index_background, name="index-repair", daemon=True).start()
 
         # No longer needed - scanning module imports config directly
         logger.info("=== LIFESPAN STARTUP COMPLETE ===")
@@ -1069,7 +1090,7 @@ async def get_movie_details_by_id(movie_id: int):
         return {
             "id": movie.id,
             "path": movie.path,
-            "name": movie.name,
+            "name": movie_display_name(movie.name),
             "length": movie.length,
             "created": movie.created,
             "size": movie.size,
@@ -1110,7 +1131,7 @@ async def get_same_title_movies(movie_id: int):
         for m in same_title_movies:
             result.append({
                 "id": m.id,
-                "name": m.name,
+                "name": movie_display_name(m.name),
                 "size": m.size,
                 "year": m.year,
                 "hidden": m.hidden,
@@ -1586,15 +1607,15 @@ async def check_movies_in_library(request: CheckMoviesRequest):
                 # Check if titles match (either exact or significant word overlap)
                 if movie_clean == clean_title:
                     found = True
-                    matched_movie = {"id": movie.id, "name": movie.name, "year": movie.year}
+                    matched_movie = {"id": movie.id, "name": movie_display_name(movie.name), "year": movie.year}
                     break
                 elif len(clean_title_words) >= 2 and clean_title_words.issubset(movie_words):
                     found = True
-                    matched_movie = {"id": movie.id, "name": movie.name, "year": movie.year}
+                    matched_movie = {"id": movie.id, "name": movie_display_name(movie.name), "year": movie.year}
                     break
                 elif len(movie_words) >= 2 and movie_words.issubset(clean_title_words):
                     found = True
-                    matched_movie = {"id": movie.id, "name": movie.name, "year": movie.year}
+                    matched_movie = {"id": movie.id, "name": movie_display_name(movie.name), "year": movie.year}
                     break
 
             results.append({
@@ -1848,6 +1869,18 @@ async def get_subtitles(movie_id: int = Query(None), video_path: str = Query(Non
 
     subtitles = []
     subtitle_paths_found = set()
+    video_title, video_year = clean_movie_name(str(video_path_obj))
+    def subtitle_matches(subtitle_file):
+        stem = subtitle_file.stem
+        if stem.casefold() == video_path_obj.stem.casefold():
+            return True
+        # Strip common language/accessibility suffixes from basename-matched subtitles.
+        stem = re.sub(r"(?:[. _-](?:en|eng|english|ja|jpn|fr|fre|fra|es|spa|de|ger|deu|it|ita|pt|por|ru|rus|zh|chi|zho|ko|kor|nl|dut|und|sdh|forced|default|cc))+$", "", stem, flags=re.I)
+        if stem.casefold() == video_path_obj.stem.casefold():
+            return True
+        title, subtitle_year = clean_movie_name(stem)
+        return (title.casefold() == video_title.casefold()
+                and (subtitle_year is None or video_year is None or subtitle_year == video_year))
 
     # Search directories: current folder and "subs" folder (case insensitive)
     search_dirs = [("current", video_dir)]
@@ -1872,12 +1905,14 @@ async def get_subtitles(movie_id: int = Query(None), video_path: str = Query(Non
                             "path": path_str,
                             "name": subtitle_file.name,
                             "type": subtitle_file.suffix[1:].upper(),
-                            "location": location
+                            "location": location,
+                            "matches_movie": subtitle_matches(subtitle_file)
                         })
                         subtitle_paths_found.add(path_str)
         except (PermissionError, OSError) as e:
             logger.warning(f"Error scanning {location} directory for subtitles: {e}")
 
+    subtitles.sort(key=lambda sub: (not sub['matches_movie'], sub['name'].casefold()))
     return {"subtitles": subtitles}
 
 @app.get("/api/rating/{movie_id}")
@@ -1975,7 +2010,7 @@ async def get_config():
             "movies_folder": movies_folder or "",
             "local_target_folder": local_target_folder or "",
             "ffmpeg": ffmpeg_status,
-            "settings": config  # Return all settings
+            "settings": config
         }
     finally:
         db.close()
@@ -2591,46 +2626,42 @@ async def get_health():
         "server_start_time": _server_start_time
     }
 
+# Normalize tags before counting distinct movies, so multiple aliases never double-count.
+LANGUAGE_ALIASES = {
+    'eng': 'en', 'spa': 'es', 'fra': 'fr', 'fre': 'fr', 'ger': 'de', 'deu': 'de',
+    'ita': 'it', 'por': 'pt', 'rus': 'ru', 'jpn': 'ja', 'jap': 'ja', 'kor': 'ko',
+    'zho': 'zh', 'chi': 'zh', 'hin': 'hi', 'swe': 'sv', 'dan': 'da', 'ara': 'ar',
+    'pol': 'pl', 'ice': 'is', 'isl': 'is', 'cze': 'cs', 'ces': 'cs', 'fin': 'fi',
+    'nor': 'no', 'dut': 'nl', 'nld': 'nl', 'ukr': 'uk', 'new': 'new',
+    'und': 'unknown', '': 'unknown',
+}
+
+
+def movie_language_rows(db):
+    from sqlalchemy import case
+
+    from models import MovieAudio
+    raw = func.lower(func.trim(func.coalesce(MovieAudio.audio_type, 'unknown')))
+    canonical = case(LANGUAGE_ALIASES, value=raw, else_=raw)
+    return db.query(MovieAudio.movie_id.label('movie_id'), canonical.label('language')).distinct().subquery()
+
+
+def count_movie_languages(db, movie_query, language_rows):
+    from sqlalchemy import distinct
+    language = func.coalesce(language_rows.c.language, 'unknown')
+    rows = movie_query.outerjoin(language_rows, Movie.id == language_rows.c.movie_id).with_entities(
+        language, func.count(distinct(Movie.id))
+    ).group_by(language).all()
+    return {**dict(rows), 'all': movie_query.count()}
+
+
 @app.get("/api/language-counts")
 async def get_language_counts():
-    """Get counts of movies by audio language (from movie_audio)"""
-    db = SessionLocal()
-    try:
-        # Count distinct movies per audio language code from movie_audio
-        from sqlalchemy import distinct, or_
-
-        from models import MovieAudio
-
-        # Only consider valid movies (length >= 60 or null) by joining to movies
-        counts_rows = (
-            db.query(
-                func.lower(func.trim(MovieAudio.audio_type)).label("lang"),
-                func.count(distinct(MovieAudio.movie_id)).label("count")
-            )
-            .join(Movie, Movie.id == MovieAudio.movie_id)
-            .filter(
-                MovieAudio.audio_type.isnot(None),
-                func.trim(MovieAudio.audio_type) != '',
-                or_(Movie.length == None, Movie.length >= 60),
-                Movie.hidden == False
-            )
-            .group_by(func.lower(func.trim(MovieAudio.audio_type)))
-            .order_by(func.count(distinct(MovieAudio.movie_id)).desc())
-            .all()
-        )
-
-        counts_dict = {lang: count for lang, count in counts_rows if lang}
-
-        # Also get count for "all" (total movies)
-        total_count = db.query(Movie).filter(
-            or_(Movie.length == None, Movie.length >= 60),
-            Movie.hidden == False
-        ).count()
-        counts_dict['all'] = total_count
-
-        return {"counts": counts_dict}
-    finally:
-        db.close()
+    from sqlalchemy import or_
+    with SessionLocal() as db:
+        base = [or_(Movie.length.is_(None), Movie.length >= 60), Movie.hidden.is_(False)]
+        movies = db.query(Movie).filter(*base, Movie.id.in_(get_largest_movie_ids_subquery(db, base).select()))
+        return {"counts": count_movie_languages(db, movies, movie_language_rows(db))}
 
 @app.get("/api/cleaning-patterns")
 async def get_cleaning_patterns():
@@ -2778,213 +2809,85 @@ async def explore_movies(
     no_year: bool | None = Query(None)
 ):
     """Get all movies for exploration view with pagination and filters"""
-    t_start = time.perf_counter()
-    logger.info(f"[EXPLORE] page={page} per_page={per_page} filter={filter_type} letter={letter} year={year} decade={decade} lang={language}")
+    from sqlalchemy import Integer, cast, or_
 
-    # Normalize letter to uppercase if provided
-    if letter is not None:
-        letter = letter.upper()
-
-    # Log the actual request URL and query params to debug letter filtering
-    query_params = dict(request.query_params)
-
-    db = SessionLocal()
-    try:
-        # Base query for movies
-        from sqlalchemy import or_
-
-        # If newest filter is active, restrict the base set to the 100 newest movies
-        newest_ids_subq = None
-        if filter_type == "newest":
-            # Subquery for IDs of top 100 newest movies
-            newest_ids_subq = db.query(Movie.id).filter(
-                or_(Movie.length == None, Movie.length >= 60),
-                Movie.hidden == False
-            ).order_by(Movie.created.desc()).limit(100).subquery()
-
-            # Base query restricted to these IDs
-            movie_q = db.query(Movie).filter(Movie.id.in_(newest_ids_subq))
-        else:
-            movie_q = db.query(Movie).filter(
-                or_(Movie.length == None, Movie.length >= 60),
-                Movie.hidden == False
-            )
-
-        # Apply watched filter using EXISTS subquery for performance
-        if filter_type == "watched":
-            exists_watch = db.query(MovieStatus.id).filter(
-                (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
+    with SessionLocal() as db:
+        base = [or_(Movie.length.is_(None), Movie.length >= 60), Movie.hidden.is_(False)]
+        movies = db.query(Movie).filter(*base, Movie.id.in_(get_largest_movie_ids_subquery(db, base).select()))
+        if filter_type == 'newest':
+            newest = db.query(Movie.id).filter(*base).order_by(Movie.created.desc(), Movie.id.desc()).limit(100).subquery()
+            movies = movies.filter(Movie.id.in_(newest.select()))
+        elif filter_type in ('watched', 'unwatched'):
+            watched = db.query(MovieStatus.id).filter(
+                MovieStatus.movie_id == Movie.id,
+                MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value,
             ).exists()
-            movie_q = movie_q.filter(exists_watch)
-        elif filter_type == "unwatched":
-            exists_watch = db.query(MovieStatus.id).filter(
-                (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
-            ).exists()
-            movie_q = movie_q.filter(~exists_watch)
-        # 'newest' filter does not filter by status, implies 'all' status-wise
+            movies = movies.filter(watched if filter_type == 'watched' else ~watched)
 
-        # Letter filter (SQL-side for A-Z; '#' handled client-like is tricky)
-        if letter and letter != "#" and len(letter) == 1 and letter.isalpha():
-            # Simple prefix match
-            prefix = f"{letter}%"
-            movie_q = movie_q.filter(func.substr(Movie.name, 1, 1) == letter)
+        first_letter = func.upper(func.substr(Movie.name, 1, 1))
+        letter_filter = []
+        if letter == '#':
+            letter_filter = [~first_letter.in_(list('ABCDEFGHIJKLMNOPQRSTUVWXYZ'))]
+        elif letter:
+            letter_filter = [first_letter == letter.upper()]
 
-        # Audio language filter via movie_audio
-        if language and language != "all":
-            from models import MovieAudio
-            # Map canonical codes to all possible variants in the database
-            code_variants = {
-                'en': ['en', 'eng'],
-                'es': ['es', 'spa'],
-                'fr': ['fr', 'fra', 'fre'],
-                'de': ['de', 'ger', 'deu'],
-                'it': ['it', 'ita'],
-                'pt': ['pt', 'por'],
-                'ru': ['ru', 'rus'],
-                'ja': ['ja', 'jpn', 'jap'],
-                'ko': ['ko', 'kor'],
-                'zh': ['zh', 'zho', 'chi'],
-                'hi': ['hi', 'hin'],
-                'sv': ['sv', 'swe'],
-                'da': ['da', 'dan'],
-                'ar': ['ar', 'ara'],
-                'pl': ['pl', 'pol'],
-                'is': ['is', 'ice'],
-                'cs': ['cs', 'cze'],
-                'fi': ['fi', 'fin'],
-                'und': ['und', 'unknown'],
-                'unknown': ['und', 'unknown'],
-                'zxx': ['zxx']
-            }
-            variants = code_variants.get(language.lower(), [language.lower()])
-            movie_q = movie_q.filter(
-                Movie.id.in_(
-                    db.query(MovieAudio.movie_id).filter(
-                        func.lower(func.trim(MovieAudio.audio_type)).in_(variants)
-                    ).subquery()
-                )
-            )
-
-        # Year filters are mutually exclusive: year > decade > no_year
-        # If year is specified, use it (highest priority)
+        time_filter = []
         if year is not None:
-            movie_q = movie_q.filter(Movie.year == year)
-        # If decade is specified (and year is not), use decade
+            time_filter = [Movie.year == year]
         elif decade is not None:
-            # Ensure decade is a multiple of 10
-            decade_start = (decade // 10) * 10
-            decade_end = decade_start + 9
-            movie_q = movie_q.filter(Movie.year >= decade_start, Movie.year <= decade_end)
-        # If no_year is specified (and neither year nor decade), use no_year
+            start = decade // 10 * 10
+            time_filter = [Movie.year.between(start, start + 9)]
         elif no_year:
-            movie_q = movie_q.filter(Movie.year == None)
+            time_filter = [Movie.year.is_(None)]
 
-        # SQL-level deduplication: only include the largest file for each movie name
-        # Build base filters for the deduplication subquery
-        t_dedup = time.perf_counter()
-        dedup_base_filters = [
-            or_(Movie.length == None, Movie.length >= 60),
-            Movie.hidden == False
-        ]
-        largest_ids_subq = get_largest_movie_ids_subquery(db, dedup_base_filters)
-        movie_q = movie_q.filter(Movie.id.in_(largest_ids_subq))
+        language_rows = movie_language_rows(db)
+        language_filter = []
+        if language and language != 'all':
+            language = LANGUAGE_ALIASES.get(language.lower(), language.lower())
+            tagged = db.query(language_rows.c.movie_id).filter(language_rows.c.language == language)
+            matches = Movie.id.in_(tagged)
+            if language == 'unknown':
+                matches = or_(matches, ~Movie.id.in_(db.query(language_rows.c.movie_id)))
+            language_filter = [matches]
 
-        # Apply ordering and SQL-level pagination (efficient!)
-        if filter_type == "newest":
-            movie_q = movie_q.order_by(Movie.created.desc())
-        else:
-            movie_q = movie_q.order_by(Movie.name.asc())
+        results = movies.filter(*letter_filter, *time_filter, *language_filter)
+        total = results.count()
+        ordering = (Movie.created.desc(), Movie.id.desc()) if filter_type == 'newest' else (Movie.name.asc(), Movie.id.asc())
+        rows = results.order_by(*ordering).offset((page - 1) * per_page).limit(per_page).all()
+        cards = build_movie_cards(db, rows)
 
-        t_query = time.perf_counter()
-        total = movie_q.count()
-        rows = movie_q.offset((page - 1) * per_page).limit(per_page).all()
-        query_ms = (time.perf_counter() - t_query) * 1000
-        logger.info(f"[EXPLORE] DB query returned {len(rows)} movies (total={total}) in {query_ms:.2f}ms")
-
-        # Build movie cards
-        t_cards = time.perf_counter()
-        movie_cards = build_movie_cards(db, rows)
-        result_movies = [movie_cards[m.id] for m in rows]
-        cards_ms = (time.perf_counter() - t_cards) * 1000
-        logger.info(f"[EXPLORE] Built {len(rows)} movie cards in {cards_ms:.2f}ms")
-
-        # Compute counts using efficient SQL GROUP BY (not Python iteration)
-        # Base filter for counts: same as main query but without letter/year/decade filters
-        base_filter = [
-            or_(Movie.length == None, Movie.length >= 60),
-            Movie.hidden == False
-        ]
-
-        # Apply watch filter to counts
-        watch_filter = []
-        if filter_type == "watched":
-            exists_watch = db.query(MovieStatus.id).filter(
-                (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
-            ).exists()
-            watch_filter = [exists_watch]
-        elif filter_type == "unwatched":
-            exists_watch = db.query(MovieStatus.id).filter(
-                (MovieStatus.movie_id == Movie.id) & (MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value)
-            ).exists()
-            watch_filter = [~exists_watch]
-        elif filter_type == "newest" and newest_ids_subq is not None:
-            watch_filter = [Movie.id.in_(newest_ids_subq)]
-
-        all_filters = base_filter + watch_filter
-
-        # Letter counts via SQL GROUP BY on first character
-        letter_counts_rows = db.query(
-            func.upper(func.substr(Movie.name, 1, 1)).label('letter'),
-            func.count(Movie.id)
-        ).filter(*all_filters).group_by(func.upper(func.substr(Movie.name, 1, 1))).all()
-
+        # Each strip counts the results for that choice, retaining the other filters.
+        letter_rows = movies.filter(*time_filter, *language_filter).with_entities(
+            first_letter, func.count(Movie.id)
+        ).group_by(first_letter).all()
         letter_counts = {}
-        for lt, cnt in letter_counts_rows:
-            if lt and lt.isalpha():
-                letter_counts[lt] = cnt
-            else:
-                letter_counts['#'] = letter_counts.get('#', 0) + cnt
+        for initial, count in letter_rows:
+            key = initial if initial and len(initial) == 1 and initial in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' else '#'
+            letter_counts[key] = letter_counts.get(key, 0) + count
 
-        # Year counts via SQL GROUP BY
-        year_counts_rows = db.query(
-            Movie.year,
-            func.count(Movie.id)
-        ).filter(*all_filters, Movie.year.isnot(None)).group_by(Movie.year).all()
-        year_counts = {yr: cnt for yr, cnt in year_counts_rows}
-
-        # Decade counts via SQL GROUP BY - use cast to ensure integer division
-        from sqlalchemy import Integer, cast
+        years = movies.filter(*letter_filter, *language_filter)
+        year_counts = dict(years.filter(Movie.year.isnot(None)).with_entities(
+            Movie.year, func.count(Movie.id)
+        ).group_by(Movie.year).all())
         decade_expr = cast(Movie.year / 10, Integer) * 10
-        decade_counts_rows = db.query(
-            decade_expr.label('decade'),
-            func.count(Movie.id)
-        ).filter(*all_filters, Movie.year.isnot(None)).group_by(decade_expr).all()
-        decade_counts = {int(dec): cnt for dec, cnt in decade_counts_rows if dec}
-
-        # No year count
-        no_year_count = db.query(func.count(Movie.id)).filter(*all_filters, Movie.year == None).scalar() or 0
-
-        total_ms = (time.perf_counter() - t_start) * 1000
-        logger.info(f"[EXPLORE] Total: {total_ms:.2f}ms | movies={len(result_movies)} total={total}")
+        decade_counts = dict(years.filter(Movie.year.isnot(None)).with_entities(
+            decade_expr, func.count(Movie.id)
+        ).group_by(decade_expr).all())
+        no_year_count = years.filter(Movie.year.is_(None)).count()
+        language_counts = count_movie_languages(db, movies.filter(*letter_filter, *time_filter), language_rows)
+        # Keep every language choice visible, including choices with zero matches.
+        for code, in db.query(language_rows.c.language).distinct():
+            language_counts.setdefault(code, 0)
+        language_counts.setdefault('unknown', 0)
 
         return {
-            "movies": result_movies,
-            "pagination": {
-                "page": page,
-                "per_page": per_page,
-                "total": total,
-                "pages": (total + per_page - 1) // per_page if total > 0 else 0
-            },
-            "letter_counts": letter_counts,
-            "year_counts": year_counts,
-            "decade_counts": decade_counts,
-            "no_year_count": no_year_count
+            'movies': [cards[m.id] for m in rows],
+            'pagination': {'page': page, 'per_page': per_page, 'total': total,
+                           'pages': (total + per_page - 1) // per_page},
+            'letter_counts': letter_counts, 'year_counts': year_counts,
+            'decade_counts': decade_counts, 'no_year_count': no_year_count,
+            'language_counts': language_counts,
         }
-    except Exception as e:
-        logger.error(f"Error in explore endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
 
 
 @app.get("/api/random-movie")
@@ -3102,7 +3005,7 @@ async def get_all_movies():
         result = [
             {
                 "id": m.id,
-                "name": m.name,
+                "name": movie_display_name(m.name),
                 "year": m.year,
                 "path": m.path
             }
@@ -4617,7 +4520,7 @@ def build_review_prompt(movie_name: str, year: int | None, director: str | None,
     user_profile = ""  # Placeholder for future user profile
     
     # Base instructions - emphasizing density and getting to the point
-    base_instructions = """Provide perspectives from Roger Ebert and Quentin Tarantino on this film. Include direct quotes where available. If specific reviews don't exist, synthesize their likely perspectives based on their known tastes and critical frameworks.
+    base_instructions = """Provide perspectives from Roger Ebert and Quentin Tarantino on this film. Include direct quotes only with an identifiable source URL or publication citation. Never invent quotations. If specific reviews don't exist, synthesize their likely perspectives based on their known tastes and critical frameworks, explicitly labeling those passages as imagined perspectives.
 
 STYLE GUIDELINES:
 - Get to the point. Dense, useful information only.

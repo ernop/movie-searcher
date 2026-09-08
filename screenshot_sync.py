@@ -79,6 +79,9 @@ def save_screenshot_to_db(movie_id: int, screenshot_path, timestamp_seconds: flo
 
         if saved:
             logger.info(f"Saved screenshot to database: movie_id={movie_id}, screenshot_id={saved.id}, path={Path(screenshot_path).name}")
+            if not movie.image_path or not Path(movie.image_path).exists():
+                movie.image_path = normalized_path
+                db.commit()
             return True
         else:
             # This should never happen - indicates a serious problem (path normalization bug?)

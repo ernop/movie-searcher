@@ -44,22 +44,25 @@ def _get_shared_resources():
     }
 
 
-def generate_screenshot_filename(video_path, timestamp_seconds, suffix="", movie_id=None):
-    """Generate a sensible screenshot filename based on movie name and timestamp
-    
-    Args:
-        video_path: Path to video file
-        timestamp_seconds: Timestamp in seconds
-        suffix: Optional suffix to add before .jpg (e.g., "_subs" for subtitles)
-        movie_id: Movie ID to look up cleaned name (required - should always be available)
-    """
-    # Get shared resources
-    resources = _get_shared_resources()
-    SCREENSHOT_DIR = resources['SCREENSHOT_DIR']
+def sanitize_screenshot_stem(movie_name: str) -> str:
+    """Make a movie name safe to use as a screenshot filename stem."""
+    sanitized_name = re.sub(r'[<>:"/\\|?*]', '_', movie_name)
+    sanitized_name = sanitized_name.strip('. ')
+    if len(sanitized_name) > 100:
+        sanitized_name = sanitized_name[:100]
+    return sanitized_name
 
+
+def screenshot_filename_for(movie_name: str, timestamp_seconds, suffix="", movie_id=None) -> str:
+    """Build a screenshot filename. movie_id makes names unique across same-titled files."""
+    stem = sanitize_screenshot_stem(movie_name)
+    if movie_id is not None:
+        return f"{stem}_{movie_id}_screenshot{int(timestamp_seconds)}s{suffix}.jpg"
+    return f"{stem}_screenshot{int(timestamp_seconds)}s{suffix}.jpg"
+
+
+def _lookup_movie_name(video_path, movie_id=None) -> str:
     video_path_obj = Path(video_path)
-
-    # Get cleaned movie name from database using movie_id
     movie_name = None
     if movie_id:
         db = SessionLocal()
@@ -73,26 +76,29 @@ def generate_screenshot_filename(video_path, timestamp_seconds, suffix="", movie
             logger.error(f"Database error when looking up movie_id={movie_id} for screenshot filename: {e}", exc_info=True)
         finally:
             db.close()
-
-    # If movie_id not provided or lookup failed, use sanitized video filename
-    # This should never happen in normal operation - indicates programming error
     if not movie_name:
         if not movie_id:
             logger.error(f"generate_screenshot_filename called without movie_id for {video_path}. This is a programming error.")
-        movie_name = video_path_obj.stem  # Get filename without extension
+        movie_name = video_path_obj.stem
+    return movie_name
 
-    # Sanitize filename: remove invalid characters for Windows/Linux
-    # Replace invalid filename characters with underscore
-    sanitized_name = re.sub(r'[<>:"/\\|?*]', '_', movie_name)
-    # Remove leading/trailing dots and spaces
-    sanitized_name = sanitized_name.strip('. ')
-    # Limit length to avoid filesystem issues
-    if len(sanitized_name) > 100:
-        sanitized_name = sanitized_name[:100]
 
-    # Format: movie_name_screenshot150s.jpg or movie_name_screenshot150s_subs.jpg
-    screenshot_filename = f"{sanitized_name}_screenshot{int(timestamp_seconds)}s{suffix}.jpg"
-    return SCREENSHOT_DIR / screenshot_filename
+def generate_screenshot_filename(video_path, timestamp_seconds, suffix="", movie_id=None):
+    """Generate a unique screenshot path: {name}_{movie_id}_screenshot{N}s.jpg"""
+    resources = _get_shared_resources()
+    SCREENSHOT_DIR = resources['SCREENSHOT_DIR']
+    movie_name = _lookup_movie_name(video_path, movie_id=movie_id)
+    filename = screenshot_filename_for(movie_name, timestamp_seconds, suffix=suffix, movie_id=movie_id)
+    return SCREENSHOT_DIR / filename
+
+
+def find_existing_screenshot_file(video_path, timestamp_seconds, suffix="", movie_id=None):
+    """Reuse only the screenshot belonging to this movie and timestamp."""
+    resources = _get_shared_resources()
+    if resources['SCREENSHOT_DIR'] is None:
+        return None
+    path = generate_screenshot_filename(video_path, timestamp_seconds, suffix, movie_id)
+    return path if path.is_file() else None
 
 
 def extract_movie_screenshot(video_path, timestamp_seconds, load_config_func, find_ffmpeg_func, scan_progress_dict, add_scan_log_func, priority: str = "normal", subtitle_path=None, movie_id=None):
@@ -105,8 +111,6 @@ def extract_movie_screenshot(video_path, timestamp_seconds, load_config_func, fi
     # Import here to avoid circular dependency
     from video_processing import process_frame_queue
 
-    video_path_obj = Path(video_path)
-
     # Get shared resources
     resources = _get_shared_resources()
     SCREENSHOT_DIR = resources['SCREENSHOT_DIR']
@@ -115,20 +119,18 @@ def extract_movie_screenshot(video_path, timestamp_seconds, load_config_func, fi
     # Create screenshots directory if it doesn't exist
     SCREENSHOT_DIR.mkdir(exist_ok=True)
 
-    # Generate screenshot filename based on movie name and timestamp
     suffix = "_subs" if subtitle_path else ""
-    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix, movie_id=movie_id)
-
-    # Check if screenshot already exists
-    if screenshot_path.exists():
-        logger.info(f"Screenshot already exists, skipping queue: {screenshot_path.name} (subtitle_path={subtitle_path})")
-        add_scan_log_func("info", f"Screenshot already exists: {screenshot_path.name}")
-        # Sync to database if missing (file exists but not in DB)
+    existing = find_existing_screenshot_file(video_path, timestamp_seconds, suffix=suffix, movie_id=movie_id)
+    if existing is not None:
+        logger.info(f"Screenshot already exists, skipping queue: {existing.name} (subtitle_path={subtitle_path})")
+        add_scan_log_func("info", f"Screenshot already exists: {existing.name}")
         if movie_id:
-            if not sync_existing_screenshot(movie_id, screenshot_path, timestamp_seconds):
-                logger.error(f"Failed to sync existing screenshot to database: movie_id={movie_id}, path={screenshot_path.name}. This is a bug, not a transient error.")
-                add_scan_log_func("error", f"Database sync failed: {screenshot_path.name}")
-        return str(screenshot_path)
+            if not sync_existing_screenshot(movie_id, existing, timestamp_seconds):
+                logger.error(f"Failed to sync existing screenshot to database: movie_id={movie_id}, path={existing.name}. This is a bug, not a transient error.")
+                add_scan_log_func("error", f"Database sync failed: {existing.name}")
+        return str(existing)
+
+    screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix, movie_id=movie_id)
 
     logger.debug(f"Screenshot does not exist, will queue: {screenshot_path.name} (subtitle_path={subtitle_path})")
 
@@ -218,7 +220,6 @@ def process_screenshot_extraction_worker(screenshot_info):
         decrement_active_extractions = resources['decrement_active_extractions']
         frame_extraction_queue = resources['frame_extraction_queue']
 
-        # Get (or compute) screenshot output path
         if "screenshot_path" in screenshot_info:
             screenshot_path = Path(screenshot_info["screenshot_path"])
         else:
@@ -227,7 +228,11 @@ def process_screenshot_extraction_worker(screenshot_info):
                 timestamp_seconds = min(30, max(10, length * 0.1))
             suffix = "_subs" if subtitle_path else ""
             movie_id_from_info = screenshot_info.get("movie_id")
-            screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix, movie_id=movie_id_from_info)
+            existing = find_existing_screenshot_file(video_path, timestamp_seconds, suffix=suffix, movie_id=movie_id_from_info)
+            if existing is not None:
+                screenshot_path = existing
+            else:
+                screenshot_path = generate_screenshot_filename(video_path, timestamp_seconds, suffix=suffix, movie_id=movie_id_from_info)
 
         # Early-out if already exists (quick DB sync only, no ffmpeg)
         if screenshot_path.exists():
