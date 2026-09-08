@@ -2824,10 +2824,7 @@ async def explore_movies(
     with SessionLocal() as db:
         base = [or_(Movie.length.is_(None), Movie.length >= 60), Movie.hidden.is_(False)]
         movies = db.query(Movie).filter(*base, Movie.id.in_(get_largest_movie_ids_subquery(db, base).select()))
-        if filter_type == 'newest':
-            newest = db.query(Movie.id).filter(*base).order_by(Movie.created.desc(), Movie.id.desc()).limit(100).subquery()
-            movies = movies.filter(Movie.id.in_(newest.select()))
-        elif filter_type in ('watched', 'unwatched'):
+        if filter_type in ('watched', 'unwatched'):
             watched = db.query(MovieStatus.id).filter(
                 MovieStatus.movie_id == Movie.id,
                 MovieStatus.movieStatus == MovieStatusEnum.WATCHED.value,

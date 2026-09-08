@@ -147,3 +147,22 @@ def test_old_path_titles_are_cleaned_without_changing_normal_names(api):
     assert display('Stalker') == 'Stalker'
     assert display('AC/DC') == 'AC/DC'
     assert display(r'C:\Movies\Stalker.1979.1080p.mkv') == 'Stalker'
+
+
+def test_recently_acquired_is_paginated_by_added_date_without_100_item_cutoff(api):
+    from datetime import datetime, timedelta
+    with api[1]['SessionLocal']() as db:
+        db.query(Movie).delete()
+        for i in range(125):
+            db.add(Movie(name=f'Film {i:03}', path=f'/movies/new-{i}.mkv', size=100,
+                         length=120, hidden=False, year=1942,
+                         created=datetime(2026, 1, 1) + timedelta(days=i)))
+        db.commit()
+    first = explore(api, filter_type='newest', page=1, per_page=100)
+    second = explore(api, filter_type='newest', page=2, per_page=100)
+    assert first['pagination']['total'] == 125
+    assert first['movies'][0]['name'] == 'Film 124'
+    assert len(first['movies']) == 100 and len(second['movies']) == 25
+    assert second['movies'][-1]['name'] == 'Film 000'
+    filtered = explore(api, filter_type='newest', year=1942)
+    assert filtered['pagination']['total'] == 125
