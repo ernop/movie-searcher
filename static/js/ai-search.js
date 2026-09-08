@@ -113,18 +113,19 @@ async function performAiSearch() {
             
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
+                    let eventData;
                     try {
-                        const eventData = JSON.parse(line.slice(6));
-                        
-                        if (eventData.type === 'progress') {
-                            updateProgress(eventData.step, eventData.message);
-                        } else if (eventData.type === 'result') {
-                            resultData = eventData;
-                        } else if (eventData.type === 'error') {
-                            throw new Error(eventData.detail);
-                        }
+                        eventData = JSON.parse(line.slice(6));
                     } catch (parseErr) {
                         console.warn('Failed to parse SSE event:', line, parseErr);
+                        continue;
+                    }
+                    if (eventData.type === 'progress') {
+                        updateProgress(eventData.step, eventData.message);
+                    } else if (eventData.type === 'result') {
+                        resultData = eventData;
+                    } else if (eventData.type === 'error') {
+                        throw new Error(eventData.detail);
                     }
                 }
             }

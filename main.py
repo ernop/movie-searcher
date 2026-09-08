@@ -3737,9 +3737,8 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
                     client = anthropic.Anthropic(api_key=anthropic_key)
                     logger.info(f"Review interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                     
-                    message = client.messages.create(
+                    message = request_anthropic_message(client, interaction_id,
                         model=model_name,
-                        max_tokens=4096,
                         system="You are a helpful movie review assistant.",
                         messages=[
                             {"role": "user", "content": prompt}
@@ -3985,9 +3984,8 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
                     client = anthropic.Anthropic(api_key=anthropic_key)
                     logger.info(f"Related movies interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                     
-                    message = client.messages.create(
+                    message = request_anthropic_message(client, interaction_id,
                         model=model_name,
-                        max_tokens=4096,
                         system="You are a helpful movie assistant. Return JSON only.",
                         messages=[
                             {"role": "user", "content": prompt}
@@ -4407,9 +4405,11 @@ def load_api_keys():
 # The UI sends the chosen model_id as `provider` (back-compat: "anthropic"/"openai"
 # still resolve to that provider's default, the first entry below).
 AI_MODELS = [
+    {"provider": "anthropic", "model_id": "claude-fable-5-1", "display_name": "Claude Fable 5.1"},
     {"provider": "anthropic", "model_id": "claude-opus-4-8", "display_name": "Claude Opus 4.8"},
     {"provider": "anthropic", "model_id": "claude-fable-5", "display_name": "Claude Fable 5"},
     {"provider": "anthropic", "model_id": "claude-sonnet-5", "display_name": "Claude Sonnet 5"},
+    {"provider": "openai", "model_id": "gpt-6-astra", "display_name": "GPT-6 Astra"},
     {"provider": "openai", "model_id": "gpt-5.1", "display_name": "GPT-5.1"},
 ]
 
@@ -4424,6 +4424,21 @@ def resolve_ai_model(selector: str):
     return mc or AI_MODELS[0]
 
 
+def request_anthropic_message(client, interaction_id, **kwargs):
+    """Allow room for reasoning and complete lists; reject truncated responses explicitly."""
+    with client.messages.stream(max_tokens=32768, **kwargs) as stream:
+        message = stream.get_final_message()
+    usage = message.usage
+    logger.info(
+        "AI interaction %s generation finished: model=%s stop_reason=%s input_tokens=%s output_tokens=%s max_tokens=32768",
+        interaction_id, kwargs.get("model"), message.stop_reason,
+        getattr(usage, "input_tokens", None), getattr(usage, "output_tokens", None),
+    )
+    if message.stop_reason == "max_tokens":
+        raise ValueError("The AI response was cut short by its output limit. Please narrow the request or split it into smaller searches; no partial list was saved.")
+    return message
+
+
 def anthropic_response_text(message):
     """Concatenate the text from an Anthropic message's content blocks, skipping
     thinking/other non-text blocks. Sonnet 5 and Fable 5 run adaptive thinking by
@@ -4436,6 +4451,8 @@ def anthropic_response_text(message):
 # Pricing per model_id (USD per 1M tokens). Sonnet 5 uses sticker $3/$15
 # (intro $2/$10 runs through 2026-08-31); these figures drive the cost estimate.
 AI_PRICING = {
+    "claude-fable-5-1": {"model": "Claude Fable 5.1", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
+    "gpt-6-astra": {"model": "GPT-6 Astra", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
     "claude-opus-4-8": {"model": "Claude Opus 4.8", "input_per_million": Decimal("5.00"), "output_per_million": Decimal("25.00")},
     "claude-fable-5": {"model": "Claude Fable 5", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
     "claude-sonnet-5": {"model": "Claude Sonnet 5", "input_per_million": Decimal("3.00"), "output_per_million": Decimal("15.00")},
@@ -4848,9 +4865,8 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
                 model_name = model_config["model_id"] if model_config else "claude-opus-4-8"
                 client = anthropic.Anthropic(api_key=anthropic_key)
                 logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
-                message = client.messages.create(
+                message = request_anthropic_message(client, interaction_id,
                     model=model_name,
-                    max_tokens=4096,
                     system="You are a helpful movie assistant. Return JSON only.",
                     messages=[
                         {"role": "user", "content": prompt}
