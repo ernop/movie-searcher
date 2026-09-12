@@ -25,6 +25,9 @@ SERVER_URL_DIRECT = f"http://localhost:{SERVER_PORT}"
 def check_port_in_use(port: int) -> bool:
     """Check if a port is already in use"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        # Without SO_REUSEADDR, sockets in TIME_WAIT from a just-stopped server
+        # fail the bind for up to a minute, falsely reporting "already running".
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(('127.0.0.1', port))
             return False

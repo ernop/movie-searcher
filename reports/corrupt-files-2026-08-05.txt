@@ -1,0 +1,76 @@
+tvnik movie library corruption audit — 2026-08-05
+Paths are relative to /mnt/seagate16/movies on tvnik (= /mnt/tvnik-movies on PC)
+
+== FATALLY CORRUPT (ffprobe cannot open; VLC will not play) ==
+  28 Days Later (2002) and 28 Weeks Later (2007) Mp4 1080p/28 Days Later (2002) 1080p.mp4  [not in search index]
+  A Clockwork Orange (1971) IMDB 8.2/A.Clockwork.Orange.1971.1080p.BluRay.x265-RARBG.mp4
+  Hell And High Water (1954) [BluRay] [1080p] [YTS.LT]/Hell.And.High.Water.1954.1080p.BluRay.x264-[YTS.LT].mp4
+  How I Spent My Summer Vacation (Get the Gringo) 2012 1080p BluRay HEVC x265 5.1 BONE.mkv
+  incomplete/The Fruit is Ripe 3 (HK 1999 Cert. III/a.mpeg
+  incomplete/[ www.torrenting.com ] - The.Birthday.Boys.S02E07.HDTV.x264-YesTV/the.birthday.boys.0207-yestv.mp4
+  incomplete/www.Torrenting.com   -    The.Tenant.1976.1080p.BluRay.x265/The.Tenant.1976.1080p.BluRay.x265.mp4
+  incomplete/www.UIndex.org    -    Monkey King Hero Is Back (2015) 720p BluRay-WORLD/Monkey.King.Hero.Is.Back.2015.720p.BluRay.x264.AAC-WORLD.mp4
+  Popi.1969.1080p.WEBRip.x265-RARBG/Popi.1969.1080p.WEBRip.x265-RARBG.mp4
+  Pushover.1954.1080p.BluRay.x265-RARBG/Pushover.1954.1080p.BluRay.x265-RARBG.mp4
+  September.1987.1080p.BluRay.x265-RARBG/September.1987.1080p.BluRay.x265-RARBG.mp4
+  Sketches.of.Frank.Gehry.2005.DVDRip.XviD-MakingOff.Org.avi
+  The.Story.of.O.2.1984-[+18].DVDRip.x264-worldmkv.mkv
+  The.Vanishing.1988.BRRip.XviD.MP3-RARBG/RARBG.COM.avi  [not in search index]
+  Vanya.on.42nd.Street 1994/Vanya.on.42nd.Street.avi
+  Where.the.Sidewalk.Ends.1950.REMASTERED.1080p.BluRay.x265-RARBG/Where.the.Sidewalk.Ends.1950.REMASTERED.1080p.BluRay.x265-RARBG.mp4
+
+== HOLES INSIDE (header OK, plays then breaks; est. %% of file that is zeros) ==
+  ~ 92%  LeCarre - BBC miniseries - Tinker, Tailor, Soldier, Spy (7 episodes - AVI)/Tinker, Tailor, Soldier, Spy - 5 - Tinker Tailor.avi
+  ~ 88%  LeCarre - BBC miniseries - Tinker, Tailor, Soldier, Spy (7 episodes - AVI)/Tinker, Tailor, Soldier, Spy - 3 - Smiley Tracks The Mole.avi
+  ~ 88%  LeCarre - BBC miniseries - Tinker, Tailor, Soldier, Spy (7 episodes - AVI)/Tinker, Tailor, Soldier, Spy - 6 - Smiley Sets A Trap.avi
+  ~ 83%  LeCarre - BBC miniseries - Tinker, Tailor, Soldier, Spy (7 episodes - AVI)/Tinker, Tailor, Soldier, Spy - 7 - Flushing Out The Mole.avi
+  ~ 83%  LeCarre - BBC miniseries - Tinker, Tailor, Soldier, Spy (7 episodes - AVI)/Tinker, Tailor, Soldier, Spy The Secret Centre (Interview With John Le Carre) Dvdrip.avi
+  ~ 79%  LeCarre - BBC miniseries - Tinker, Tailor, Soldier, Spy (7 episodes - AVI)/Tinker, Tailor, Soldier, Spy - 2 - Tarr Tells His Story.avi
+  ~ 75%  LeCarre - BBC miniseries - Tinker, Tailor, Soldier, Spy (7 episodes - AVI)/Tinker, Tailor, Soldier, Spy - 1 - Return To The Circus.avi
+  ~ 71%  LeCarre - BBC miniseries - A Perfect Spy (7 episodes - AVI)/A Perfect Spy 1987 Part6 Le Carre Dvdrip Xvid-Immortals.avi
+  ~ 67%  LeCarre - BBC miniseries - A Perfect Spy (7 episodes - AVI)/A Perfect Spy 1987 Part3  Le Carre Dvdrip Xvid-Immortals.avi
+  ~ 67%  LeCarre - BBC miniseries - Tinker, Tailor, Soldier, Spy (7 episodes - AVI)/Tinker, Tailor, Soldier, Spy - 4 - How It All Fits Together.avi
+  ~ 62%  LeCarre - BBC miniseries - A Perfect Spy (7 episodes - AVI)/A Perfect Spy 1987 Part4  Le Carre Dvdrip Xvid-Immortals.avi
+  ~ 54%  LeCarre - BBC miniseries - A Perfect Spy (7 episodes - AVI)/A Perfect Spy 1987 Part7 Le Carre Dvdrip Xvid-Immortals.avi
+  ~ 50%  LeCarre - BBC miniseries - A Perfect Spy (7 episodes - AVI)/A Perfect Spy 1987 Part1  Le Carre Dvdrip Xvid-Immortals.avi
+  ~ 46%  Monty.Pythons.Flying.Circus.S04.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s04e01.remastered.bdrip.x264-sprinter.mkv
+  ~ 42%  incomplete/The Fruit is Ripe 3 (HK 1999 Cert. III/b.mpeg
+  ~ 42%  www.UIndex.org    -    Hot Seat 2022 1080p ROKU WEB-DL DD 5 1 H 264-PiRaTeS/Hot Seat 2022 1080p ROKU WEB-DL DD 5 1 H 264-PiRaTeS.mkv
+  ~ 38%  A Matter of Life and Death (1946) IMDB 8.0/A.Matter.Of.Life.And.Death.1946.1080p.BluRay.AC3.1.0.x265.HEVC-Nb8.mkv
+  ~ 33%  LeCarre - BBC miniseries - A Perfect Spy (7 episodes - AVI)/A Perfect Spy 1987 Part5  Le Carre Dvdrip Xvid-Immortals.avi
+  ~ 33%  LeCarre - BBC miniseries - Smiley's People (6 episodes - AVI)/Smiley's People 6of6 (1982 - Simon Langton - Imdb 9.0).avi
+  ~ 33%  LeCarre - BBC miniseries - Smiley's People (6 episodes - AVI)/Smiley's People Interview With John Le Carre Dvd Xvid.avi
+  ~ 33%  Monty.Pythons.Flying.Circus.S04.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s04e02.remastered.bdrip.x264-sprinter.mkv
+  ~ 33%  Monty.Pythons.Flying.Circus.S04.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s04e04.remastered.bdrip.x264-sprinter.mkv
+  ~ 29%  LeCarre - BBC miniseries - Smiley's People (6 episodes - AVI)/Smiley's People 2of6 (1982 - Simon Langton - Imdb 9.0).avi
+  ~ 29%  LeCarre - BBC miniseries - Smiley's People (6 episodes - AVI)/Smiley's People 4of6 (1982 - Simon Langton - Imdb 9.0).avi
+  ~ 29%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e13.remastered.bdrip.x264-sprinter.mkv
+  ~ 29%  Monty.Pythons.Flying.Circus.S04.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s04e05.remastered.bdrip.x264-sprinter.mkv
+  ~ 25%  LeCarre - BBC miniseries - Smiley's People (6 episodes - AVI)/Smiley's People 1of6 (1982 - Simon Langton - Imdb 9.0).avi
+  ~ 25%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e04.remastered.bdrip.x264-sprinter.mkv
+  ~ 25%  Monty.Pythons.Flying.Circus.S04.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s04e03.remastered.bdrip.x264-sprinter.mkv
+  ~ 21%  LeCarre - BBC miniseries - A Perfect Spy (7 episodes - AVI)/A Perfect Spy 1987 Part2  Le Carre Dvdrip Xvid-Immortals.avi
+  ~ 21%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e02.remastered.bdrip.x264-sprinter.mkv
+  ~ 21%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e05.remastered.bdrip.x264-sprinter.mkv
+  ~ 21%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e12.remastered.bdrip.x264-sprinter.mkv
+  ~ 21%  Monty.Pythons.Flying.Circus.S03.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s03e03.remastered.bdrip.x264-sprinter.mkv
+  ~ 21%  All About Eve (1950) IMDB 8.2/All.About.Eve.1950.576p.BDRip.x264-HANDJOB.mkv
+  ~ 17%  LeCarre - BBC miniseries - Smiley's People (6 episodes - AVI)/Smiley's People 3of6 (1982 - Simon Langton - Imdb 9.0).avi
+  ~ 17%  LeCarre - BBC miniseries - Smiley's People (6 episodes - AVI)/Smiley's People 5of6 (1982 - Simon Langton - Imdb 9.0).avi
+  ~ 17%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e11.remastered.bdrip.x264-sprinter.mkv
+  ~ 17%  Magic.In.The.Moonlight.2014.1080p.BluRay.x265-RARBG/Magic.In.The.Moonlight.2014.1080p.BluRay.x265-RARBG.mp4
+  ~ 12%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e03.remastered.bdrip.x264-sprinter.mkv
+  ~ 12%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e07.remastered.bdrip.x264-sprinter.mkv
+  ~ 12%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e09.remastered.bdrip.x264-sprinter.mkv
+  ~ 12%  Monty.Pythons.Flying.Circus.S04.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s04e06.remastered.bdrip.x264-sprinter.mkv
+  ~  8%  incomplete/The Gentle Sex (1943 - UK) [Leslie Howard - WWII] DUAL.Eng.Spa/The Gentle Sex (Leslie Howard & Maurice Elvey, 1943).avi
+  ~  8%  South.Park.S24E02.South.ParQ.Vaccination.Special.1080p.HMAX.WEBRip.DD5.1.x264-LAZY[rarbg]/South.Park.S24E02.South.ParQ.Vaccination.Special.1080p.HMAX.WEB-DL.DD5.1.H.264-LAZY.mkv
+  ~  8%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e01.remastered.bdrip.x264-sprinter.mkv
+  ~  8%  Monty.Pythons.Flying.Circus.S02.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s02e08.remastered.bdrip.x264-sprinter.mkv
+  ~  8%  Death.Kappa.2010.1080p.Bluray.X264-DIMENSION/Death.Kappa.2010.1080p.Bluray.X264-DIMENSION.mkv
+  ~  8%  All Quiet on the Western Front (1930) IMDB 8.1/All.Quiet.On.The.Western.Front.1930.1080p.BluRay.Flac.2.0.x265.HEVC-Nb8.mkv
+  ~  4%  incomplete/[ www.torrenting.com ] - Jauja.2014.LIMITED.DVDRip.x264-RedBlade/jauja.2014.limited.dvdrip.x264-redblade.mkv
+  ~  4%  Monty.Pythons.Flying.Circus.S03.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s03e02.remastered.bdrip.x264-sprinter.mkv
+  ~  4%  Monty.Pythons.Flying.Circus.S03.REMASTERED.BDRip.x264-SPRiNTER[rartv]/monty.pythons.flying.circus.s03e08.remastered.bdrip.x264-sprinter.mkv
+  ~  4%  Gladiator (2000) IMDB 8.5/Gladiator.2000.EXTENDED.1080p.BluRay.x265-RARBG.mp4
+  ~  4%  Citizen Kane (1941) IMDB 8.3/Citizen.Kane.1941.1080p.UHD-BluRay.Flac.1.0.x265.HEVC-Nb8.mkv

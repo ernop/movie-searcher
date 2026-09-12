@@ -58,6 +58,16 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.gif', '.bmp', '.
 # Requirement: Skip including files smaller than 50 MB entirely
 MIN_FILE_SIZE_BYTES = 50 * 1024 * 1024
 
+# Folder names never scanned: torrent clients park unfinished downloads in
+# "incomplete", and those files are preallocated to full size with zero-filled
+# holes, so they index as normal movies but cannot be played.
+EXCLUDED_DIR_NAMES = {'incomplete'}
+
+
+def is_in_excluded_dir(path_str):
+    """True if any directory component of the path is an excluded folder name."""
+    return any(part.lower() in EXCLUDED_DIR_NAMES for part in Path(path_str).parts)
+
 # Incomplete-download markers. These files are not finished and must not be indexed.
 INCOMPLETE_SUFFIXES = {
     '.part', '.!qb', '.!ut', '.crdownload', '.aria2', '.tmp', '.parts',
@@ -460,11 +470,16 @@ def get_file_hash(file_path):
 def extract_video_metadata_with_ffprobe(file_path):
     """
     Extract both video duration and audio types in a single ffprobe call.
-    Returns (duration_seconds, audio_languages_list) tuple.
+    Returns (duration_seconds, audio_languages_list, probe_ok) tuple.
+
+    probe_ok is False only when ffprobe ran and could not parse the file at all
+    (corrupt/incomplete download). Missing duration metadata alone, a missing
+    ffprobe binary, or transient errors (e.g. timeout) keep probe_ok True so
+    healthy files are never excluded on weak evidence.
     """
     ffprobe = _get_ffprobe_path_from_config()
     if not ffprobe:
-        return None, ["unknown"]
+        return None, ["unknown"], True
 
     try:
         import json as _json
@@ -482,7 +497,7 @@ def extract_video_metadata_with_ffprobe(file_path):
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
-            return None, ["unknown"]
+            return None, ["unknown"], False
 
         data = _json.loads(result.stdout or "{}")
 
@@ -505,9 +520,9 @@ def extract_video_metadata_with_ffprobe(file_path):
             langs.append(str(lang).strip() or "unknown")
         audio_langs = langs if langs else ["unknown"]
 
-        return duration, audio_langs
+        return duration, audio_langs, True
     except Exception:
-        return None, ["unknown"]
+        return None, ["unknown"], True
 
 def _extract_audio_types_with_ffprobe(file_path):
     """
@@ -515,7 +530,7 @@ def _extract_audio_types_with_ffprobe(file_path):
     If no tags are present, returns ['unknown'].
     """
     # Use the combined function but only return audio types
-    _, audio_types = extract_video_metadata_with_ffprobe(file_path)
+    _, audio_types, _ = extract_video_metadata_with_ffprobe(file_path)
     return audio_types
 
 def _refresh_movie_audio_rows(db: Session, movie_id: int, audio_types):
@@ -1399,7 +1414,7 @@ def clean_movie_name(name, patterns=None):
 
 def get_video_length(file_path):
     """Extract video length, now using combined metadata extraction for efficiency"""
-    duration, _ = extract_video_metadata_with_ffprobe(file_path)
+    duration, _, _ = extract_video_metadata_with_ffprobe(file_path)
     return duration
 
 def extract_screenshots(video_path, num_screenshots=5, scan_progress_dict=None):
@@ -1423,6 +1438,29 @@ def extract_movie_screenshot(video_path, timestamp_seconds=150, priority: str = 
 def process_frame_queue(max_workers=3):
     """Process queued frame extractions in background thread pool"""
     process_frame_queue_core(max_workers, scan_progress, add_scan_log)
+
+def remove_movie_record(db: Session, movie, reason: str):
+    """Delete a movie row and all related records (screenshots, ratings, etc.)."""
+    try:
+        for screenshot in db.query(Screenshot).filter(Screenshot.movie_id == movie.id).all():
+            if screenshot.shot_path and os.path.exists(screenshot.shot_path):
+                try:
+                    os.remove(screenshot.shot_path)
+                except Exception as e:
+                    logger.debug(f"Could not delete screenshot file {screenshot.shot_path}: {e}")
+            db.delete(screenshot)
+        db.query(Rating).filter(Rating.movie_id == movie.id).delete()
+        db.query(MovieStatus).filter(MovieStatus.movie_id == movie.id).delete()
+        db.query(LaunchHistory).filter(LaunchHistory.movie_id == movie.id).delete()
+        db.query(PlaylistItem).filter(PlaylistItem.movie_id == movie.id).delete()
+        db.query(MovieAudio).filter(MovieAudio.movie_id == movie.id).delete()
+        unlink_movie_from_lists(db, movie.id)
+        db.delete(movie)
+        db.commit()
+        add_scan_log("info", f"  Removed DB entry ({reason}): {movie.name}")
+    except Exception:
+        db.rollback()
+        raise
 
 def index_movie(file_path, db: Session = None, patterns=None):
     """Index a single movie file"""
@@ -1493,7 +1531,11 @@ def index_movie(file_path, db: Session = None, patterns=None):
                     add_scan_log("info", f"  Updated name: {existing.name}")
 
                 # Refresh audio info (always do this as it's fast and might be missing)
-                _, audio_types = extract_video_metadata_with_ffprobe(normalized_path)
+                _, audio_types, probe_ok = extract_video_metadata_with_ffprobe(normalized_path)
+                if not probe_ok:
+                    add_scan_log("warning", "  Unreadable/corrupt video (ffprobe cannot parse it), removing from index")
+                    remove_movie_record(db, existing, "corrupt file")
+                    return False
                 _refresh_movie_audio_rows(db, existing.id, audio_types)
 
                 db.commit()
@@ -1538,7 +1580,15 @@ def index_movie(file_path, db: Session = None, patterns=None):
             return False
 
         # Extract both video duration and audio types in single ffprobe call
-        length, audio_types = extract_video_metadata_with_ffprobe(normalized_path)
+        length, audio_types, probe_ok = extract_video_metadata_with_ffprobe(normalized_path)
+
+        # Exclude files ffprobe cannot parse at all: these are corrupt (typically
+        # incomplete torrent downloads with zero-filled holes) and will not play.
+        if not probe_ok:
+            add_scan_log("warning", "  Skipping (unreadable/corrupt video: ffprobe cannot parse it)")
+            if existing:
+                remove_movie_record(db, existing, "corrupt file")
+            return False
 
         # Exclude files shorter than 60 seconds when length is known
         if length is not None and length < 60:
@@ -1757,6 +1807,7 @@ def scan_directory(root_path, state=None, progress_callback=None):
                     try:
                         if entry.is_dir(follow_symlinks=False):
                             if entry.name.lower() in INCOMPLETE_DIR_NAMES:
+                                add_scan_log("info", f"Skipping excluded folder: {entry.path}")
                                 continue
                             dir_stack.append(entry.path)
                             continue
@@ -1869,6 +1920,11 @@ def scan_directory(root_path, state=None, progress_callback=None):
             add_scan_log("warning", "Movies folder is not accessible; skipping orphan cleanup to protect the database")
         else:
             for movie in all_movies_in_path:
+                # Rows under excluded folders (e.g. incomplete/) are purged even
+                # though their files still exist: the walk no longer visits them.
+                if is_in_excluded_dir(movie.path):
+                    orphaned_movies.append(movie)
+                    continue
                 try:
                     os.stat(movie.path)
                 except FileNotFoundError:
