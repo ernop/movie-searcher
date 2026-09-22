@@ -5,8 +5,10 @@ from pathlib import Path
 
 import requests
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, UniqueConstraint, inspect, text
+from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, UniqueConstraint, inspect, or_, text
 
+from media_identity import episode_numbers as episode_numbers
+from media_identity import file_identity, is_extra, parsed_name, property_value
 from models import Base, Movie, MovieList, MovieListItem
 
 
@@ -48,6 +50,14 @@ class TVEpisodeFile(Base):
     movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), primary_key=True)
 
 
+class TVSeriesFile(Base):
+    """TV files whose content must not count as owning an aired episode."""
+    __tablename__ = 'tv_series_files'
+    movie_id = Column(Integer, ForeignKey('movies.id', ondelete='CASCADE'), primary_key=True)
+    series_id = Column(Integer, ForeignKey('tv_series.id', ondelete='CASCADE'), nullable=False)
+    kind = Column(String, nullable=False)
+
+
 def normalize(title):
     return re.sub(r'[^\w]+', '', title).casefold()
 
@@ -57,6 +67,7 @@ def initialize_schema(engine):
     TVSeason.__table__.create(engine, checkfirst=True)
     TVEpisode.__table__.create(engine, checkfirst=True)
     TVEpisodeFile.__table__.create(engine, checkfirst=True)
+    TVSeriesFile.__table__.create(engine, checkfirst=True)
     if 'movie_list_items' in inspect(engine).get_table_names():
         columns = {c['name'] for c in inspect(engine).get_columns('movie_list_items')}
         with engine.begin() as conn:
@@ -143,54 +154,88 @@ def ensure_episode(db, series_id, season, number):
     return row
 
 
-def episode_numbers(name):
-    name = name.replace('_', '.')
-    match = re.search(r'(?i)\bS(\d{1,3})E(\d{1,4})((?:[ ._-]*E\d{1,4})*)', name)
-    if match:
-        numbers = [int(match[2]), *map(int, re.findall(r'(?i)E(\d+)', match[3]))]
-        if '-' in match[3] and len(numbers) == 2 and 0 < numbers[-1] - numbers[0] < 100:
-            numbers = list(range(numbers[0], numbers[-1] + 1))
-        return int(match[1]), numbers
-    match = re.search(r'(?i)\b(\d{1,2})x(\d{2,3})\b', name)
-    return (int(match[1]), [int(match[2])]) if match else None
+def tv_movie_ids(db):
+    return db.query(TVEpisodeFile.movie_id).union(db.query(TVSeriesFile.movie_id))
 
 
-def register_file(db, movie, series_id=None, season=None, numbers=None):
-    parsed = episode_numbers(Path(movie.path).stem)
-    if parsed:
+def match_series(candidates, title, year=None, country=None):
+    if not isinstance(title, str):
+        return None
+    matches = []
+    for candidate in candidates:
+        guess = parsed_name(candidate.title)
+        alias = property_value(guess, 'title')
+        same_title = normalize(candidate.title) == normalize(title) or (isinstance(alias, str) and normalize(alias) == normalize(title))
+        if (same_title and (not country or country == property_value(guess, 'country'))
+                and (not year or not candidate.year or candidate.year == year)):
+            matches.append(candidate)
+    if year:
+        matches = [s for s in matches if s.year == year] or matches
+    return matches[0] if len(matches) == 1 else None
+
+
+def register_file(db, movie, series_id=None, season=None, numbers=None, repair=False):
+    identity = file_identity(movie.path)
+    parsed = identity['episodes']
+    if season is None and parsed:
         season, numbers = parsed
-    if season is None or not numbers:
-        return
-    if series_id is None:
-        linked = db.query(TVEpisode).join(TVEpisodeFile, TVEpisodeFile.episode_id == TVEpisode.id).filter(TVEpisodeFile.movie_id == movie.id).first()
-        if linked:
-            series_id = linked.series_id
-    if series_id is None:
-        stem = Path(movie.path).stem.replace('_', '.')
-        prefix = re.split(r'(?i)\bS\d+E\d+|\b\d+x\d+', stem)[0]
-        title = re.sub(r'[._]+', ' ', prefix).strip(' -([')
-        year_match = re.search(r'\b(19\d{2}|20\d{2})\b', title)
-        year = int(year_match[1]) if year_match else None
-        if year_match:
-            title = title[:year_match.start()].strip(' ([.-')
-        if not title:
-            return
-        series = next((s for s in db.query(TVSeries) if normalize(s.title) == normalize(title) and (not year or not s.year or s.year == year)), None)
+    linked = db.query(TVEpisode).join(TVEpisodeFile, TVEpisodeFile.episode_id == TVEpisode.id).filter(TVEpisodeFile.movie_id == movie.id).first()
+    existing = db.get(TVSeries, linked.series_id) if linked else None
+    # Keep established identities; repair only the old parser's numeric show names.
+    if series_id is None and existing and (existing.catalogued or not existing.title.isdecimal() or not repair):
+        series_id = existing.id
+    title, year = identity['title'], identity['year']
+    series = db.get(TVSeries, series_id) if series_id else None
+    if not series:
+        candidates = list(db.query(TVSeries))
+        series = match_series(candidates, title, year, identity['country'])
         if not series:
+            # Bonus filenames often omit the show title; use a recognized folder.
+            for parent in Path(movie.path).parents:
+                folder = parsed_name(parent.name)
+                series = match_series(candidates, property_value(folder, 'title'),
+                                      property_value(folder, 'year'), property_value(folder, 'country'))
+                if series:
+                    break
+        if not series and (parsed or identity['contextual_tv']) and title and not title.isdecimal() and not is_extra(movie.path):
             series = TVSeries(title=title, year=year)
             db.add(series)
             db.flush()
-        series_id = series.id
-    series = db.get(TVSeries, series_id)
+    if not series:
+        return None
+    role = 'extra' if is_extra(movie.path) else 'episode' if season is not None and numbers else 'unassigned'
+    # Mere proximity to a series is insufficient to reclassify a film.
+    if role == 'unassigned' and not linked and not series_id:
+        evidence = parsed_name(movie.path)
+        if not evidence.get('episode') and not evidence.get('season'):
+            return None
+        if property_value(parsed_name(Path(movie.path).name), 'year'):
+            return None
+    if linked and existing.catalogued and role != 'extra' and not parsed and not numbers:
+        return 'episode'
+    if role != 'episode':
+        db.query(TVEpisodeFile).filter_by(movie_id=movie.id).delete(synchronize_session=False)
+        row = db.get(TVSeriesFile, movie.id)
+        if row is None:
+            row = TVSeriesFile(movie_id=movie.id)
+            db.add(row)
+        row.series_id, row.kind = series.id, role
+        movie.name = Path(movie.path).stem
+        db.flush()
+        return role
+    if repair or series_id:
+        db.query(TVEpisodeFile).filter_by(movie_id=movie.id).delete(synchronize_session=False)
+    db.query(TVSeriesFile).filter_by(movie_id=movie.id).delete(synchronize_session=False)
     movie.name = series.title + f' S{season:02d}' + ''.join(f'E{n:02d}' for n in numbers)
     if series.year:
         movie.year = series.year
-    ensure_season(db, series_id, season)
+    ensure_season(db, series.id, season)
     for number in numbers:
-        episode = ensure_episode(db, series_id, season, number)
+        episode = ensure_episode(db, series.id, season, number)
         if not db.get(TVEpisodeFile, (episode.id, movie.id)):
             db.add(TVEpisodeFile(episode_id=episode.id, movie_id=movie.id))
     db.flush()
+    return 'episode'
 
 
 def series_view(db, series):
@@ -200,12 +245,14 @@ def series_view(db, series):
     for episode_id, movie in rows:
         if Path(movie.path).is_file():
             files.setdefault(episode_id, []).append(movie.id)
+    additional = db.query(Movie, TVSeriesFile.kind).join(TVSeriesFile, TVSeriesFile.movie_id == Movie.id).filter(TVSeriesFile.series_id == series.id, Movie.hidden.is_(False)).all()
     aired = [e for e in episodes if e.aired]
     owned = sum(e.id in files for e in aired)
     return {'id': series.id, 'media_type': 'series', 'name': series.title, 'title': series.title,
             'year': series.year, 'tvmaze_id': series.tvmaze_id, 'source_url': series.source_url,
             'catalogued': series.catalogued, 'status': series.status, 'aired_episodes': len(aired),
             'owned_episodes': owned, 'complete': bool(series.catalogued and aired and owned == len(aired)),
+            'additional_files': [{'movie_id': m.id, 'title': Path(m.path).stem, 'kind': kind} for m, kind in additional if Path(m.path).is_file()],
             'episodes': [{'id': e.id, 'season': e.season, 'number': e.number, 'title': e.title,
                           'airdate': e.airdate, 'runtime': e.runtime, 'aired': e.aired, 'movie_ids': files.get(e.id, [])} for e in episodes]}
 
@@ -235,7 +282,9 @@ router = APIRouter(prefix='/api/series')
 def get_series(q: str = ''):
     from database import SessionLocal
     with SessionLocal() as db:
-        return [series_view(db, s) for s in db.query(TVSeries).order_by(TVSeries.title) if normalize(q) in normalize(s.title)]
+        linked = db.query(TVEpisode.series_id).join(TVEpisodeFile, TVEpisodeFile.episode_id == TVEpisode.id)
+        series = db.query(TVSeries).filter(or_(TVSeries.title.op('GLOB')('*[^0-9]*'), TVSeries.catalogued.is_(True), TVSeries.id.in_(linked), TVSeries.id.in_(db.query(TVSeriesFile.series_id))))
+        return [series_view(db, s) for s in series.order_by(TVSeries.title) if normalize(q) in normalize(s.title)]
 
 
 @router.get('/{identifier}')
@@ -277,7 +326,10 @@ def file_series(movie_id: int):
     with SessionLocal() as db:
         episode = db.query(TVEpisode).join(TVEpisodeFile, TVEpisodeFile.episode_id == TVEpisode.id).filter(TVEpisodeFile.movie_id == movie_id).first()
         if not episode:
-            return None
+            link = db.get(TVSeriesFile, movie_id)
+            if not link:
+                return None
+            return {'series': series_view(db, db.get(TVSeries, link.series_id)), 'episodes': [], 'next_episode': None}
         view = series_view(db, db.get(TVSeries, episode.series_id))
         linked = [e for e in view['episodes'] if movie_id in e['movie_ids']]
         last = max((e['season'], e['number']) for e in linked)

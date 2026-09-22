@@ -50,6 +50,11 @@ async function loadSeriesPage(identifier) {
             ${data.source_url ? `<p>Episode metadata: <a href="${escapeHtml(data.source_url)}" target="_blank" rel="noopener">TVmaze</a> · CC BY-SA</p>` : ''}
             <div id="tvSeriesActions"></div>
             ${seasons.map(number => `<section class="tv-season" data-season="${number}"><h3>Season ${number}</h3><div class="tv-season-actions"></div>${data.episodes.filter(e => e.season === number).map(e => `<div class="tv-episode" data-episode="${e.number}"><span>S${String(number).padStart(2, '0')}E${String(e.number).padStart(2, '0')}</span><span>${escapeHtml(e.title || 'Title unknown')}<small>${escapeHtml(e.airdate || 'Airdate unknown')} · ${e.runtime || '?'} min</small></span><span>${e.movie_ids.length ? `<a href="#/movie/${e.movie_ids[0]}">Watch / resume →</a>` : e.aired ? 'Missing' : 'Not aired / unconfirmed'}</span><span class="tv-episode-actions"></span></div>`).join('')}</section>`).join('')}`;
+        if (data.additional_files?.length) {
+            const section = document.createElement('section');
+            section.innerHTML = '<h3>Other TV files</h3><p>Extras and files awaiting episode identification do not count toward episode completeness.</p>' + data.additional_files.map(file => `<p><a href="#/movie/${file.movie_id}">${escapeHtml(file.title)}</a> <small>${file.kind === 'extra' ? 'Extra' : 'Episode not identified'}</small></p>`).join('');
+            page.append(section);
+        }
         document.getElementById('tvRefresh').onclick = async () => {
             const notice = document.getElementById('tvNotice');
             notice.textContent = ' Updating catalogue…';

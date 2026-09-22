@@ -41,3 +41,35 @@ for (const [file, operation] of [
         assert.ok(!messages.some(message => message.includes('No result received')));
     });
 }
+
+test('AI search renders a complete result without waiting for a broken stream to close', async () => {
+    const elements = new Map(), alerts = [], rendered = [];
+    let reads = 0;
+    const context = {
+        TextDecoder, console,
+        document: {
+            addEventListener() {},
+            getElementById(id) {
+                if (!elements.has(id)) elements.set(id, {
+                    value: 'query', dataset: {}, removeAttribute() {}, querySelector() { return null; }
+                });
+                return elements.get(id);
+            }
+        },
+        alert: message => alerts.push(message),
+        fetch: async () => ({ok: true, body: {getReader: () => ({
+            read: async () => {
+                if (++reads > 1) throw new Error('Connection reset after result');
+                return {done: false, value: Buffer.from('data: {"type":"result","movie_list_id":48}\n\n')};
+            },
+            cancel: async () => {}
+        })}})
+    };
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../static/js/ai-search.js'), 'utf8'), context);
+    context.renderAiResults = data => rendered.push(data.movie_list_id);
+    await context.performAiSearch();
+    assert.deepEqual(rendered, [48]);
+    assert.deepEqual(alerts, []);
+    assert.equal(reads, 1);
+});

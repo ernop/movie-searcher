@@ -72,6 +72,8 @@ async function performAiSearch() {
         }
     }
     
+    let resultData = null;
+    let failureStage = 'connection';
     try {
         const response = await fetch('/api/ai_search', {
             method: 'POST',
@@ -100,7 +102,6 @@ async function performAiSearch() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let resultData = null;
         
         while (true) {
             const { done, value } = await reader.read();
@@ -125,23 +126,40 @@ async function performAiSearch() {
                         updateProgress(eventData.step, eventData.message);
                     } else if (eventData.type === 'result') {
                         resultData = eventData;
+                        break;
                     } else if (eventData.type === 'error') {
+                        failureStage = 'response';
                         throw new Error(eventData.detail);
                     }
                 }
             }
+            if (resultData) {
+                // Completion is the result event, not the transport closing later.
+                if (reader.cancel) reader.cancel().catch(error => console.warn('Search stream close:', error));
+                break;
+            }
         }
         
         if (resultData) {
+            failureStage = 'display';
             renderAiResults(resultData);
         } else {
             throw new Error('No result received from AI search');
         }
     } catch (error) {
-        console.error('AI Search Error:', error);
-        alert(`Error: ${error.message}`);
-        if (statusEl) statusEl.textContent = 'AI search failed. Try again.';
+        console.error('AI search failed', {stage: failureStage, listId: resultData?.movie_list_id, error});
+        const detail = failureStage === 'display' ? `Results were received, but could not be displayed: ${error.message}` : error.message;
+        alert(`Error: ${detail}`);
+        if (statusEl) statusEl.textContent = failureStage === 'connection'
+            ? 'Search connection interrupted. Check saved lists; the search may still finish.'
+            : detail;
         resultsContainer.innerHTML = '';
+        if (resultData?.movie_list_id) {
+            const link = document.createElement('a');
+            link.href = '#/lists/' + encodeURIComponent(resultData.movie_list_id);
+            link.textContent = 'Open the saved results →';
+            resultsContainer.append(link);
+        }
     } finally {
         if (askBtn) {
             askBtn.disabled = false;
