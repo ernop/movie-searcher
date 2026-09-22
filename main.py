@@ -25,6 +25,7 @@ from fuzzywuzzy import fuzz, process
 
 # Setup logging
 from utils.logging import set_app_shutting_down, setup_logging
+from utils.sse import stream_sse_in_background
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -5095,7 +5096,7 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         })
 
     return StreamingResponse(
-        generate_sse(),
+        stream_sse_in_background(generate_sse),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
