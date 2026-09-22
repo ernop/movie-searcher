@@ -397,6 +397,10 @@ def build_movie_cards(db, movies: list[Movie]) -> dict:
             card.update(media_type='episode', series_id=series.id, series_title=series.title, season=episode.season)
             card.setdefault('episode_numbers', []).append(episode.number)
             card['name'] = f"{series.title} · S{episode.season:02d}E{min(card['episode_numbers']):02d}" + (f" — {episode.title}" if episode.title else '')
+    from television import TVSeriesFile
+    for link, series in db.query(TVSeriesFile, TVSeries).join(TVSeries, TVSeries.id == TVSeriesFile.series_id).filter(TVSeriesFile.movie_id.in_(movie_ids)):
+        if link.movie_id in results:
+            results[link.movie_id].update(media_type='tv_file', series_id=series.id, series_title=series.title)
     return results
 
 
@@ -871,17 +875,17 @@ async def search_movies(
         from sqlalchemy import func, or_
 
         t_query = time.perf_counter()
-        from television import TVEpisodeFile
+        from television import tv_movie_ids
         # Build base query
         movie_query = db.query(Movie).filter(
             func.lower(Movie.name).contains(query_lower),
-            or_(Movie.length == None, Movie.length >= 60, Movie.id.in_(db.query(TVEpisodeFile.movie_id)) if include_tv else False),
+            or_(Movie.length == None, Movie.length >= 60, Movie.id.in_(tv_movie_ids(db)) if include_tv else False),
             Movie.hidden == False
         )
 
         if not include_tv:
-            from television import TVEpisodeFile
-            movie_query = movie_query.filter(~Movie.id.in_(db.query(TVEpisodeFile.movie_id)))
+            from television import tv_movie_ids
+            movie_query = movie_query.filter(~Movie.id.in_(tv_movie_ids(db)))
 
         # Get watched movie IDs efficiently
         watched_movie_ids = set()
@@ -2684,12 +2688,12 @@ def count_movie_languages(db, movie_query, language_rows):
 async def get_language_counts(include_tv: bool = False):
     from sqlalchemy import or_
     with SessionLocal() as db:
-        from television import TVEpisodeFile
+        from television import tv_movie_ids
         base = [or_(Movie.length.is_(None), Movie.length >= 60,
-                    Movie.id.in_(db.query(TVEpisodeFile.movie_id)) if include_tv else False), Movie.hidden.is_(False)]
+                    Movie.id.in_(tv_movie_ids(db)) if include_tv else False), Movie.hidden.is_(False)]
         if not include_tv:
-            from television import TVEpisodeFile
-            base.append(~Movie.id.in_(db.query(TVEpisodeFile.movie_id)))
+            from television import tv_movie_ids
+            base.append(~Movie.id.in_(tv_movie_ids(db)))
         movies = db.query(Movie).filter(*base, Movie.id.in_(get_largest_movie_ids_subquery(db, base).select()))
         return {"counts": count_movie_languages(db, movies, movie_language_rows(db))}
 
@@ -2843,12 +2847,12 @@ async def explore_movies(
     from sqlalchemy import Integer, cast, or_
 
     with SessionLocal() as db:
-        from television import TVEpisodeFile
+        from television import tv_movie_ids
         base = [or_(Movie.length.is_(None), Movie.length >= 60,
-                    Movie.id.in_(db.query(TVEpisodeFile.movie_id)) if include_tv else False), Movie.hidden.is_(False)]
+                    Movie.id.in_(tv_movie_ids(db)) if include_tv else False), Movie.hidden.is_(False)]
         if not include_tv:
-            from television import TVEpisodeFile
-            base.append(~Movie.id.in_(db.query(TVEpisodeFile.movie_id)))
+            from television import tv_movie_ids
+            base.append(~Movie.id.in_(tv_movie_ids(db)))
         movies = db.query(Movie).filter(*base, Movie.id.in_(get_largest_movie_ids_subquery(db, base).select()))
         if filter_type in ('watched', 'unwatched'):
             watched = db.query(MovieStatus.id).filter(
@@ -4046,8 +4050,8 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
             missing_movies = []
             
             try:
-                from television import TVEpisodeFile
-                all_movies = db.query(Movie).filter(Movie.hidden == False, ~Movie.id.in_(db.query(TVEpisodeFile.movie_id))).all()
+                from television import tv_movie_ids
+                all_movies = db.query(Movie).filter(Movie.hidden == False, ~Movie.id.in_(tv_movie_ids(db))).all()
                 
                 # Pre-process DB movies for faster matching
                 db_movie_map = {}
@@ -4947,8 +4951,8 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
         missing_movies = []
 
         try:
-            from television import TVEpisodeFile
-            all_movies = db.query(Movie).filter(Movie.hidden == False, ~Movie.id.in_(db.query(TVEpisodeFile.movie_id))).all()
+            from television import tv_movie_ids
+            all_movies = db.query(Movie).filter(Movie.hidden == False, ~Movie.id.in_(tv_movie_ids(db))).all()
 
             # Pre-process DB movies for faster matching
             db_movie_map = {}

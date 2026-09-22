@@ -210,3 +210,16 @@ def test_artwork_thumbnail_is_bounded_raster(tmp_path):
     with Image.open(BytesIO(response.body)) as image:
         assert image.size == (120, 180)
         assert image.format == 'JPEG'
+
+
+def test_tv_extras_are_excluded_from_movies_but_visible_with_tv_toggle(api):
+    from television import TVSeriesFile
+    with api[1]['SessionLocal']() as db:
+        series = TVSeries(title='Example')
+        extra = Movie(id=99, name='Example deleted scenes', path='/movies/extra.mkv', length=5, hidden=False)
+        db.add_all([series, extra])
+        db.flush()
+        db.add(TVSeriesFile(movie_id=99, series_id=series.id, kind='extra'))
+        db.commit()
+    assert 99 not in {m['id'] for m in explore(api)['movies']}
+    assert 99 in {m['id'] for m in explore(api, include_tv=True)['movies']}
