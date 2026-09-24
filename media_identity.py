@@ -1,6 +1,7 @@
 """GuessIt filename parsing shared by scanning, backfills and episode consumers."""
 from functools import lru_cache
 from pathlib import PurePosixPath
+import re
 
 from guessit import guessit
 
@@ -54,7 +55,13 @@ def file_identity(path):
         if len(folder_titles) == 1:
             title = folder_titles[0]
     year = property_value(base, 'year') or property_value(full, 'year')
-    return {'contextual_tv': bool(season_context and full.get('episode')), 'title': title if isinstance(title, str) else None,
+    # Explicit Episode N filenames without a season are TV evidence, but do not
+    # establish season numbering. A dated film can also use Episode in its title.
+    dated_name = re.search(r'(?<!\d)(?:18|19|20)\d{2}(?!\d)', PurePosixPath(path).name)
+    episode_context = not year and not dated_name and any(
+        'weak-episode' not in m.tags and m.initiator.raw.casefold().startswith('episode')
+        for m in _values(base.get('episode')))
+    return {'contextual_tv': bool(episode_context or season_context and full.get('episode')), 'title': title if isinstance(title, str) else None,
             'year': year if isinstance(year, int) else None,
             'country': property_value(base, 'country') or property_value(full, 'country'),
             'episodes': episode_numbers(PurePosixPath(path).name)}

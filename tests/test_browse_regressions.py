@@ -42,7 +42,7 @@ def api():
     # without its startup code so tests cannot touch the real library or VLC.
     names = {'LANGUAGE_ALIASES', 'movie_language_rows', 'count_movie_languages',
              'get_language_counts', 'explore_movies', 'get_largest_movie_ids_subquery',
-             'get_subtitles', 'movie_display_name'}
+             'get_subtitles', 'movie_display_name', 'get_random_movie', 'get_random_movies'}
     tree = ast.parse((Path(__file__).resolve().parents[1] / 'main.py').read_text())
     nodes = []
     for node in tree.body:
@@ -60,7 +60,7 @@ def api():
                      build_movie_cards=lambda db, movies: {m.id: {'id': m.id, 'name': m.name, 'year': m.year} for m in movies})
     exec(compile(ast.Module(body=nodes, type_ignores=[]), 'main.py', 'exec'), namespace)
     app = FastAPI()
-    for route, name in [('/api/explore', 'explore_movies'), ('/api/language-counts', 'get_language_counts'), ('/api/subtitles', 'get_subtitles')]:
+    for route, name in [('/api/explore', 'explore_movies'), ('/api/language-counts', 'get_language_counts'), ('/api/subtitles', 'get_subtitles'), ('/api/random-movie', 'get_random_movie'), ('/api/random-movies', 'get_random_movies')]:
         app.get(route)(namespace[name])
     with sessions() as db:
         db.add_all([Movie(id=i, name=name, year=year, size=size, path=f'/movies/{i}.mkv', hidden=hidden, length=120)
@@ -223,3 +223,33 @@ def test_tv_extras_are_excluded_from_movies_but_visible_with_tv_toggle(api):
         db.commit()
     assert 99 not in {m['id'] for m in explore(api)['movies']}
     assert 99 in {m['id'] for m in explore(api, include_tv=True)['movies']}
+
+
+@pytest.mark.parametrize('length', [None, 90])
+def test_random_movies_exclude_tv_before_deduplication(api, length):
+    from television import TVSeriesFile
+    with api[1]['SessionLocal']() as db:
+        # Keep just one eligible film so a single-pick assertion is deterministic.
+        db.query(Movie).filter(Movie.id != 1).update({'hidden': True})
+        series = TVSeries(title='Example')
+        db.add(series)
+        db.flush()
+        for identifier, role in [(91, 'episode'), (92, 'extra'), (93, 'unassigned')]:
+            # Same title/year, larger file: filtering after dedup would lose the film.
+            db.add(Movie(id=identifier, name='Alpha', year=1980, length=length,
+                         path=f'/tv/{identifier}.mkv', size=100, hidden=False))
+            db.flush()
+            if role == 'episode':
+                episode = TVEpisode(series_id=series.id, season=1, number=1)
+                db.add(episode)
+                db.flush()
+                db.add(TVEpisodeFile(episode_id=episode.id, movie_id=identifier))
+            else:
+                db.add(TVSeriesFile(movie_id=identifier, series_id=series.id, kind=role))
+        db.commit()
+    response = api[0].get('/api/random-movie')
+    assert response.status_code == 200, response.text
+    assert response.json() == {'id': 1}
+    response = api[0].get('/api/random-movies', params={'count': 50})
+    assert response.status_code == 200, response.text
+    assert [m['id'] for m in response.json()['results']] == [1]

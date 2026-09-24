@@ -2933,10 +2933,12 @@ async def get_random_movie():
     db = SessionLocal()
     try:
         from sqlalchemy import or_
-        # Query movies with length >= 60 or null length
+        from television import tv_movie_ids
+        # Match movie browsing: exclude TV episodes, extras and unassigned files.
         movie_q = db.query(Movie.id).filter(
             or_(Movie.length == None, Movie.length >= 60),
-            Movie.hidden == False
+            Movie.hidden == False,
+            ~Movie.id.in_(tv_movie_ids(db))
         )
         total = movie_q.count()
 
@@ -2969,11 +2971,13 @@ async def get_random_movies(count: int = Query(10, ge=1, le=50)):
     db = SessionLocal()
     try:
         from sqlalchemy import or_
+        from television import tv_movie_ids
 
         # SQL-level deduplication: only include largest file per movie name
         dedup_base_filters = [
             or_(Movie.length == None, Movie.length >= 60),
-            Movie.hidden == False
+            Movie.hidden == False,
+            ~Movie.id.in_(tv_movie_ids(db))
         ]
         largest_ids_subq = get_largest_movie_ids_subquery(db, dedup_base_filters)
 

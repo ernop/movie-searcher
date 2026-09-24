@@ -160,3 +160,27 @@ def test_season_folders_classify_tv_without_inventing_episode_numbers(tmp_path):
         assert db.get(TVSeriesFile, movie.id)
         assert db.query(TVEpisodeFile).count() == 0
     engine.dispose()
+
+
+@pytest.mark.parametrize('filename', ['Example Episode 01 - Pilot.avi', 'Example (Author) Vol2-Episode3.avi'])
+def test_episode_only_names_are_tv_without_invented_seasons(tmp_path, filename):
+    from television import TVSeriesFile, register_file
+    engine = create_engine('sqlite://')
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        movie = Movie(path=str(tmp_path / 'Example' / filename), name=filename)
+        db.add(movie)
+        db.flush()
+        assert register_file(db, movie) == 'unassigned'
+        assert db.get(TVSeriesFile, movie.id).kind == 'unassigned'
+        assert db.query(TVEpisodeFile).count() == 0
+        assert register_file(db, movie, repair=True) == 'unassigned'
+    engine.dispose()
+
+
+@pytest.mark.parametrize('filename', ['Star.Wars.Episode.6.Return.of.the.Jedi.1983.mp4', 'Star Wars Episode VI 1983.mkv', 'Film.1918.mkv'])
+def test_film_episode_titles_and_years_do_not_create_tv(filename):
+    from media_identity import file_identity
+    identity = file_identity('/movies/' + filename)
+    assert not identity['contextual_tv']
+    assert identity['episodes'] is None
