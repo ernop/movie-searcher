@@ -196,6 +196,25 @@ def run_setup_vlc() -> bool:
         print(f"ERROR: Failed to run setup/setup_vlc.py: {e}")
         return False
 
+def ensure_requirements() -> bool:
+    """Install requirements.txt into the interpreter running this script.
+
+    A commit that adds a dependency must not leave a machine failing at import
+    time because its venv was never updated (guessit, 2026-09-25: the systemd
+    unit crash-looped for over an hour). pip contacts the index only when a
+    requirement is missing, so this costs under a second when nothing changed.
+    """
+    requirements = Path(__file__).parent / "requirements.txt"
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "-r", str(requirements)],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
+        return False
+    return True
+
+
 def start_server(open_browser_url: str | None = None, dev: bool = False):
     """Start the server by importing and running it"""
     print("Starting Movie Searcher server...")
@@ -233,6 +252,13 @@ def main():
         webbrowser.open(SERVER_URL)
         print(f"\nServer URL: {SERVER_URL} (direct: {SERVER_URL_DIRECT})")
         return 0
+
+    # Install anything requirements.txt gained since this venv was last updated
+    print("Checking Python requirements...")
+    if not ensure_requirements():
+        print()
+        print("ERROR: could not install requirements.txt; see pip output above.")
+        return 1
 
     # Check for ffmpeg
     print("Checking for ffmpeg...")
@@ -286,7 +312,8 @@ def main():
         print(f"\n\nERROR: Server failed to start: {e}")
         import traceback
         traceback.print_exc()
-        input("\nPress Enter to exit...")
+        if sys.stdin.isatty():
+            input("\nPress Enter to exit...")
         return 1
 
 if __name__ == "__main__":
