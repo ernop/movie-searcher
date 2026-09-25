@@ -278,7 +278,8 @@ def main():
         print()
         print("ERROR: ffmpeg setup failed! Please fix the errors above before continuing.")
         print()
-        input("Press Enter to exit...")
+        if sys.stdin.isatty():
+            input("Press Enter to exit...")
         return 1
 
     # Check for VLC
