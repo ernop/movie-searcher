@@ -85,3 +85,25 @@ def test_cancelled_response_does_not_cancel_save():
         assert await asyncio.to_thread(saved.wait, 1)
 
     asyncio.run(run())
+
+
+def test_shutdown_waits_for_accepted_search_to_save():
+    from utils.sse import wait_for_background_operations
+    release = threading.Event()
+    saved = threading.Event()
+
+    def operation():
+        assert release.wait(2)
+        saved.set()
+        yield "result"
+
+    async def run():
+        stream = stream_sse_in_background(operation, heartbeat_seconds=0.01)
+        assert await anext(stream) == ": keepalive\n\n"
+        await stream.aclose()  # the browser went away
+        assert wait_for_background_operations(timeout=0.05) == 1
+        release.set()
+        assert wait_for_background_operations(timeout=2) == 0
+        assert saved.is_set()
+
+    asyncio.run(run())

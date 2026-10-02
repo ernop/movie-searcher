@@ -25,7 +25,7 @@ from fuzzywuzzy import fuzz, process
 
 # Setup logging
 from utils.logging import set_app_shutting_down, setup_logging
-from utils.sse import stream_sse_in_background
+from utils.sse import stream_sse_in_background, wait_for_background_operations
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -522,6 +522,8 @@ async def lifespan(app):
 
     # Shutdown
     logger.info("Shutdown event triggered, cleaning up...")
+    # An accepted AI search is paid for; finish and save it before exiting (see the unit's TimeoutStopSec).
+    wait_for_background_operations(timeout=840)
     set_app_shutting_down(True)
     shutdown_flag.set()
     kill_all_active_subprocesses()

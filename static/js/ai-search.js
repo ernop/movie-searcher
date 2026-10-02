@@ -98,7 +98,8 @@ async function performAiSearch() {
             throw new Error(detail);
         }
         
-        // Read SSE stream
+        // Read SSE stream; from here the server has accepted the search.
+        failureStage = 'stream';
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -148,9 +149,13 @@ async function performAiSearch() {
         }
     } catch (error) {
         console.error('AI search failed', {stage: failureStage, listId: resultData?.movie_list_id, error});
-        const detail = failureStage === 'display' ? `Results were received, but could not be displayed: ${error.message}` : error.message;
+        // A dropped stream surfaces as the browser's own wording (e.g. Firefox "Error in input stream").
+        const detail = failureStage === 'display' ? `Results were received, but could not be displayed: ${error.message}`
+            : failureStage === 'stream' && error instanceof TypeError
+                ? 'The connection to the server was interrupted. The search keeps running on the server; its results will appear in your saved lists when it finishes.'
+                : error.message;
         alert(`Error: ${detail}`);
-        if (statusEl) statusEl.textContent = failureStage === 'connection'
+        if (statusEl) statusEl.textContent = failureStage === 'stream'
             ? 'Search connection interrupted. Check saved lists; the search may still finish.'
             : detail;
         resultsContainer.innerHTML = '';
