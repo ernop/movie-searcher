@@ -14,10 +14,13 @@ import pytest
 def ai():
     tree = ast.parse(Path('main.py').read_text())
     names = {'AI_MODELS', 'AI_PRICING', 'JSON_FENCE_PATTERN', 'resolve_ai_model',
-             'request_anthropic_message', 'anthropic_response_text', 'parse_ai_response_json', 'estimate_ai_cost'}
+             'request_anthropic_message', 'anthropic_response_text', 'parse_ai_response_json', 'estimate_ai_cost',
+             'match_library_titles'}
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names or
              isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in node.targets)]
-    namespace = {'json': json, 're': re, 'logger': logging.getLogger(__name__), 'Decimal': Decimal, 'ROUND_HALF_UP': ROUND_HALF_UP}
+    from fuzzywuzzy import fuzz, process
+    namespace = {'json': json, 're': re, 'logger': logging.getLogger(__name__), 'Decimal': Decimal, 'ROUND_HALF_UP': ROUND_HALF_UP,
+                 'fuzz': fuzz, 'process': process}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), 'main.py', 'exec'), namespace)
     return SimpleNamespace(**namespace)
 
@@ -71,3 +74,17 @@ def test_complete_fenced_json_and_thinking_blocks(ai):
 def test_incomplete_json_is_not_silently_salvaged(ai):
     with pytest.raises(ValueError, match='Failed to parse'):
         ai.parse_ai_response_json('```json\n{"movies": [{"comment": "unfinished', 'test', 'anthropic')
+
+
+def test_title_match_must_agree_on_year(ai):
+    film = lambda name, year: SimpleNamespace(name=name, year=year)
+    jetee, remake, original = film('La Jetée', 1962), film('Solaris', 2002), film('Solaris', 1972)
+    library = {'la jetée': [jetee], 'solaris': [original, remake]}
+    # The AI's "Jet Lag" (2002) fuzzy-matches the library's "La Jetée" (score 86) by name only; the year rules it out.
+    assert ai.match_library_titles('Jet Lag', 2002, library) == []
+    assert ai.match_library_titles('La Jetée', 1962, library) == [jetee]
+    assert ai.match_library_titles('Solaris', 1972, library) == [original]
+    assert ai.match_library_titles('Solaris', 1990, library) == []  # a third, different Solaris
+    library['elle'] = [film('Elle', 2016), undated := film('Elle', None)]
+    assert ai.match_library_titles('Elle', 2011, library) == [undated]
+    assert ai.match_library_titles('Jet Lag', None, library) == [jetee]  # no year to check

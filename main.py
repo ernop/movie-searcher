@@ -4075,38 +4075,8 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
                     if not title:
                         continue
                     
-                    # 1. Try exact normalized match
-                    norm_title = re.sub(r'[^\w\s]', '', title).lower().strip()
-                    candidates = db_movie_map.get(norm_title, [])
-                    
-                    # 2. If no exact match, try fuzzy match
-                    if not candidates and db_movie_map:
-                        from fuzzywuzzy.process import extractOne
-                        best_match_result = extractOne(norm_title, list(db_movie_map.keys()), scorer=fuzz.token_sort_ratio)
-                        if best_match_result:
-                            best_match_name, score = best_match_result
-                            if score > 85:
-                                candidates = db_movie_map[best_match_name]
-                    
-                    if candidates:
-                        # Disambiguate by year
-                        matches = []
-                        if year and len(candidates) > 1:
-                            try:
-                                target_year = int(year)
-                                for cand in candidates:
-                                    if cand.year and abs(cand.year - target_year) <= 1:
-                                        matches.append(cand)
-                            except (ValueError, TypeError):
-                                pass
-                            
-                            if not matches:
-                                matches = candidates
-                        else:
-                            matches = candidates
-                    else:
-                        matches = []
-                    
+                    matches = match_library_titles(title, year, db_movie_map)
+
                     if matches:
                         # Build standardized movie cards
                         movie_cards = build_movie_cards(db, matches)
@@ -4447,6 +4417,29 @@ AI_MODELS = [
     {"provider": "openai", "model_id": "gpt-6-astra", "display_name": "GPT-6 Astra"},
     {"provider": "openai", "model_id": "gpt-5.1", "display_name": "GPT-5.1"},
 ]
+
+
+def match_library_titles(title, year, db_movie_map):
+    """Library movies for an AI-suggested title: exact normalized name first, then a
+    fuzzy name match. When both years are known they must agree within 1: a shared
+    title is often a different film ("Elle" 2011 vs 2016, "Godzilla" 2014 vs 1954)
+    and a fuzzy name can be unrelated ("Jet Lag" 2002 vs "La Jetée" 1962). Library
+    movies without a year stay possible matches."""
+    norm_title = re.sub(r'[^\w\s]', '', title).lower().strip()
+    candidates = db_movie_map.get(norm_title, [])
+    if not candidates and db_movie_map:
+        best_match_result = process.extractOne(norm_title, list(db_movie_map.keys()), scorer=fuzz.token_sort_ratio)
+        if best_match_result:
+            best_match_name, score = best_match_result
+            if score > 85:
+                candidates = db_movie_map[best_match_name]
+    try:
+        target_year = int(year) if year else None
+    except (ValueError, TypeError):
+        target_year = None
+    if not candidates or target_year is None:
+        return candidates
+    return [c for c in candidates if not c.year or abs(c.year - target_year) <= 1]
 
 
 def resolve_ai_model(selector: str):
@@ -4986,40 +4979,7 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
                     (found_movies if view["complete"] else missing_movies).append(view)
                     continue
 
-                # 1. Try exact normalized match
-                norm_title = re.sub(r'[^\w\s]', '', title).lower().strip()
-                candidates = db_movie_map.get(norm_title, [])
-
-                match = None
-
-                # 2. If no exact match, try fuzzy match
-                if not candidates and db_movie_map:
-                    # Get best match from keys
-                    best_match_result = process.extractOne(norm_title, list(db_movie_map.keys()), scorer=fuzz.token_sort_ratio)
-                    if best_match_result:
-                        best_match_name, score = best_match_result
-                        if score > 85:
-                            candidates = db_movie_map[best_match_name]
-
-                if candidates:
-                    # Disambiguate by year
-                    matches = []
-                    if year and len(candidates) > 1:
-                        try:
-                            target_year = int(year)
-                            for cand in candidates:
-                                if cand.year and abs(cand.year - target_year) <= 1:
-                                    matches.append(cand)
-                        except (ValueError, TypeError):
-                            pass
-
-                        if not matches:
-                            # If year doesn't match any, but names match, include all candidates (uncertain)
-                            matches = candidates
-                    else:
-                        matches = candidates
-                else:
-                    matches = []
+                matches = match_library_titles(title, year, db_movie_map)
 
                 if matches:
                     # Build standardized movie cards for all matched movies
