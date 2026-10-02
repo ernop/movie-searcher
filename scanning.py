@@ -625,6 +625,33 @@ def extract_year_from_name(name):
             return year
     return None
 
+# Scene names put quality/source tags after the release year; a year past these is not it.
+_TAG_AFTER_YEAR = re.compile(r'\b(?:480p|576p|720p|1080p|2160p|4k|uhd|bluray|blu-ray|brrip|bdrip|dvdrip|dvdscr|webrip|web-dl|web|hdtv|hdrip|x264|x265|h264|h265|hevc|xvid|divx)\b', re.IGNORECASE)
+_YEAR_TOKEN = re.compile(r'\b(19\d{2}|20[0-2]\d|203[0-5])\b')
+
+
+def find_release_year(name):
+    """The release year in a movie name and where it sits: (year, start) or (None, None).
+
+    When several years appear before the quality tags, the last is the release year
+    and the earlier ones belong to the title: "1900.1976.1080p" is 1900 (1976),
+    "Class.Of.1999.1990" is Class of 1999 (1990), "2001 A Space Odyssey (1968)".
+    A bracketed year is the "Title (Year)" convention, so the first one wins:
+    "Professional Foul (1977) by Tom Stoppard (2024)" is 1977. Date ranges
+    ("September 1939 to May 1940") keep the first year as before."""
+    tag = _TAG_AFTER_YEAR.search(name)
+    head = name[:tag.start()] if tag else name
+    years = list(_YEAR_TOKEN.finditer(head)) or list(_YEAR_TOKEN.finditer(name))
+    if not years:
+        return None, None
+    bracketed = [y for y in years if y.start() and name[y.start() - 1] in '([{<']
+    if bracketed:
+        return int(bracketed[0].group(1)), bracketed[0].start()
+    spans = contains_date_range(name) or re.search(r'\b(?:19|20)\d\d\b[^\d]{0,20}\bto\b[^\d]{0,20}\b(?:19|20)\d\d\b', name, re.IGNORECASE)
+    chosen = years[0] if spans else years[-1]
+    return int(chosen.group(1)), chosen.start()
+
+
 def contains_date_range(text):
     """Check if text contains a date range (e.g., "(1933 to 1939)" or "1933-1939").
     Date ranges in episode titles (like historical documentaries) should be preserved,
@@ -747,14 +774,17 @@ def clean_movie_name(name, patterns=None):
 
     # Extract year first if enabled
     if patterns.get('year_patterns', True):
-        year = extract_year_from_name(name)
+        year, year_at = find_release_year(name)
         # If year found, remove everything from the year onwards (including parentheses/brackets around year)
         if year:
-            # Pattern to match: optional opening bracket/paren, whitespace, year (with word boundaries), whitespace, optional closing bracket/paren, and everything after
-            # This handles: (1971), [1971], {1971}, <1971>, or just 1971
-            year_with_context_pattern = rf'(?:[([{{<]\s*)?\b{year}\b\s*(?:[)\]}}>])?.*$'
-            # Replace the year and everything after it with empty string
-            name = re.sub(year_with_context_pattern, '', name, count=1).strip()
+            before, after = name[:year_at], name[year_at + 4:]
+            if not before.strip(' .-_([{<') and re.match(r'\s*[)\]}>]?\s*[-–]\s*\S', after):
+                # A leading year, then the title: "1918 - Charlie Chaplin - A Dog's Life"
+                name = re.sub(r'^\s*[)\]}>]?\s*[-–]\s*', '', after)
+            else:
+                # Drop the year, an opening bracket just before it, and everything after:
+                # (1971), [1971], {1971}, <1971>, or just 1971
+                name = re.sub(r'[([{<]\s*$', '', before).strip()
             # If removing the year left a dangling, unmatched opening bracket at the end
             # (e.g., "Love and Death (Woody Allen"), drop that trailing bracketed fragment.
             name = re.sub(r'\s*[\(\[\{<][^)\]}>]*$', '', name).strip()
@@ -1195,6 +1225,12 @@ def clean_movie_name(name, patterns=None):
 
     # Clean up multiple spaces and trim
     name = re.sub(r'\s+', ' ', name).strip()
+
+    # A file named only by tags ("EXTENDED.1080p.BluRay.x265-RARBG") takes its title from its folder
+    if not name and is_full_path and parent_folder and parent_folder.lower() not in ['movies', 'tv', 'series', 'shows', 'video', 'videos', '_done', 'done', 'incoming']:
+        folder_name, folder_year = clean_movie_name(parent_folder, patterns)[:2]
+        if folder_name and folder_name != parent_folder:
+            name, year = folder_name, year or folder_year
 
     # If name becomes empty, use original
     if not name:
@@ -1870,7 +1906,8 @@ def scan_directory(root_path, state=None, progress_callback=None):
                         new_movies_for_reconciliation.append({
                             'id': new_movie.id,
                             'name': new_movie.name,
-                            'year': new_movie.year
+                            'year': new_movie.year,
+                            'path': new_movie.path
                         })
                 updated += 1
             indexed += 1
@@ -2044,7 +2081,7 @@ def reconcile_movie_lists(db: Session, new_movies: list) -> dict:
         norm_name = re.sub(r'[^\w\s]', '', m['name']).lower().strip()
         if norm_name not in new_movie_map:
             new_movie_map[norm_name] = []
-        new_movie_map[norm_name].append({'id': m['id'], 'year': m.get('year')})
+        new_movie_map[norm_name].append({'id': m['id'], 'year': m.get('year'), 'path': m.get('path', '')})
 
     # Track which lists need their counts updated
     lists_to_update = set()
@@ -2071,24 +2108,13 @@ def reconcile_movie_lists(db: Session, new_movies: list) -> dict:
                 if score > 85:
                     candidates = new_movie_map[match_name]
 
+        # A new film with a different year is another film of that name (a remake,
+        # a similar title), not the one the list is missing.
+        from media_identity import years_agree
+        candidates = [c for c in candidates if years_agree(c['year'], item.year, c.get('path', ''))]
         if not candidates:
             continue
-
-        # Disambiguate by year if needed
-        match = None
-        if len(candidates) == 1:
-            match = candidates[0]
-        elif item.year:
-            # Try to find one with matching year (within 1 year tolerance)
-            for cand in candidates:
-                if cand['year'] and abs(cand['year'] - item.year) <= 1:
-                    match = cand
-                    break
-            # If no year match, just take the first candidate
-            if not match:
-                match = candidates[0]
-        else:
-            match = candidates[0]
+        match = candidates[0]
 
         if match:
             # Update the item

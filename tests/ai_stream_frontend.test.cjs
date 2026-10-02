@@ -73,3 +73,41 @@ test('AI search renders a complete result without waiting for a broken stream to
     assert.deepEqual(alerts, []);
     assert.equal(reads, 1);
 });
+
+for (const [when, expectRunning] of [['after the server accepted the search', true], ['before the request reached the server', false]]) {
+    test(`AI search explains a dropped connection ${when}`, async () => {
+        const elements = new Map(), alerts = [];
+        let reads = 0;
+        const context = {
+            TextDecoder, console: { warn() {}, error() {} },
+            document: {
+                addEventListener() {},
+                getElementById(id) {
+                    if (!elements.has(id)) elements.set(id, {
+                        value: 'query', textContent: '', innerHTML: '', dataset: {},
+                        removeAttribute() {}, querySelector() { return null; }, append() {}
+                    });
+                    return elements.get(id);
+                }
+            },
+            alert: message => alerts.push(message)
+        };
+        vm.createContext(context);
+        // The page's own realm raises the TypeError, as a browser does for a dropped stream.
+        const NetworkError = vm.runInContext('TypeError', context);
+        context.fetch = async () => {
+            if (!expectRunning) throw new NetworkError('NetworkError when attempting to fetch resource.');
+            return {ok: true, body: {getReader: () => ({
+                read: async () => {
+                    if (++reads > 1) throw new NetworkError('Error in input stream');
+                    return {done: false, value: Buffer.from('data: {"type":"progress","step":2,"total":4,"message":"Waiting"}\n\n')};
+                }
+            })}};
+        };
+        vm.runInContext(fs.readFileSync(path.join(__dirname, '../static/js/ai-search.js'), 'utf8'), context);
+        await context.performAiSearch();
+        assert.equal(alerts.length, 1);
+        assert.equal(alerts[0].includes('keeps running on the server'), expectRunning, alerts[0]);
+        assert.ok(!alerts[0].includes('Error in input stream'), alerts[0]);
+    });
+}

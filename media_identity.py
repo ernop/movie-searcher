@@ -73,3 +73,20 @@ def is_extra(path):
     return any(term in words for term in ('deleted scene', 'featurette', 'behind the scenes',
                                          'bonus features', '/extras/', '/extra/', ' - extras/', 'gag reel',
                                          'outtakes', 'bloopers', 'season extra'))
+
+
+def years_agree(library_year, wanted_year, library_path=''):
+    """Whether a library film can be the requested one, by year.
+
+    Unknown years agree. Otherwise they must be within one (release years vary by
+    country), unless the library path carries the wanted year: a mislabeled file
+    ("Rango (2009)" in an acquired "Rango-2011-" folder) is still the right film.
+    A shared or similar title alone is not enough: "Elle" 2011 vs 2016,
+    "Dracula" 1931 vs 1992, "Jet Lag" 2002 vs "La Jetée" 1962."""
+    try:
+        wanted = int(wanted_year) if wanted_year else None
+    except (TypeError, ValueError):
+        wanted = None
+    if not library_year or wanted is None:
+        return True
+    return abs(int(library_year) - wanted) <= 1 or str(wanted) in (library_path or '')

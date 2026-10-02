@@ -4434,13 +4434,8 @@ def match_library_titles(title, year, db_movie_map):
             best_match_name, score = best_match_result
             if score > 85:
                 candidates = db_movie_map[best_match_name]
-    try:
-        target_year = int(year) if year else None
-    except (ValueError, TypeError):
-        target_year = None
-    if not candidates or target_year is None:
-        return candidates
-    return [c for c in candidates if not c.year or abs(c.year - target_year) <= 1 or str(target_year) in (c.path or '')]
+    from media_identity import years_agree
+    return [c for c in candidates if years_agree(c.year, year, c.path)]
 
 
 def resolve_ai_model(selector: str):
