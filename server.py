@@ -109,6 +109,9 @@ def run_server(open_browser_url: str | None = None, dev: bool = False):
             "port": 8002,
             "use_colors": False,
             "log_config": uvicorn_log_config,
+            # Close idle streams (e.g. an open Acquire page) soon after a stop request;
+            # accepted AI searches run in their own threads and are awaited in lifespan shutdown.
+            "timeout_graceful_shutdown": 10,
         }
 
         if dev:
