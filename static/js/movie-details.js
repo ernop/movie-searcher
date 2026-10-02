@@ -4,6 +4,8 @@
 // store the raw model_id; map it to a friendly label, falling back to the raw
 // id for unrecognized saved models.
 const AI_MODEL_DISPLAY_NAMES = {
+    'claude-sonnet-5-5': 'Claude Sonnet 5.5',
+    'claude-opus-5-5': 'Claude Opus 5.5',
     'claude-fable-5-1': 'Claude Fable 5.1',
     'gpt-6-astra': 'GPT-6 Astra',
     'claude-opus-4-8': 'Claude Opus 4.8',
@@ -1050,7 +1052,9 @@ async function loadMovieDetailsById(id) {
                             <button id="related-movies-btn-${movie.id}" class="btn btn-small" onclick="generateRelatedMovies(${movie.id})">Related Movies</button>
                             <button id="generate-review-btn-${movie.id}" class="btn btn-small" onclick="generateReview(${movie.id})">Get AI Review</button>
                             <select id="review-provider-${movie.id}" style="padding: 4px 8px; background: #1a1a1a; border: 1px solid #333; color: #888; border-radius: 4px; font-size: 12px;">
-                                <option value="claude-fable-5-1" selected>Claude Fable 5.1</option>
+                                <option value="claude-sonnet-5-5" selected>Claude Sonnet 5.5</option>
+                                <option value="claude-opus-5-5">Claude Opus 5.5</option>
+                                <option value="claude-fable-5-1">Claude Fable 5.1</option>
                         <option value="gpt-6-astra">GPT-6 Astra</option>
                         <option value="claude-opus-4-8">Claude Opus 4.8</option>
                                 <option value="claude-fable-5">Claude Fable 5</option>

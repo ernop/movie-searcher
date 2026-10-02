@@ -60,7 +60,7 @@ class AiSearchRequest(BaseModel):
     query: str
     # A model_id (e.g. "claude-opus-4-8") or a legacy provider name
     # ("anthropic"/"openai"); resolved server-side via resolve_ai_model.
-    provider: str = "claude-fable-5-1"
+    provider: str = "claude-sonnet-5-5"
 
 
 class PlaylistCreateRequest(BaseModel):
@@ -85,9 +85,9 @@ class CheckMoviesRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
-    provider: str = "claude-fable-5-1"  # model_id or legacy provider name
+    provider: str = "claude-sonnet-5-5"  # model_id or legacy provider name
     further_instructions: str | None = None
 
 
 class RelatedMoviesRequest(BaseModel):
-    provider: str = "claude-fable-5-1"  # model_id or legacy provider name
+    provider: str = "claude-sonnet-5-5"  # model_id or legacy provider name

@@ -3764,7 +3764,7 @@ async def generate_movie_review(movie_id: int, request: ReviewRequest):
                 elif provider == "anthropic":
                     provider_key = "anthropic"
                     model_config = resolve_ai_model(request.provider)
-                    model_name = model_config["model_id"] if model_config else "claude-opus-4-8"
+                    model_name = model_config["model_id"] if model_config else AI_MODELS[0]["model_id"]
                     client = anthropic.Anthropic(api_key=anthropic_key)
                     logger.info(f"Review interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                     
@@ -4011,7 +4011,7 @@ async def generate_related_movies(movie_id: int, request: RelatedMoviesRequest):
                 elif provider == "anthropic":
                     provider_key = "anthropic"
                     model_config = resolve_ai_model(request.provider)
-                    model_name = model_config["model_id"] if model_config else "claude-opus-4-8"
+                    model_name = model_config["model_id"] if model_config else AI_MODELS[0]["model_id"]
                     client = anthropic.Anthropic(api_key=anthropic_key)
                     logger.info(f"Related movies interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                     
@@ -4436,6 +4436,8 @@ def load_api_keys():
 # The UI sends the chosen model_id as `provider` (back-compat: "anthropic"/"openai"
 # still resolve to that provider's default, the first entry below).
 AI_MODELS = [
+    {"provider": "anthropic", "model_id": "claude-sonnet-5-5", "display_name": "Claude Sonnet 5.5"},
+    {"provider": "anthropic", "model_id": "claude-opus-5-5", "display_name": "Claude Opus 5.5"},
     {"provider": "anthropic", "model_id": "claude-fable-5-1", "display_name": "Claude Fable 5.1"},
     {"provider": "anthropic", "model_id": "claude-opus-4-8", "display_name": "Claude Opus 4.8"},
     {"provider": "anthropic", "model_id": "claude-fable-5", "display_name": "Claude Fable 5"},
@@ -4479,14 +4481,16 @@ def anthropic_response_text(message):
     )
 
 
-# Pricing per model_id (USD per 1M tokens). Sonnet 5 uses sticker $3/$15
-# (intro $2/$10 runs through 2026-08-31); these figures drive the cost estimate.
+# Pricing per model_id (USD per 1M tokens); these figures drive the cost estimate.
+# Sonnet 5's launch price of $2/$10 became its standard price (no Sept 2026 increase).
 AI_PRICING = {
+    "claude-sonnet-5-5": {"model": "Claude Sonnet 5.5", "input_per_million": Decimal("2.00"), "output_per_million": Decimal("10.00")},
+    "claude-opus-5-5": {"model": "Claude Opus 5.5", "input_per_million": Decimal("4.00"), "output_per_million": Decimal("20.00")},
     "claude-fable-5-1": {"model": "Claude Fable 5.1", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
     "gpt-6-astra": {"model": "GPT-6 Astra", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
     "claude-opus-4-8": {"model": "Claude Opus 4.8", "input_per_million": Decimal("5.00"), "output_per_million": Decimal("25.00")},
     "claude-fable-5": {"model": "Claude Fable 5", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
-    "claude-sonnet-5": {"model": "Claude Sonnet 5", "input_per_million": Decimal("3.00"), "output_per_million": Decimal("15.00")},
+    "claude-sonnet-5": {"model": "Claude Sonnet 5", "input_per_million": Decimal("2.00"), "output_per_million": Decimal("10.00")},
     "gpt-5.1": {"model": "GPT-5.1", "input_per_million": Decimal("1.25"), "output_per_million": Decimal("10.00")},
 }
 
@@ -4893,7 +4897,7 @@ async def ai_search(request: AiSearchRequest, background_tasks: BackgroundTasks)
                 provider_key = "anthropic"
                 # Find model from centralized list
                 model_config = resolve_ai_model(request.provider)
-                model_name = model_config["model_id"] if model_config else "claude-opus-4-8"
+                model_name = model_config["model_id"] if model_config else AI_MODELS[0]["model_id"]
                 client = anthropic.Anthropic(api_key=anthropic_key)
                 logger.info(f"AI interaction {interaction_id} -> sending prompt to {provider_key} ({model_name})")
                 message = request_anthropic_message(client, interaction_id,

@@ -24,14 +24,20 @@ def ai():
 
 def test_requested_models_and_defaults(ai):
     from core.models import AiSearchRequest, RelatedMoviesRequest, ReviewRequest
-    assert ai.resolve_ai_model('anthropic')['model_id'] == 'claude-fable-5-1'
+    assert ai.resolve_ai_model('anthropic')['model_id'] == 'claude-sonnet-5-5'
+    assert ai.resolve_ai_model('unknown-model')['model_id'] == 'claude-sonnet-5-5'
+    assert ai.resolve_ai_model('claude-opus-5-5')['display_name'] == 'Claude Opus 5.5'
     assert ai.resolve_ai_model('gpt-6-astra')['provider'] == 'openai'
     for request in [AiSearchRequest, RelatedMoviesRequest, ReviewRequest]:
-        assert request.model_fields['provider'].default == 'claude-fable-5-1'
+        assert request.model_fields['provider'].default == 'claude-sonnet-5-5'
     assert ai.estimate_ai_cost('gpt-6-astra', 1000, 1000)[1] == .06
+    assert ai.estimate_ai_cost('claude-sonnet-5-5', 1_000_000, 1_000_000)[1] == 12
+    assert ai.estimate_ai_cost('claude-opus-5-5', 1_000_000, 1_000_000)[1] == 24
+    assert all(m['model_id'] in ai.AI_PRICING for m in ai.AI_MODELS)
     for path in ['index.html', 'static/js/movie-details.js']:
         source = Path(path).read_text()
-        assert '<option value="claude-fable-5-1" selected>' in source
+        assert '<option value="claude-sonnet-5-5" selected>' in source
+        assert '<option value="claude-opus-5-5">' in source
         assert '<option value="gpt-6-astra">' in source
 
 
