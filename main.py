@@ -4424,7 +4424,8 @@ def match_library_titles(title, year, db_movie_map):
     fuzzy name match. When both years are known they must agree within 1: a shared
     title is often a different film ("Elle" 2011 vs 2016, "Godzilla" 2014 vs 1954)
     and a fuzzy name can be unrelated ("Jet Lag" 2002 vs "La Jetée" 1962). Library
-    movies without a year stay possible matches."""
+    movies without a year stay possible matches, as do ones whose path carries the
+    requested year (a mislabeled file: "Rango (2009)" in an acquired "Rango-2011-" folder)."""
     norm_title = re.sub(r'[^\w\s]', '', title).lower().strip()
     candidates = db_movie_map.get(norm_title, [])
     if not candidates and db_movie_map:
@@ -4439,7 +4440,7 @@ def match_library_titles(title, year, db_movie_map):
         target_year = None
     if not candidates or target_year is None:
         return candidates
-    return [c for c in candidates if not c.year or abs(c.year - target_year) <= 1]
+    return [c for c in candidates if not c.year or abs(c.year - target_year) <= 1 or str(target_year) in (c.path or '')]
 
 
 def resolve_ai_model(selector: str):

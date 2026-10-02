@@ -77,7 +77,7 @@ def test_incomplete_json_is_not_silently_salvaged(ai):
 
 
 def test_title_match_must_agree_on_year(ai):
-    film = lambda name, year: SimpleNamespace(name=name, year=year)
+    film = lambda name, year, path='': SimpleNamespace(name=name, year=year, path=path)
     jetee, remake, original = film('La Jetée', 1962), film('Solaris', 2002), film('Solaris', 1972)
     library = {'la jetée': [jetee], 'solaris': [original, remake]}
     # The AI's "Jet Lag" (2002) fuzzy-matches the library's "La Jetée" (score 86) by name only; the year rules it out.
@@ -87,4 +87,6 @@ def test_title_match_must_agree_on_year(ai):
     assert ai.match_library_titles('Solaris', 1990, library) == []  # a third, different Solaris
     library['elle'] = [film('Elle', 2016), undated := film('Elle', None)]
     assert ai.match_library_titles('Elle', 2011, library) == [undated]
+    library['rango'] = [rango := film('Rango', 2009, '/movies/incoming/Rango-2011-415ec089/Rango (2009) [1080p]/Rango.mp4')]
+    assert ai.match_library_titles('Rango', 2011, library) == [rango]  # mislabeled file, right film
     assert ai.match_library_titles('Jet Lag', None, library) == [jetee]  # no year to check
