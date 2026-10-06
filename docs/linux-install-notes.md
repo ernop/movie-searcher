@@ -27,6 +27,15 @@ box (`silver@192.168.1.140:/mnt/seagate16/movies` via the `tvnik` ssh alias, ~5.
 `tvnik-movies.service`). Scanning reads only; it never writes to the source tree.
 Details: `mybrowser/config/tvnik-htpc-setup.md`.
 
+## tvnik's own instance
+
+tvnik runs its own movie-searcher (systemd user unit `movie-searcher.service`,
+launched via `movie-utils/start.py`), listening on tvnik's `127.0.0.1:8002` only.
+From PC, open it at **http://localhost:8012** — a persistent SSH tunnel, user unit
+`~/.config/systemd/user/tvnik-movie-searcher-tunnel.service` (`ssh -N -L
+8012:127.0.0.1:8002 tvnik`, auto-reconnects). Manage with
+`systemctl --user {status,restart,stop} tvnik-movie-searcher-tunnel`.
+
 ## Note
 
 `.cursorrules` is Cursor-only and Windows/PowerShell-oriented (`.\venv\Scripts\...`).
