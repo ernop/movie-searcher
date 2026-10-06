@@ -37,11 +37,15 @@ def test_requested_models_and_defaults(ai):
     assert ai.estimate_ai_cost('claude-sonnet-5-5', 1_000_000, 1_000_000)[1] == 12
     assert ai.estimate_ai_cost('claude-opus-5-5', 1_000_000, 1_000_000)[1] == 24
     assert all(m['model_id'] in ai.AI_PRICING for m in ai.AI_MODELS)
+    assert [m['model_id'] for m in ai.AI_MODELS if m['provider'] == 'anthropic'] == ['claude-sonnet-5-5', 'claude-opus-5-5']
+    assert ai.resolve_ai_model('claude-opus-4-8')['model_id'] == 'claude-sonnet-5-5'
     for path in ['index.html', 'static/js/movie-details.js']:
         source = Path(path).read_text()
         assert '<option value="claude-sonnet-5-5" selected>' in source
         assert '<option value="claude-opus-5-5">' in source
         assert '<option value="gpt-6-astra">' in source
+        offered = set(re.findall(r'<option value="(claude-[^"]+)"', source))
+        assert offered == {'claude-sonnet-5-5', 'claude-opus-5-5'}
 
 
 def client_with_message(message):
@@ -58,7 +62,7 @@ def client_with_message(message):
 def test_output_limit_is_reported_before_json_parse(ai, caplog):
     message = SimpleNamespace(stop_reason='max_tokens', usage=SimpleNamespace(input_tokens=500, output_tokens=32768))
     with caplog.at_level(logging.INFO), pytest.raises(ValueError, match='cut short.*no partial list'):
-        ai.request_anthropic_message(client_with_message(message), 'test', model='claude-fable-5-1')
+        ai.request_anthropic_message(client_with_message(message), 'test', model='claude-sonnet-5-5')
     assert 'stop_reason=max_tokens' in caplog.text
     assert 'output_tokens=32768' in caplog.text
 
@@ -67,7 +71,7 @@ def test_complete_fenced_json_and_thinking_blocks(ai):
     message = SimpleNamespace(stop_reason='end_turn', usage=None, content=[
         SimpleNamespace(type='thinking', thinking='private reasoning'),
         SimpleNamespace(type='text', text='```json\n{"movies": []}\n```')])
-    result = ai.request_anthropic_message(client_with_message(message), 'test', model='claude-fable-5-1')
+    result = ai.request_anthropic_message(client_with_message(message), 'test', model='claude-sonnet-5-5')
     assert ai.parse_ai_response_json(ai.anthropic_response_text(result), 'test', 'anthropic') == {'movies': []}
 
 

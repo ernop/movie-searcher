@@ -50,6 +50,15 @@
 - Don't add loading delays or spinners that persist
 - Don't iterate over all movies in Python when SQL can do it
 
+## AI Models (search, reviews, related movies)
+
+- Decision 2026-10-06 (owner): the only Anthropic models offered are **Claude Sonnet 5.5**
+  (default) and **Claude Opus 5.5**. Fable 5.1, Fable 5, Opus 4.8 and Sonnet 5 were removed
+  from the pickers, `AI_MODELS` and `AI_PRICING`. The OpenAI options (GPT-6 Astra, GPT-5.1) remain.
+- A request naming a removed model (e.g. a stale page) falls back to Sonnet 5.5.
+- Saved reviews keep their original model id; `AI_MODEL_DISPLAY_NAMES` in
+  `static/js/movie-details.js` still labels retired ids so history displays correctly.
+
 ## Movie Details Page
 
 ### Same-Title Navigation

@@ -4410,10 +4410,6 @@ def load_api_keys():
 AI_MODELS = [
     {"provider": "anthropic", "model_id": "claude-sonnet-5-5", "display_name": "Claude Sonnet 5.5"},
     {"provider": "anthropic", "model_id": "claude-opus-5-5", "display_name": "Claude Opus 5.5"},
-    {"provider": "anthropic", "model_id": "claude-fable-5-1", "display_name": "Claude Fable 5.1"},
-    {"provider": "anthropic", "model_id": "claude-opus-4-8", "display_name": "Claude Opus 4.8"},
-    {"provider": "anthropic", "model_id": "claude-fable-5", "display_name": "Claude Fable 5"},
-    {"provider": "anthropic", "model_id": "claude-sonnet-5", "display_name": "Claude Sonnet 5"},
     {"provider": "openai", "model_id": "gpt-6-astra", "display_name": "GPT-6 Astra"},
     {"provider": "openai", "model_id": "gpt-5.1", "display_name": "GPT-5.1"},
 ]
@@ -4440,7 +4436,7 @@ def match_library_titles(title, year, db_movie_map):
 
 def resolve_ai_model(selector: str):
     """Map a selector to its AI_MODELS entry. `selector` is a model_id
-    (e.g. 'claude-opus-4-8') or a legacy provider name ('anthropic'/'openai').
+    (e.g. 'claude-opus-5-5') or a legacy provider name ('anthropic'/'openai').
     Falls back to the first model of a named provider, then to the default."""
     mc = next((m for m in AI_MODELS if m["model_id"] == selector), None)
     if mc is None:
@@ -4465,7 +4461,7 @@ def request_anthropic_message(client, interaction_id, **kwargs):
 
 def anthropic_response_text(message):
     """Concatenate the text from an Anthropic message's content blocks, skipping
-    thinking/other non-text blocks. Sonnet 5 and Fable 5 run adaptive thinking by
+    thinking/other non-text blocks. Claude 5.x models run adaptive thinking by
     default, so content[0] can be a ThinkingBlock rather than the answer text."""
     return "".join(
         block.text for block in message.content if getattr(block, "type", None) == "text"
@@ -4473,15 +4469,10 @@ def anthropic_response_text(message):
 
 
 # Pricing per model_id (USD per 1M tokens); these figures drive the cost estimate.
-# Sonnet 5's launch price of $2/$10 became its standard price (no Sept 2026 increase).
 AI_PRICING = {
     "claude-sonnet-5-5": {"model": "Claude Sonnet 5.5", "input_per_million": Decimal("2.00"), "output_per_million": Decimal("10.00")},
     "claude-opus-5-5": {"model": "Claude Opus 5.5", "input_per_million": Decimal("4.00"), "output_per_million": Decimal("20.00")},
-    "claude-fable-5-1": {"model": "Claude Fable 5.1", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
     "gpt-6-astra": {"model": "GPT-6 Astra", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
-    "claude-opus-4-8": {"model": "Claude Opus 4.8", "input_per_million": Decimal("5.00"), "output_per_million": Decimal("25.00")},
-    "claude-fable-5": {"model": "Claude Fable 5", "input_per_million": Decimal("10.00"), "output_per_million": Decimal("50.00")},
-    "claude-sonnet-5": {"model": "Claude Sonnet 5", "input_per_million": Decimal("2.00"), "output_per_million": Decimal("10.00")},
     "gpt-5.1": {"model": "GPT-5.1", "input_per_million": Decimal("1.25"), "output_per_million": Decimal("10.00")},
 }
 

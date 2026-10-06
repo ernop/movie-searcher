@@ -1,8 +1,8 @@
 // Movie Navigation
 
-// Display names for AI model ids (mirrors AI_MODELS in main.py). Saved reviews
-// store the raw model_id; map it to a friendly label, falling back to the raw
-// id for unrecognized saved models.
+// Display names for AI model ids (AI_MODELS in main.py plus retired models).
+// Saved reviews store the raw model_id, so retired ids stay listed here; any
+// other unrecognized id falls back to the raw string.
 const AI_MODEL_DISPLAY_NAMES = {
     'claude-sonnet-5-5': 'Claude Sonnet 5.5',
     'claude-opus-5-5': 'Claude Opus 5.5',
@@ -1054,11 +1054,7 @@ async function loadMovieDetailsById(id) {
                             <select id="review-provider-${movie.id}" style="padding: 4px 8px; background: #1a1a1a; border: 1px solid #333; color: #888; border-radius: 4px; font-size: 12px;">
                                 <option value="claude-sonnet-5-5" selected>Claude Sonnet 5.5</option>
                                 <option value="claude-opus-5-5">Claude Opus 5.5</option>
-                                <option value="claude-fable-5-1">Claude Fable 5.1</option>
-                        <option value="gpt-6-astra">GPT-6 Astra</option>
-                        <option value="claude-opus-4-8">Claude Opus 4.8</option>
-                                <option value="claude-fable-5">Claude Fable 5</option>
-                                <option value="claude-sonnet-5">Claude Sonnet 5</option>
+                                <option value="gpt-6-astra">GPT-6 Astra</option>
                                 <option value="gpt-5.1">GPT-5.1</option>
                             </select>
                         </div>
