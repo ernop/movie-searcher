@@ -23,7 +23,7 @@ and scanning never copies).
 ## This install's store
 
 `movies_folder` = `/mnt/tvnik-movies` — a **read-only** sshfs mount of the tvnik
-box (`silver@192.168.1.219:/mnt/seagate16/movies`, ~5.3 TB, systemd
+box (`silver@192.168.1.140:/mnt/seagate16/movies` via the `tvnik` ssh alias, ~5.3 TB, systemd
 `tvnik-movies.service`). Scanning reads only; it never writes to the source tree.
 Details: `mybrowser/config/tvnik-htpc-setup.md`.
 

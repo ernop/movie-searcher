@@ -84,13 +84,17 @@ LAN. PC mounts it and scans in place — nothing is copied.
 
 | Field | Value |
 | --- | --- |
-| Host | tvnik (`192.168.1.219`) |
+| Host | tvnik (`192.168.1.140` since 2026-10; was `192.168.1.219` — DHCP moved it) |
 | **Login user** | **`silver`** (not `ef`) |
 | SSH key | `~/.ssh/id_ed25519` (installed on tvnik `2026-07-03`) |
 | SSH alias | `ssh tvnik` (configured in `~/.ssh/config`) |
 
-> The bare hostname `tvnik` does not resolve via the OS resolver on PC; use the
-> IP `192.168.1.219`, or the `ssh tvnik` alias which pins the IP + user + key.
+> The `ssh tvnik` alias in `~/.ssh/config` pins the IP + user + key and is the
+> single place the IP lives for ssh/sshfs: `tvnik-movies.service` mounts
+> `tvnik:/mnt/...` through it. `/etc/hosts` also maps `tvnik`/`tvnik.lan`, and
+> mDNS resolves `tvnik.local`. tvnik's IP comes from DHCP and has changed
+> before; if `ssh tvnik` fails with "No route to host", check
+> `getent hosts tvnik.local` for the new address and update both files.
 
 ### The disk
 
