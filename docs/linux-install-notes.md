@@ -31,7 +31,10 @@ Details: `mybrowser/config/tvnik-htpc-setup.md`.
 
 tvnik runs its own movie-searcher (systemd user unit `movie-searcher.service`,
 launched via `movie-utils/start.py`), listening on tvnik's `127.0.0.1:8002` only.
-From PC, open it at **http://localhost:8012** — a persistent SSH tunnel, user unit
+From PC, open it at **http://tvnik-movies.localhost** ("movie-searcher (tvnik)" on the
+`http://localhost` dashboard and new-tab Local Services; registered in
+`mybrowser/utilities/caddy/projects.json`) or directly at http://localhost:8012 — a
+persistent SSH tunnel, user unit
 `~/.config/systemd/user/tvnik-movie-searcher-tunnel.service` (`ssh -N -L
 8012:127.0.0.1:8002 tvnik`, auto-reconnects). Manage with
 `systemctl --user {status,restart,stop} tvnik-movie-searcher-tunnel`.
