@@ -27,6 +27,24 @@ box (`silver@192.168.1.140:/mnt/seagate16/movies` via the `tvnik` ssh alias, ~5.
 `tvnik-movies.service`). Scanning reads only; it never writes to the source tree.
 Details: `mybrowser/config/tvnik-htpc-setup.md`.
 
+**Offline since 2026-10-21 (checked 2026-10-23).** tvnik's 16 TB Seagate is
+failing (434,136 pending and 27,896 reallocated sectors) and is being copied off
+with ddrescue; the operating guide is `matthoom/ops/tvnik/SEAGATE-RESCUE.md`. The
+disk is kept unmounted, so `/mnt/seagate16/movies` does not exist on tvnik:
+
+- Here, `/mnt/tvnik-movies` answers "No such file or directory" even though
+  `tvnik-movies.service` shows active.
+- tvnik's own instance (`movies_folder` `/mnt/seagate16/movies`) and its
+  download worker (both destinations are under `/mnt/seagate16/movies`) have
+  nothing to read or write. The worker holds new submissions on its own.
+- The films come back when the rescue mounts its image at `/mnt/seagate16`
+  with the films bind, after its quick passes. Films are the last rescue domain.
+- 48 films are on tvnik's healthy 22 TB Toshiba (`/mnt/toshiba22/movies/incoming`,
+  indexed through the films bind as `/mnt/seagate16/movies/toshiba22/incoming`).
+  The Toshiba shares the drive box's single USB bridge with the Seagate. Do not
+  read it while anything reads the Seagate: on 2026-10-23 a read there waited
+  behind failing Seagate reads, timed out after 31 s, and the kernel reset the bridge.
+
 ## tvnik's own instance
 
 tvnik runs its own movie-searcher (systemd user unit `movie-searcher.service`,

@@ -99,7 +99,8 @@ LAN. PC mounts it and scans in place — nothing is copied.
 ### The disk
 
 - **`/mnt/seagate16`** — 15TB Seagate, **NTFS** (mounted on tvnik via ntfs-3g),
-  89% full (13T used, ~1.7T free).
+  89% full (13T used, ~1.7T free). **Failing and unmounted since 2026-10-21**;
+  see the status in `linux-install-notes.md`.
 - Movie library: **`/mnt/seagate16/movies`** — ~2,000 titles, ~3,100 video
   files, **5.3TB**.
 
