@@ -81,3 +81,23 @@ The Explore page filters are organized in distinct rows:
 - No loading spinners that last more than a moment
 - Filter clicks should update immediately
 
+## Local request guard
+
+Decided 2026-11-03. The server has no login and binds `127.0.0.1:8002`, so
+`utils/local_request_guard.py` (registered first in `main.py`) refuses requests
+that another web page could make in the owner's browser:
+
+- `Host` must be `localhost`, a `*.localhost` name (`movie-searcher.localhost`,
+  `tvnik-movies.localhost`), `127.0.0.1` or `[::1]`, with any port (the tvnik
+  tunnel arrives as `localhost:8012`). DNS rebinding points an attacker's domain
+  at 127.0.0.1, and the browser then sends that domain as `Host`.
+- A request other than GET, HEAD or OPTIONS is refused when its `Origin` is not
+  one of those hosts (`Origin: null` included) or, without `Origin`, when
+  `Sec-Fetch-Site` is `cross-site`. This stops cross-site forms and fetches aimed
+  at endpoints such as `/api/launch`, `/api/open-folder` or `/api/server/restart`.
+  curl and scripts send neither header and pass.
+- Refusals get 403 with a JSON `detail`; the first 20 per process are logged.
+
+Serving the app on a LAN address or a real hostname would need that name added
+to the guard. Tests: `tests/test_local_request_guard.py`.
+

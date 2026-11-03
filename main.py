@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fuzzywuzzy import fuzz, process
 
 # Setup logging
+from utils.local_request_guard import LocalRequestGuard
 from utils.logging import set_app_shutting_down, setup_logging
 from utils.sse import stream_sse_in_background, wait_for_background_operations
 
@@ -530,6 +531,7 @@ async def lifespan(app):
 
 # Create FastAPI app with lifespan
 app = FastAPI(title="Movie Searcher", lifespan=lifespan)
+app.add_middleware(LocalRequestGuard)
 from television import router as series_router
 app.include_router(series_router)
 
