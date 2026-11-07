@@ -79,7 +79,7 @@ export default [
     },
     rules: {
       // BLOCK COMMENTS ARE FORBIDDEN
-      // This project uses // comments exclusively. See docs/agents.md for rationale.
+      // This project uses // comments exclusively. See docs/DEVELOPER_NOTES.md for rationale.
       "local/no-block-comments": "error",
       
       // Don't be overly strict on other things - this is a simple frontend

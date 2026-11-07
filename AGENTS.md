@@ -8,7 +8,7 @@ Local server to view, search, and manage movies/videos on disk. Python/Flask, Dj
 
 ## Key Documents
 
-- [Developer notes](docs/agents.md) — communication style, coding conventions
+- [Developer notes](docs/DEVELOPER_NOTES.md) — communication style, coding conventions
 - [Agent command guide](AGENT_COMMAND_GUIDE.md) — common commands and workflows
 - [System requirements](docs/SYSTEM_REQUIREMENTS.md)
 - [Tech notes](docs/TECH_NOTES.md)

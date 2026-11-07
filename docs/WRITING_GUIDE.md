@@ -99,4 +99,4 @@ No "Why we made it" section—just show what it does. No closing promotional lin
 
 ---
 
-*See `docs/agents.md` for voice/tone guidance.*
+*See `docs/DEVELOPER_NOTES.md` for voice/tone guidance.*
